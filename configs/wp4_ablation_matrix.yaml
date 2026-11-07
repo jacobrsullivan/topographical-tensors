@@ -1,0 +1,33 @@
+# WP4: Factorial Ablation Matrix and Baseline Benchmarks Configuration (Target v1.4)
+work_package: WP4
+version_target: "v1.4"
+seeds: [42, 1337, 2026]
+
+ablation_configs:
+  Config_A:
+    state_representation: "bitboards_64x12"
+    spatial_attention: "global_self_attention"
+    horizon_planner: "autoregressive"
+    description: "Standard Transformer Baseline"
+  Config_B:
+    state_representation: "tokens_64x112"
+    spatial_attention: "shaw_2d_relative"
+    horizon_planner: "autoregressive"
+    description: "ChessFormer (CF-6M) Replication"
+  Config_C:
+    state_representation: "topographical_move_potential_fields"
+    spatial_attention: "se2_invariant_point_attention"
+    horizon_planner: "autoregressive"
+    description: "Isolates Topographical Field and IPA Gains"
+  Config_D:
+    state_representation: "topographical_move_potential_fields"
+    spatial_attention: "se2_invariant_point_attention"
+    horizon_planner: "d3pm_discrete_diffusion"
+    description: "Full Proposed Architecture"
+
+gauntlet:
+  games_per_match: 1000
+  stockfish_fixed_node_tiers: [100, 1000, 10000]
+  significance_alpha: 0.01
+  min_config_d_blitz_elo: 2300
+  min_config_d_vs_c_tactical_elo_gain: 80

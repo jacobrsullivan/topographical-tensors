@@ -1,0 +1,46 @@
+# WP2: SE(2) / Dihedral Invariant Point Attention Encoder Configuration (Target v1.2)
+work_package: WP2
+version_target: "v1.2"
+seed: 42
+
+model:
+  scale_name: "CF-6M"
+  target_parameters: 6000000
+  num_layers: 8
+  d_model: 256
+  n_heads: 8
+  d_ff: 1024
+  dropout: 0.1
+
+ipa_frames:
+  # ALT-001: Color-aligned dihedral frames + boundary distance potential + castling bias
+  orientation_mode: "color_aligned_dihedral"
+  separate_orthogonal_diagonal_subspaces: true
+  include_boundary_distance_potential: true
+  include_castling_bias_vector: true
+  frame_geometry_dtype: "float32"
+
+heads:
+  wdlp_bins: 4
+  q_value_edges_5x5: 455
+  q_value_edges_8x8: 1858
+
+training:
+  gardner_5x5:
+    epochs: 50
+    batch_size: 512
+    lr: 0.0003
+    schedule: "cosine"
+    device: "mps"
+  standard_8x8:
+    epochs: 100
+    batch_size: 1024
+    lr: 0.0003
+    schedule: "cosine"
+
+stage_gate_2:
+  mirror_color_equivariance_tolerance: 0.0001
+  target_equivariance_tolerance: 0.00001
+  min_kendall_tau: 0.72
+  target_kendall_tau: 0.75
+  min_flops_reduction_ratio: 0.15

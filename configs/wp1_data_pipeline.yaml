@@ -1,0 +1,62 @@
+# WP1: Data Pipeline and Topographical Encoding Configuration (Target v1.1)
+work_package: WP1
+version_target: "v1.1"
+seed: 42
+
+paths:
+  data_root: "./data"
+  gardner5x5_dir: "./data/gardner5x5"
+  lichess8x8_dir: "./data/lichess8x8"
+
+domains:
+  gardner_5x5:
+    board_size: [5, 5]
+    theoretical_actions: 1225
+    valid_move_edges: 455
+    target_games: 500000
+    castling_enabled: false
+    en_passant_enabled: false
+  standard_8x8:
+    board_size: [8, 8]
+    theoretical_actions: 4096
+    valid_move_edges: 1858
+    target_games_full: 10000000
+    target_games_core: 2000000
+    castling_enabled: true
+    en_passant_enabled: true
+
+splits:
+  partition_by: "game_id"
+  train_ratio: 0.80
+  val_ratio: 0.10
+  test_ratio: 0.10
+  deduplicate_zobrist_64bit: true
+  max_cross_split_hash_overlap: 0.0
+
+stockfish_distillation:
+  # ALT-004: Deterministic fixed-node MultiPV distillation instead of wall-clock 50ms
+  binary_path: "/opt/homebrew/bin/stockfish"
+  threads_per_worker: 1
+  num_workers: 10
+  hash_mb_per_worker: 64
+  nodes_per_legal_move: 1500
+  min_nodes_per_position: 15000
+  logistic_k_cp: 0.00368208
+  mate_epsilon: 0.0001
+
+topographical_encoder:
+  # ALT-003: Bijective 3-bundle Move-Potential Tensor
+  normalize_vectors: true
+  vector_clip_range: [-1.0, 1.0]
+  channels_8x8: 44
+  channels_5x5: 40
+  bundle_breakdown:
+    continuous_potential_fields: 24
+    discrete_source_anchors_and_occupancy: 13
+    markov_rule_planes_8x8: 7
+    markov_rule_planes_5x5: 3
+
+stage_gate_1:
+  zobrist_overlap_tolerance: 0
+  reconstruction_test_positions: 100000
+  required_legal_move_reconstruction_rate: 1.0

@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software or manuscript in your research, please cite it as below."
+title: "Geometric Move-Potential Representations and Action-Only Discrete Diffusion for Searchless Chess"
+version: 5.0.0
+date-released: 2026-11-07
+license: MIT
+repository-code: "https://github.com/jacobrsullivan/topographical-tensors"
+authors:
+  - family-names: Sullivan
+    given-names: Jacob
+keywords:
+  - searchless chess
+  - geometric deep learning
+  - invariant point attention
+  - discrete diffusion
+  - D3PM
+  - move-potential fields

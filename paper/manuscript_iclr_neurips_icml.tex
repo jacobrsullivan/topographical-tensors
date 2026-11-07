@@ -1,0 +1,125 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{microtype}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+
+\title{\textbf{Geometric Move-Potential Representations and Action-Only Discrete Diffusion for Searchless Chess}}
+\author{Anonymous Authors \\ \textit{Paper under double-blind review at ICLR / NeurIPS / ICML}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Searchless chess transformers typically flatten the $8 \times 8$ board into a 64-token sequence and rely on massive parameter scale ($270\text{M}+$ parameters) and billions of engine-distilled action-value annotations ($10\text{B}\text{--}15.3\text{B}$ evaluations) to learn piece movement rays, blocker occlusion, and multi-ply tactical lookahead implicitly. We investigate whether encoding board geometry explicitly---both in the input state representation and in the attention operator---and coupling that spatial encoder with a non-autoregressive discrete diffusion trajectory head improves move-ranking fidelity, tactical puzzle solving, and searchless gameplay under a strictly fixed, single-workstation data budget of \textbf{$1{,}269{,}820$ Zobrist-deduplicated Lichess positions} ($1{,}164{,}199$ training states) and \textbf{$250{,}000$ 6-ply Stockfish principal-variation trajectories} ($1.50\text{M}$ trajectory steps).
+
+First, we introduce a \textbf{44-channel Move-Potential Representation (\texttt{topo\_44})} that augments the standard 20-channel discrete board encoding (\texttt{flat\_20}) with 24 deterministic, rule-derived continuous scalar and vector fields capturing first-blocker-attenuated sliding ray potentials, local control flux, spatial flux divergence, collinear pin tension, second-blocker X-ray transmission, and harmonic king tropism. Second, we pair this representation with \textbf{$\mathbb{Z}_2$-canonical Local-Frame Invariant Point Attention (\texttt{local\_frame\_ipa})} restricted to the sparse directed graph of legal chess move trajectories ($1{,}520$ queen-ray edges or $1{,}856$ queen-plus-knight edges out of $4{,}096$ dense pairs, reducing pairwise attention FLOPs by \textbf{$69.8\%$}). Across a \textbf{complete 12-cell ($2 \times 2 \times 3$) spatial encoder factorial} evaluated on $36{,}343$ held-out multi-move Lichess states ($18{,}171$ independent game clusters, 3 seeds), continuous move-potential fields yield an ANOVA main effect of \textbf{$+0.1512$} in within-position action-value Kendall rank correlation $\tau$, local-frame IPA yields a main effect of \textbf{$+0.0713$}, and graph sparsity masks yield main effects of \textbf{$+0.0695$} (\texttt{queen\_rays}) and \textbf{$+0.0245$} (\texttt{queen\_plus\_knight}). Crucially, the full factorial uncovers a \textbf{negative substitution interaction of $-0.1722$} ($-0.0709$ marginal across masks): continuous potential fields boost $\tau$ by \textbf{$+0.2598$} under dense 2D relative attention ($0.4157 \to 0.6755$), where the attention kernel lacks chess ray geometry, compared to \textbf{$+0.0876$} under Queen+Knight IPA ($0.6784 \to 0.7660$), where the attention kernel and mask already supply partly overlapping geometric bias. Continuous potential fields also outperform the \textbf{Czech et al.\ (2020) 28-channel binary tactical indicator-plane baseline} (\texttt{conv\_planes\_28}) by \textbf{$+0.0734$} under dense Shaw ($0.6755$ vs.\ $0.6021$) and \textbf{$+0.0214$} under Queen+Knight IPA ($0.7660$ vs.\ $0.7446$).
+
+Third, to synthesize multi-ply tactical foresight without test-time tree search or intermediate board rollouts, we introduce an \textbf{Action-Only Discrete State-Space Diffusion Planner (\texttt{Config\_D}, $16.18\text{M}$ total parameters)} that denoises 6-ply action token sequences ($a_{0:5} \in \{0, \dots, 1858\}^6$) conditioned on a single cached root board encoding $z(s_0) \in \mathbb{R}^{64 \times 256}$, guided by an intrinsic multi-ply legality head ($99.27\%$ unmasked Ply-1 legality; $95.21\%$ mean unmasked legality across Plies 0--5). In a \textbf{$24{,}200$-game ($48{,}400$ player-game) 400-ply natural-termination tournament} ($0.0\%$ material adjudication) against calibrated Stockfish 19 UCI anchors, \texttt{Config\_D} reaches \textbf{$1990.5$ Elo} ($95\%$ CI $[1970.7, 2010.3]$), outperforming the 1-ply $5.87\text{M}$ geometric encoder (\texttt{Config\_C}, $1840.0$ Elo) by \textbf{$+150.50$ Elo} ($\text{SE}_{\text{joint}} = 9.72, z = 15.490, p = 4.02 \times 10^{-54}$) and a matched $15.20\text{M}$ causal autoregressive trajectory planner (\texttt{Config\_D\_AR\_Cached}, $1940.6$ Elo) by \textbf{$+49.90$ Elo} ($z = 5.135, p = 2.81 \times 10^{-7}$). Using deconfounded 1-ply controls that match total active parameters (\texttt{Config\_C\_16M\_IsoTotal}, $18.99\text{M}$ parameters) and additionally match multi-ply training supervision via training-only auxiliary PV and legality heads discarded at inference (\texttt{Config\_C\_16M\_PV\_AuxLeg}, $18.99\text{M}$ active inference / $27.57\text{M}$ trainable parameters), we establish an exact \textbf{three-way orthogonal decomposition} of the $+150.50$ Elo gain: \textbf{$+53.70$ Elo ($35.7\%$)} from pure 1-ply backbone capacity ($p = 1.28 \times 10^{-8}$), \textbf{$+32.30$ Elo ($21.5\%$)} from auxiliary multi-ply trajectory and legality supervision ($p = 6.57 \times 10^{-4}$), and \textbf{$+64.50$ Elo ($42.9\%$)} from pure test-time iterative D3PM denoising ($T=20$ vs.\ $T=0$, $p = 2.90 \times 10^{-11}$).
+\end{abstract}
+
+\section{Introduction}
+Recent advances in searchless chess have shown that large sequence transformers ($270\text{M}$ parameters) trained on $10\text{B}\text{--}15.3\text{B}$ Stockfish action-value evaluations can play blitz chess at grandmaster strength without test-time tree search (Ruoss et al., 2024). Yet under realistic single-workstation data and compute budgets ($\sim 1.27\text{M}$ board positions), flat 64-token sequence transformers face two structural bottlenecks: (1) \emph{geometric blindness} in both the discrete input planes and dense 2D relative self-attention, which must learn collinear sliding rays, first-blocker occlusion, pin tension, and knight jumps purely from supervision; and (2) \emph{myopic 1-ply evaluation vs.\ causal rollout drift}, where 1-ply value readouts miss multi-move tactical forcing lines while causal autoregressive (AR) rollouts from a cached root embedding suffer severe teacher-forcing exposure bias.
+
+We resolve both bottlenecks by combining a deterministic 44-channel Move-Potential Representation (\texttt{topo\_44}), $\mathbb{Z}_2$-canonical Local-Frame Invariant Point Attention (\texttt{local\_frame\_ipa}) over the sparse chess move graph, and an Action-Only Discrete Diffusion Planner (\texttt{Config\_D}) conditioned on a single root encoding $z(s_0)$, evaluated across a complete 12-cell ($2 \times 2 \times 3$) encoder factorial and matched $15.20\text{M}\text{--}18.99\text{M}$ capacity, supervision, and generation controls.
+
+\section{Geometric Move-Potential Representations \& Local-Frame Attention}
+
+\subsection{Canonical $\mathbb{Z}_2$ Board-Perspective Symmetry}
+Because castling rights $\mathbf{r}_{\text{castle}} = (K, Q, k, q) \in \{0,1\}^4$ and initial king/queen placement break horizontal file reflection ($x \mapsto 7 - x$), the exact perspective symmetry of chess is $\mathbb{Z}_2 = \{\mathrm{id}, \mathcal{M}\}$, where $\mathcal{M}: \mathcal{S}_{8\times 8} \to \mathcal{S}_{8\times 8}$ reflects ranks $y \mapsto 7 - y$, swaps piece colors and side-to-move $c_{\text{stm}} \mapsto 1 - c_{\text{stm}}$, swaps White/Black castling rights, and reflects the en-passant square. The canonicalization $\mathcal{C}(s) = s$ if $c_{\text{stm}}=0$ and $\mathcal{M}(s)$ if $c_{\text{stm}}=1$ is applied identically across all 18 evaluated encoders.
+
+\subsection{The 44-Channel Move-Potential Tensor (\texttt{topo\_44})}
+Given $\tilde{s} = \mathcal{C}(s)$, $\Phi(\tilde{s}) = [\mathcal{T}_{0:24}(\tilde{s});\, \mathcal{T}_{24:37}(\tilde{s});\, \mathcal{T}_{37:44}(\tilde{s})] \in \mathbb{R}^{44 \times 8 \times 8}$ stacks 24 continuous geometric fields ($\mathcal{T}_{0:24}$) with 13 discrete piece/occupancy planes ($\mathcal{T}_{24:37}$) and 7 Markov rule planes ($\mathcal{T}_{37:44}$):
+\begin{align}
+\Phi_{\text{friend}}^{(c)}(u) &= \tanh\!\left(\frac{1}{2} \sum_{v \in \mathcal{P}_c(\text{STM})} \mathbb{I}[u \in \mathcal{R}_c(v)] \, \gamma^{\mathrm{dist}(v, u)} \prod_{w \in (v, u)} \big(1 - \mathrm{Occ}(w)\big)\right), \quad \gamma = 0.85, \\
+F_{\text{net}}(u) &= \tanh\!\left(\sum_{c=1}^{6} w_c \Big(\Phi_{\text{friend}}^{(c)}(u) - \Phi_{\text{opp}}^{(c)}(u)\Big)\right), \quad
+E_{\text{contest}}(u) = \tanh\!\left(\sum_{c=1}^{6} \Phi_{\text{friend}}^{(c)}(u) \sum_{c=1}^{6} \Phi_{\text{opp}}^{(c)}(u)\right),
+\end{align}
+together with central-difference gradients $(\nabla_x F_{\text{net}}, \nabla_y F_{\text{net}})$ (channels 14--15), collinear pin tension and second-blocker X-ray transmission ($\sum_{w \in (v, u)} \mathrm{Occ}(w) = 1$, channels 16--19), and harmonic king tropism $(1 + \|u - K\|_1)^{-1}$ plus canonical coordinates (channels 20--23).
+
+\begin{theorem}[Bijectivity of \texttt{topo\_44}]
+The map $\Phi: \mathcal{S}_{8\times 8} \to \mathbb{R}^{44\times 8\times 8}$ is strictly injective with an exact algebraic left-inverse $\Psi(\Phi(s)) = s$ ($100.00\%$ identity across $1{,}269{,}820$ states via discrete channels $24{:}44$). Probing the 24 continuous channels ($0{:}24$) alone with a 2-layer MLP recovers $86.40\%$ positive-class legal-move precision, $89.15\%$ recall, $87.75\%$ F1 ($84.20\%$ legal-set Jaccard IoU), $93.80\%$ 12-piece occupancy F1, and $96.02\%$ 13-class square accuracy ($2.55$ misclassified squares per 64-square board).
+\end{theorem}
+
+\subsection{Dihedral Local-Frame IPA \& Chess Graph Sparsity}
+Each square $i \in \{0,\dots,63\}$ is assigned a local affine reference frame $T_i(s) = (I_2, \vec{o}_i(s))$ with $\vec{o}_i(s) = \vec{x}_i^0 + 0.1\tanh(W_{\text{shift}}\Phi(\mathcal{C}(s))_i)$. Attention logits combine content dot-products, local-frame point distances, and graph mask $E_{\text{mask}}$:
+\begin{equation}
+A_{i,j}^{(h)} = \frac{\langle \mathbf{q}_{i,h}, \mathbf{k}_{j,h} \rangle}{\sqrt{d_k}} - \frac{w_h}{2} \sum_{p=1}^{P} \big\| (\vec{o}_i(s) + \vec{q}_{i,h,p}) - (\vec{o}_j(s) + \vec{k}_{j,h,p}) \big\|_2^2 + \phi_h(\mathbf{g}_{i,j}) + \mathbb{I}\big[(i, j) \in E_{\text{mask}}\big]_{\{0, -\infty\}}.
+\end{equation}
+Restricting $E_{\text{mask}}$ from \texttt{dense} ($4{,}096$ edges) to \texttt{queen\_rays} ($1{,}520$ edges, $37.1\%$) or \texttt{queen\_plus\_knight} ($1{,}856$ edges, $45.3\%$, including $64$ self-loops) cuts pairwise attention FLOPs by $69.8\%$ ($15.20\text{M}$ vs.\ $50.33\text{M}$ FLOPs).
+
+\section{Single-Root Action-Only Discrete Diffusion (\texttt{D3PM})}
+We diffuse 6-ply action sequences $\mathbf{a}_0 = (a_0, \dots, a_5) \in \{0, \dots, 1858\}^6$ using absorbing transition matrices $Q_t = (1 - \beta_t)I_{|V|} + \beta_t \mathbf{1}_{|V|} \vec{u}_{\texttt{[MASK]}}^\top$ ($|V| = 1{,}859$). Conditioned on cached root tokens $z(s_0) \in \mathbb{R}^{64 \times 256}$, an 8-layer bidirectional transformer denoiser ($7.62\text{M}$ core parameters, $10.31\text{M}$ total planner parameters including readouts and the $518{,}632$-parameter legality head) predicts clean action logits $L_{\text{den}}^{(h)}$ and per-ply legality logits $L_{\text{leg}}^{(h)}$. At inference ($T=20$), the root move $a_0 \in \mathcal{M}_{\text{legal}}(s_0)$ maximizes:
+\begin{equation}
+S_{\text{D3PM}}(a_0 \mid s_0) = L_{\text{root}}(a_0 \mid z(s_0)) + \gamma_{\text{den}} L_{\text{den}}^{(0)}\big(a_0 \mid \hat{\mathbf{a}}^{(0)}, z(s_0)\big) + \eta_{\text{cons}} \sum_{h=1}^{5} w_h \max_{a_h \in \mathcal{A}} \Big[ L_{\text{den}}^{(h)}(a_h) - \lambda_{\text{pen}} \operatorname{softplus}\!\big(-L_{\text{leg}}^{(h)}(a_h)\big) \Big].
+\end{equation}
+
+\section{Experimental Results}
+
+\begin{table}[h!]
+\centering
+\scriptsize
+\caption{Complete 12-Cell ($2 \times 2 \times 3$) Spatial Encoder Factorial + Targeted Baselines ($36{,}343$ Multi-Move Test States, 3 Seeds $42, 1337, 2026$).}
+\begin{tabular}{llllccccc}
+\toprule
+Cell / Baseline & Input & Kernel & Mask (Density) & Params & Attn FLOPs & Held-Out $\tau$ (Mean $\pm$ SD) & Unrounded 3-Seed $\tau$ & SF19 $\tau$ \\
+\midrule
+\texttt{Cell\_01\_Flat20\_Shaw\_Dense} & \texttt{flat\_20} & \texttt{shaw\_2d} & \texttt{dense} (100\%) & 5.87M & 50.33M & $0.4157 \pm 0.0199$ & $[0.4041, 0.4387, 0.4042]$ & $0.4981$ \\
+\texttt{Cell\_02\_Flat20\_Shaw\_QueenRays} & \texttt{flat\_20} & \texttt{shaw\_2d} & \texttt{queen\_rays} (37.1\%) & 5.87M & 18.68M & $0.5722 \pm 0.0363$ & $[0.6031, 0.5322, 0.5812]$ & $0.6743$ \\
+\texttt{Cell\_03\_Flat20\_Shaw\_QueenKnight} & \texttt{flat\_20} & \texttt{shaw\_2d} & \texttt{queen+knight} (45.3\%) & 5.87M & 22.81M & $0.6044 \pm 0.0203$ & $[0.5920, 0.5934, 0.6278]$ & $0.7273$ \\
+\texttt{Cell\_04\_Flat20\_IPA\_Dense} & \texttt{flat\_20} & \texttt{ipa} & \texttt{dense} (100\%) & 5.86M & 33.55M & $0.5895 \pm 0.0032$ & $[0.5861, 0.5899, 0.5924]$ & $0.7125$ \\
+\texttt{Cell\_05\_Flat20\_IPA\_QueenRays} & \texttt{flat\_20} & \texttt{ipa} & \texttt{queen\_rays} (37.1\%) & 5.86M & 12.45M & $0.6446 \pm 0.0019$ & $[0.6424, 0.6453, 0.6461]$ & $0.7780$ \\
+\texttt{Cell\_06\_Flat20\_IPA\_QueenKnight} & \texttt{flat\_20} & \texttt{ipa} & \texttt{queen+knight} (45.3\%) & 5.86M & 15.20M & $0.6784 \pm 0.0022$ & $[0.6762, 0.6785, 0.6805]$ & $0.8105$ \\
+\texttt{Cell\_07\_Topo44\_Shaw\_Dense} & \texttt{topo\_44} & \texttt{shaw\_2d} & \texttt{dense} (100\%) & 5.88M & 50.33M & $0.6755 \pm 0.0060$ & $[0.6778, 0.6687, 0.6801]$ & $0.8096$ \\
+\texttt{Cell\_08\_Topo44\_Shaw\_QueenRays} & \texttt{topo\_44} & \texttt{shaw\_2d} & \texttt{queen\_rays} (37.1\%) & 5.88M & 18.68M & $0.7284 \pm 0.0020$ & $[0.7268, 0.7279, 0.7306]$ & $0.8527$ \\
+\texttt{Cell\_09\_Topo44\_Shaw\_QueenKnight} & \texttt{topo\_44} & \texttt{shaw\_2d} & \texttt{queen+knight} (45.3\%) & 5.88M & 22.81M & $0.7482 \pm 0.0019$ & $[0.7464, 0.7480, 0.7502]$ & $\mathbf{0.8576}$ \\
+\texttt{Cell\_10\_Topo44\_IPA\_Dense} & \texttt{topo\_44} & \texttt{ipa} & \texttt{dense} (100\%) & 5.87M & 33.55M & $0.7400 \pm 0.0019$ & $[0.7381, 0.7400, 0.7418]$ & $0.8556$ \\
+\texttt{Cell\_11\_Topo44\_IPA\_QueenRays} & \texttt{topo\_44} & \texttt{ipa} & \texttt{queen\_rays} (37.1\%) & 5.87M & 12.45M & $0.7536 \pm 0.0021$ & $[0.7515, 0.7536, 0.7557]$ & $0.8556$ \\
+\texttt{Cell\_12\_Topo44\_IPA\_QueenKnight} & \texttt{topo\_44} & \texttt{ipa} & \texttt{queen+knight} (45.3\%) & 5.87M & 15.20M & $\mathbf{0.7660 \pm 0.0021}$ & $[0.7639, 0.7660, 0.7681]$ & $0.8512$ \\
+\midrule
+\texttt{Base\_ConvPlanes28\_Shaw\_Dense} & \texttt{conv\_28} & \texttt{shaw\_2d} & \texttt{dense} (100\%) & 5.88M & 50.33M & $0.6021 \pm 0.0022$ & $[0.5996, 0.6026, 0.6040]$ & $0.7374$ \\
+\texttt{Base\_ConvPlanes28\_IPA\_QueenKnight} & \texttt{conv\_28} & \texttt{ipa} & \texttt{queen+knight} (45.3\%) & 5.86M & 15.20M & $0.7446 \pm 0.0019$ & $[0.7427, 0.7445, 0.7465]$ & $0.8571$ \\
+\texttt{Scale\_ConfigC\_16M\_IsoTotal} & \texttt{topo\_44} & \texttt{ipa} & \texttt{queen+knight} (45.3\%) & 18.99M & 28.51M & $0.7682 \pm 0.0020$ & $[0.7663, 0.7682, 0.7702]$ & $0.8516$ \\
+\texttt{Scale\_ConfigC\_16M\_PV\_AuxLeg} & \texttt{topo\_44} & \texttt{ipa} & \texttt{queen+knight} (45.3\%) & 27.57M & 28.51M & $\mathbf{0.7725 \pm 0.0020}$ & $[0.7705, 0.7725, 0.7744]$ & $0.8516$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\scriptsize
+\caption{Primary 400-Ply ($0.0\%$ Adjudication) Connected Tournament Ledger ($121$ Pairings, $24{,}200$ Games, $48{,}400$ Player-Games) \& Exact Joint-Covariance Fisher Wald Contrasts.}
+\begin{tabular}{clcccccc}
+\toprule
+Rank & Participant & Active Params & Calibrated BayesElo & 95\% CI & SE & Total Games & Total Points (Score) \\
+\midrule
+1 & \texttt{Stockfish\_UCI\_Elo\_2400} & --- & \textbf{2463.6} & $[2425.4, 2501.9]$ & $19.52$ & $2{,}200$ & $2{,}089.5$ ($94.98\%$) \\
+2 & \texttt{Stockfish\_10000\_Nodes} & --- & \textbf{2249.3} & $[2222.9, 2275.7]$ & $13.46$ & $2{,}400$ & $1{,}976.0$ ($82.33\%$) \\
+3 & \texttt{Stockfish\_UCI\_Elo\_2100} & --- & \textbf{2117.2} & $[2094.4, 2140.1]$ & $11.68$ & $2{,}400$ & $1{,}830.0$ ($76.25\%$) \\
+4 & \texttt{Config\_D} ($T=20$ D3PM) & $16.18\text{M}$ & \textbf{1990.5} & $[1970.7, 2010.3]$ & $10.10$ & $3{,}200$ & $1{,}998.0$ ($62.44\%$) \\
+5 & \texttt{Config\_D\_AR\_Cached} & $15.20\text{M}$ & \textbf{1940.6} & $[1921.2, 1960.0]$ & $9.91$ & $3{,}200$ & $1{,}813.5$ ($56.67\%$) \\
+6 & \texttt{Config\_C\_16M\_PV\_AuxLeg} & $18.99\text{M}$ & \textbf{1926.0} & $[1906.6, 1945.3]$ & $9.86$ & $3{,}200$ & $1{,}757.5$ ($54.92\%$) \\
+7 & \texttt{Stockfish\_1000\_Nodes} & --- & \textbf{1908.0} & $[1888.2, 1927.9]$ & $10.11$ & $2{,}400$ & $1{,}310.5$ ($54.60\%$) \\
+8 & \texttt{Config\_C\_16M\_IsoTotal} & $18.99\text{M}$ & \textbf{1893.7} & $[1874.5, 1912.9]$ & $9.80$ & $3{,}200$ & $1{,}632.5$ ($51.02\%$) \\
+9 & \texttt{Config\_C\_Large\_8p6M} & $8.64\text{M}$ & \textbf{1869.9} & $[1850.8, 1889.1]$ & $9.77$ & $3{,}200$ & $1{,}539.5$ ($48.11\%$) \\
+10 & \texttt{Config\_C\_ShallowSearch\_K2} & $5.87\text{M}\times 3$ & \textbf{1855.8} & $[1836.6, 1874.9]$ & $9.76$ & $3{,}200$ & $1{,}484.0$ ($46.37\%$) \\
+11 & \texttt{Config\_C} (1-ply \texttt{topo\_44+IPA}) & $5.87\text{M}$ & \textbf{1840.0} & $[1820.8, 1859.1]$ & $9.76$ & $3{,}200$ & $1{,}422.0$ ($44.44\%$) \\
+12 & \texttt{Stockfish\_UCI\_Elo\_1800} & --- & \textbf{1800.0} & $[1800.0, 1800.0]$ & $0.00$ & $2{,}400$ & $1{,}052.5$ ($43.85\%$) \\
+13 & \texttt{Config\_B\_Prime} (\texttt{flat\_20+IPA}) & $5.86\text{M}$ & \textbf{1787.9} & $[1768.7, 1807.2]$ & $9.81$ & $3{,}200$ & $1{,}220.5$ ($38.14\%$) \\
+14 & \texttt{Config\_B} (\texttt{topo\_44+Shaw}) & $5.88\text{M}$ & \textbf{1764.2} & $[1744.8, 1783.5]$ & $9.87$ & $3{,}200$ & $1{,}131.0$ ($35.34\%$) \\
+15 & \texttt{Config\_A} (\texttt{flat\_20+Shaw}) & $5.87\text{M}$ & \textbf{1716.1} & $[1696.4, 1735.8]$ & $10.05$ & $3{,}200$ & $957.0$ ($29.91\%$) \\
+16 & \texttt{Stockfish\_100\_Nodes} & --- & \textbf{1645.2} & $[1624.1, 1666.4]$ & $10.80$ & $2{,}400$ & $668.0$ ($27.83\%$) \\
+17 & \texttt{Stockfish\_UCI\_Elo\_1500} & --- & \textbf{1510.5} & $[1484.8, 1536.3]$ & $13.12$ & $2{,}200$ & $318.0$ ($14.45\%$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Conclusion}
+Explicit move-potential fields and sparse dihedral local-frame attention substantially improve move-ranking fidelity under constrained sample budgets while exhibiting a sub-additive substitution interaction ($-0.1722$). Coupling the frozen geometric encoder with an action-only discrete diffusion trajectory head yields $+150.50$ Elo over the $5.87\text{M}$ 1-ply encoder, of which $+53.70$ Elo arises from 1-ply capacity, $+32.30$ Elo from auxiliary multi-ply training supervision, and $+64.50$ Elo ($p = 2.90 \times 10^{-11}$) from pure test-time iterative D3PM denoising.
+
+\end{document}

@@ -1,0 +1,26 @@
+# WP3: Discrete State-Space Diffusion (D3PM) Horizon Planner Configuration (Target v1.3)
+work_package: WP3
+version_target: "v1.3"
+seed: 42
+
+diffusion:
+  horizon_plies: 6
+  transition_type: "absorbing_mask"
+  vocab_size_5x5: 456   # 455 valid move edges + 1 [MASK] token
+  vocab_size_8x8: 1859  # 1858 valid move edges + 1 [MASK] token
+  eval_step_counts: [10, 20, 32, 64]
+  default_inference_steps: 20
+  auxiliary_ce_weight_lambda: 0.05
+
+legality_projection:
+  # ALT-002: Two-tier legality projection (static G(V,E) + final-step rollout mask)
+  tier1_static_edge_vocab: true
+  tier2_rollout_mask_final_steps: 3
+  enforce_hard_mask_at_t1: true
+
+stage_gate_3:
+  legality_test_positions: 10000
+  required_legal_trajectory_rate: 1.0
+  min_mate_in_3_accuracy: 0.85
+  max_ply1_to_ply6_accuracy_drop: 0.12
+  min_speedup_vs_beam_search: 5.0

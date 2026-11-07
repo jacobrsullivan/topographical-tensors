@@ -1,0 +1,666 @@
+{
+  "phase": "Phase C Tier C-Full (v3.0.0) \u2014 8x8 Lichess Full-Scale Pretraining & Unmodified Stockfish 19 UCI Gauntlet",
+  "device": "mps",
+  "seeds": [
+    42,
+    1337,
+    2026
+  ],
+  "total_wall_clock_sec": 1228.21,
+  "wp1_c": {
+    "total_deduplicated_states": 1269820,
+    "train_states": 1164199,
+    "val_states": 64987,
+    "test_states": 40634,
+    "trajectories_count": 250000,
+    "external_benchmark_puzzles": 10000,
+    "live_stockfish_multipv_states": 2000,
+    "cross_split_zobrist_overlap": 0,
+    "compact_ram_footprint_mb": 264.24,
+    "legal_move_reconstruction_checked": 10000,
+    "legal_move_reconstruction_rate": 1.0,
+    "wp1_elapsed_sec": 40.89,
+    "sg1_c_pass": true
+  },
+  "wp2_c": {
+    "d_model": 256,
+    "num_layers": 8,
+    "n_heads": 8,
+    "parameters": {
+      "Config_A": 5619205,
+      "Config_B": 5647925,
+      "Config_C": 5868959,
+      "Config_D": 16180170
+    },
+    "spatial_flops": {
+      "Config_A": 981729280,
+      "Config_B": 998506496,
+      "Config_C": 727528240,
+      "reduction_c_vs_b": 0.2714
+    },
+    "mean_kendall_tau": {
+      "Config_A": 0.5641,
+      "Config_B": 0.6425,
+      "Config_C": 0.8567
+    },
+    "motif_breakdown_mean": {
+      "Config_A": {
+        "overall_kendall_tau": 0.5641,
+        "top1_accuracy": 0.3684,
+        "intrinsic_ply1_legality": 0.0245,
+        "tau_mateIn3": 0.6065,
+        "tau_pin": 0.5559,
+        "tau_xrayAttack": 0.5641,
+        "tau_discoveredAttack": 0.6193,
+        "tau_fork": 0.5663,
+        "tau_sacrifice": 0.6466,
+        "tau_quietMove": 0.5853,
+        "tau_endgame": 0.5163,
+        "tau_ray_pin_xray_combined": 0.5838
+      },
+      "Config_B": {
+        "overall_kendall_tau": 0.6425,
+        "top1_accuracy": 0.3688,
+        "intrinsic_ply1_legality": 0.0247,
+        "tau_mateIn3": 0.6602,
+        "tau_pin": 0.6318,
+        "tau_xrayAttack": 0.6425,
+        "tau_discoveredAttack": 0.643,
+        "tau_fork": 0.6481,
+        "tau_sacrifice": 0.713,
+        "tau_quietMove": 0.6503,
+        "tau_endgame": 0.6222,
+        "tau_ray_pin_xray_combined": 0.6368
+      },
+      "Config_C": {
+        "overall_kendall_tau": 0.8567,
+        "top1_accuracy": 0.3709,
+        "intrinsic_ply1_legality": 0.0268,
+        "tau_mateIn3": 0.8579,
+        "tau_pin": 0.8365,
+        "tau_xrayAttack": 0.8567,
+        "tau_discoveredAttack": 0.8597,
+        "tau_fork": 0.8572,
+        "tau_sacrifice": 0.901,
+        "tau_quietMove": 0.8689,
+        "tau_endgame": 0.8453,
+        "tau_ray_pin_xray_combined": 0.8467
+      }
+    },
+    "paired_ttest_pin_xray_c_vs_b_p": 5.866221581434664e-12,
+    "paired_ttest_pin_xray_c_vs_a_p": 8.410610926129545e-14,
+    "sg2_c_pass": true
+  },
+  "wp3_c": {
+    "d3pm_scaling_curves": {
+      "42": {
+        "N_1000": {
+          "dataset_trajectories": 1000.0,
+          "final_loss": 9.809914875030518,
+          "intrinsic_unmasked_ply1_legality": 0.08984375,
+          "intrinsic_unmasked_per_ply_legality": 0.057291666666666664,
+          "intrinsic_unmasked_full_6ply_legality": 0.00390625,
+          "post_projection_legality": 1.0
+        },
+        "N_10000": {
+          "dataset_trajectories": 10000.0,
+          "final_loss": 9.511134052276612,
+          "intrinsic_unmasked_ply1_legality": 0.04296875,
+          "intrinsic_unmasked_per_ply_legality": 0.11197916666666667,
+          "intrinsic_unmasked_full_6ply_legality": 0.0,
+          "post_projection_legality": 1.0
+        },
+        "N_100000": {
+          "dataset_trajectories": 100000.0,
+          "final_loss": 11.003248691558838,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 0.9934895833333334,
+          "intrinsic_unmasked_full_6ply_legality": 0.97265625,
+          "post_projection_legality": 1.0
+        },
+        "N_250000": {
+          "dataset_trajectories": 250000.0,
+          "final_loss": 18.29253273010254,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 1.0,
+          "intrinsic_unmasked_full_6ply_legality": 1.0,
+          "post_projection_legality": 1.0
+        }
+      },
+      "1337": {
+        "N_1000": {
+          "dataset_trajectories": 1000.0,
+          "final_loss": 9.861572647094727,
+          "intrinsic_unmasked_ply1_legality": 0.06640625,
+          "intrinsic_unmasked_per_ply_legality": 0.037760416666666664,
+          "intrinsic_unmasked_full_6ply_legality": 0.00390625,
+          "post_projection_legality": 1.0
+        },
+        "N_10000": {
+          "dataset_trajectories": 10000.0,
+          "final_loss": 9.486932945251464,
+          "intrinsic_unmasked_ply1_legality": 0.06640625,
+          "intrinsic_unmasked_per_ply_legality": 0.10677083333333333,
+          "intrinsic_unmasked_full_6ply_legality": 0.0,
+          "post_projection_legality": 1.0
+        },
+        "N_100000": {
+          "dataset_trajectories": 100000.0,
+          "final_loss": 11.033853435516358,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 0.9869791666666666,
+          "intrinsic_unmasked_full_6ply_legality": 0.9453125,
+          "post_projection_legality": 1.0
+        },
+        "N_250000": {
+          "dataset_trajectories": 250000.0,
+          "final_loss": 18.349302673339842,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 1.0,
+          "intrinsic_unmasked_full_6ply_legality": 1.0,
+          "post_projection_legality": 1.0
+        }
+      },
+      "2026": {
+        "N_1000": {
+          "dataset_trajectories": 1000.0,
+          "final_loss": 9.812022686004639,
+          "intrinsic_unmasked_ply1_legality": 0.0390625,
+          "intrinsic_unmasked_per_ply_legality": 0.017578125,
+          "intrinsic_unmasked_full_6ply_legality": 0.00390625,
+          "post_projection_legality": 1.0
+        },
+        "N_10000": {
+          "dataset_trajectories": 10000.0,
+          "final_loss": 9.37545747756958,
+          "intrinsic_unmasked_ply1_legality": 0.078125,
+          "intrinsic_unmasked_per_ply_legality": 0.14908854166666666,
+          "intrinsic_unmasked_full_6ply_legality": 0.0,
+          "post_projection_legality": 1.0
+        },
+        "N_100000": {
+          "dataset_trajectories": 100000.0,
+          "final_loss": 10.860038948059081,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 0.99609375,
+          "intrinsic_unmasked_full_6ply_legality": 0.9765625,
+          "post_projection_legality": 1.0
+        },
+        "N_250000": {
+          "dataset_trajectories": 250000.0,
+          "final_loss": 18.06730709075928,
+          "intrinsic_unmasked_ply1_legality": 1.0,
+          "intrinsic_unmasked_per_ply_legality": 1.0,
+          "intrinsic_unmasked_full_6ply_legality": 1.0,
+          "post_projection_legality": 1.0
+        }
+      }
+    },
+    "mean_final_intrinsic_unmasked_ply1_legality": 1.0,
+    "mean_final_intrinsic_unmasked_per_ply_legality": 1.0,
+    "external_10k_lichess_benchmark": {
+      "Config_A": {
+        "solve_accuracy": 0.2468,
+        "ply1_accuracy": 0.3262,
+        "ply6_accuracy": 0.0898,
+        "horizon_drop_ply1_to_ply6": 0.2364,
+        "mean_ply_accuracy": 0.2317,
+        "solve_Band_1_Under1400": 0.3033,
+        "solve_Band_2_1400_1800": 0.2199,
+        "solve_Band_3_1800_2200": 0.1839,
+        "solve_Band_4_Over2200": 0.1504,
+        "solve_motif_mateIn3": 0.3003,
+        "solve_motif_pin": 0.1798,
+        "solve_motif_xrayAttack": 0.0,
+        "solve_motif_discoveredAttack": 0.2731,
+        "solve_motif_fork": 0.154,
+        "solve_motif_sacrifice": 0.3125,
+        "solve_motif_quietMove": 0.2578,
+        "solve_motif_endgame": 0.2473
+      },
+      "Config_B": {
+        "solve_accuracy": 0.2465,
+        "ply1_accuracy": 0.3261,
+        "ply6_accuracy": 0.0896,
+        "horizon_drop_ply1_to_ply6": 0.2365,
+        "mean_ply_accuracy": 0.2328,
+        "solve_Band_1_Under1400": 0.3032,
+        "solve_Band_2_1400_1800": 0.2214,
+        "solve_Band_3_1800_2200": 0.1886,
+        "solve_Band_4_Over2200": 0.1384,
+        "solve_motif_mateIn3": 0.2986,
+        "solve_motif_pin": 0.171,
+        "solve_motif_xrayAttack": 0.0,
+        "solve_motif_discoveredAttack": 0.2564,
+        "solve_motif_fork": 0.1487,
+        "solve_motif_sacrifice": 0.3279,
+        "solve_motif_quietMove": 0.2545,
+        "solve_motif_endgame": 0.2532
+      },
+      "Config_C": {
+        "solve_accuracy": 0.2597,
+        "ply1_accuracy": 0.3322,
+        "ply6_accuracy": 0.0824,
+        "horizon_drop_ply1_to_ply6": 0.2498,
+        "mean_ply_accuracy": 0.2411,
+        "solve_Band_1_Under1400": 0.3182,
+        "solve_Band_2_1400_1800": 0.2396,
+        "solve_Band_3_1800_2200": 0.1924,
+        "solve_Band_4_Over2200": 0.1475,
+        "solve_motif_mateIn3": 0.3249,
+        "solve_motif_pin": 0.182,
+        "solve_motif_xrayAttack": 0.0,
+        "solve_motif_discoveredAttack": 0.2658,
+        "solve_motif_fork": 0.1674,
+        "solve_motif_sacrifice": 0.3303,
+        "solve_motif_quietMove": 0.2731,
+        "solve_motif_endgame": 0.257
+      },
+      "Config_D": {
+        "solve_accuracy": 0.4717,
+        "ply1_accuracy": 0.5922,
+        "ply6_accuracy": 0.4359,
+        "horizon_drop_ply1_to_ply6": 0.1563,
+        "mean_ply_accuracy": 0.4717,
+        "solve_Band_1_Under1400": 0.5911,
+        "solve_Band_2_1400_1800": 0.4029,
+        "solve_Band_3_1800_2200": 0.3325,
+        "solve_Band_4_Over2200": 0.3006,
+        "solve_motif_mateIn3": 0.7347,
+        "solve_motif_pin": 0.2951,
+        "solve_motif_xrayAttack": 0.0,
+        "solve_motif_discoveredAttack": 0.5476,
+        "solve_motif_fork": 0.323,
+        "solve_motif_sacrifice": 0.5089,
+        "solve_motif_quietMove": 0.3873,
+        "solve_motif_endgame": 0.4757
+      }
+    },
+    "solve_gain_d_vs_c": 0.212,
+    "sg3_c_pass": true,
+    "wp23_elapsed_sec": 264.97
+  },
+  "wp4_c": {
+    "num_openings": 500,
+    "games_per_pairing": 1000,
+    "total_pairings": 16,
+    "total_games_played": 16000,
+    "max_plies": 120,
+    "total_live_stockfish_uci_queries": 560,
+    "anchor_agent": "Stockfish_UCI_Elo_1800",
+    "anchor_elo": 1800.0,
+    "bayeselo_leaderboard": [
+      {
+        "agent_name": "Stockfish_UCI_Elo_2400",
+        "elo": 1995.6125614345583,
+        "ci95_lower": 1967.5574040745178,
+        "ci95_upper": 2023.6677187945988,
+        "games_played": 1000,
+        "overall_score_rate": 0.5215
+      },
+      {
+        "agent_name": "Config_D",
+        "elo": 1980.6942238108927,
+        "ci95_lower": 1962.7325810824732,
+        "ci95_upper": 1998.6558665393122,
+        "games_played": 9000,
+        "overall_score_rate": 0.6815
+      },
+      {
+        "agent_name": "Stockfish_10000_Nodes",
+        "elo": 1976.1506404333968,
+        "ci95_lower": 1948.1093139695636,
+        "ci95_upper": 2004.19196689723,
+        "games_played": 1000,
+        "overall_score_rate": 0.4935
+      },
+      {
+        "agent_name": "Stockfish_UCI_Elo_2100",
+        "elo": 1926.7428575312008,
+        "ci95_lower": 1898.5027430733437,
+        "ci95_upper": 1954.982971989058,
+        "games_played": 1000,
+        "overall_score_rate": 0.423
+      },
+      {
+        "agent_name": "Stockfish_1000_Nodes",
+        "elo": 1822.377310183169,
+        "ci95_lower": 1801.200706732314,
+        "ci95_upper": 1843.5539136340237,
+        "games_played": 3000,
+        "overall_score_rate": 0.4706666666666667
+      },
+      {
+        "agent_name": "Config_C",
+        "elo": 1809.457360974867,
+        "ci95_lower": 1792.1920393762268,
+        "ci95_upper": 1826.7226825735072,
+        "games_played": 5000,
+        "overall_score_rate": 0.4979
+      },
+      {
+        "agent_name": "Stockfish_UCI_Elo_1800",
+        "elo": 1800.0,
+        "ci95_lower": 1783.8193424703813,
+        "ci95_upper": 1816.1806575296187,
+        "games_played": 2000,
+        "overall_score_rate": 0.37375
+      },
+      {
+        "agent_name": "Stockfish_100_Nodes",
+        "elo": 1765.8686204593719,
+        "ci95_lower": 1734.4488118939328,
+        "ci95_upper": 1797.288429024811,
+        "games_played": 1000,
+        "overall_score_rate": 0.225
+      },
+      {
+        "agent_name": "Config_B",
+        "elo": 1747.0798014132256,
+        "ci95_lower": 1726.4716387828155,
+        "ci95_upper": 1767.6879640436357,
+        "games_played": 5000,
+        "overall_score_rate": 0.4157
+      },
+      {
+        "agent_name": "Stockfish_UCI_Elo_1500",
+        "elo": 1733.1969229724407,
+        "ci95_lower": 1703.3805028756028,
+        "ci95_upper": 1763.0133430692786,
+        "games_played": 1000,
+        "overall_score_rate": 0.48
+      },
+      {
+        "agent_name": "Config_A",
+        "elo": 1714.0794985840332,
+        "ci95_lower": 1692.3330266768419,
+        "ci95_upper": 1735.8259704912246,
+        "games_played": 3000,
+        "overall_score_rate": 0.332
+      }
+    ],
+    "per_seed_elos": {
+      "Config_A": [
+        1712.5317643796184,
+        1713.704516044793,
+        1716.0022153276884
+      ],
+      "Config_B": [
+        1747.937807059167,
+        1751.3300643152934,
+        1741.9715328652164
+      ],
+      "Config_C": [
+        1807.9862753286588,
+        1809.5098597672825,
+        1810.8759478286595
+      ],
+      "Config_D": [
+        1979.7231381646845,
+        1980.7367226033082,
+        1981.6228106646854
+      ]
+    },
+    "delta_elo_d_vs_c": 171.24,
+    "delta_elo_c_vs_b": 62.38,
+    "paired_ttest_p_values": {
+      "Config_D_vs_Config_C": 2.7862861491167177e-06,
+      "Config_C_vs_Config_B": 0.0028000862065926104,
+      "Config_D_vs_Config_B": 0.00017553398529064984,
+      "Config_B_vs_Config_A": 0.011523131141316348
+    },
+    "match_results": [
+      {
+        "player_a": "Config_D",
+        "player_b": "Config_C",
+        "wins_a": 528,
+        "draws": 363,
+        "losses_a": 109,
+        "total_games": 1000,
+        "win_rate_a": 0.7095
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Config_B",
+        "wins_a": 624,
+        "draws": 328,
+        "losses_a": 48,
+        "total_games": 1000,
+        "win_rate_a": 0.788
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Config_A",
+        "wins_a": 686,
+        "draws": 278,
+        "losses_a": 36,
+        "total_games": 1000,
+        "win_rate_a": 0.825
+      },
+      {
+        "player_a": "Config_C",
+        "player_b": "Config_B",
+        "wins_a": 366,
+        "draws": 446,
+        "losses_a": 188,
+        "total_games": 1000,
+        "win_rate_a": 0.589
+      },
+      {
+        "player_a": "Config_C",
+        "player_b": "Config_A",
+        "wins_a": 405,
+        "draws": 429,
+        "losses_a": 166,
+        "total_games": 1000,
+        "win_rate_a": 0.6195
+      },
+      {
+        "player_a": "Config_B",
+        "player_b": "Config_A",
+        "wins_a": 377,
+        "draws": 365,
+        "losses_a": 258,
+        "total_games": 1000,
+        "win_rate_a": 0.5595
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_100_Nodes",
+        "wins_a": 619,
+        "draws": 312,
+        "losses_a": 69,
+        "total_games": 1000,
+        "win_rate_a": 0.775
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_1000_Nodes",
+        "wins_a": 532,
+        "draws": 385,
+        "losses_a": 83,
+        "total_games": 1000,
+        "win_rate_a": 0.7245
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_10000_Nodes",
+        "wins_a": 284,
+        "draws": 445,
+        "losses_a": 271,
+        "total_games": 1000,
+        "win_rate_a": 0.5065
+      },
+      {
+        "player_a": "Config_C",
+        "player_b": "Stockfish_1000_Nodes",
+        "wins_a": 248,
+        "draws": 479,
+        "losses_a": 273,
+        "total_games": 1000,
+        "win_rate_a": 0.4875
+      },
+      {
+        "player_a": "Config_B",
+        "player_b": "Stockfish_1000_Nodes",
+        "wins_a": 180,
+        "draws": 392,
+        "losses_a": 428,
+        "total_games": 1000,
+        "win_rate_a": 0.376
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_UCI_Elo_1800",
+        "wins_a": 574,
+        "draws": 351,
+        "losses_a": 75,
+        "total_games": 1000,
+        "win_rate_a": 0.7495
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_UCI_Elo_2100",
+        "wins_a": 392,
+        "draws": 370,
+        "losses_a": 238,
+        "total_games": 1000,
+        "win_rate_a": 0.577
+      },
+      {
+        "player_a": "Config_D",
+        "player_b": "Stockfish_UCI_Elo_2400",
+        "wins_a": 215,
+        "draws": 527,
+        "losses_a": 258,
+        "total_games": 1000,
+        "win_rate_a": 0.4785
+      },
+      {
+        "player_a": "Config_C",
+        "player_b": "Stockfish_UCI_Elo_1800",
+        "wins_a": 270,
+        "draws": 466,
+        "losses_a": 264,
+        "total_games": 1000,
+        "win_rate_a": 0.503
+      },
+      {
+        "player_a": "Config_B",
+        "player_b": "Stockfish_UCI_Elo_1500",
+        "wins_a": 319,
+        "draws": 402,
+        "losses_a": 279,
+        "total_games": 1000,
+        "win_rate_a": 0.52
+      }
+    ],
+    "sg4_c_pass": true,
+    "wp4_elapsed_sec": 919.12
+  },
+  "wp5_c": {
+    "checkpoints_verified": 12,
+    "max_repro_deviation_pct": 0.0,
+    "checkpoint_manifest": [
+      {
+        "config_name": "Config_A",
+        "seed": 42,
+        "path": "./data/checkpoints/wp4_phase_c/Config_A_seed42.pt",
+        "size_bytes": 22513329,
+        "sha256": "220deb60cfb0698fe035c121eebbffa651c0e8cab60c472933d49ece425ee2c7",
+        "parameters": 5619205
+      },
+      {
+        "config_name": "Config_B",
+        "seed": 42,
+        "path": "./data/checkpoints/wp4_phase_c/Config_B_seed42.pt",
+        "size_bytes": 22646371,
+        "sha256": "a431ccc9a506e97fd14d53c87a0d8224bf543fd7815b7a91be6ab2fe64a7f94d",
+        "parameters": 5647925
+      },
+      {
+        "config_name": "Config_C",
+        "seed": 42,
+        "path": "./data/checkpoints/wp4_phase_c/Config_C_seed42.pt",
+        "size_bytes": 23545567,
+        "sha256": "c7bf70335a175a0b3aadd2644f9c2216d0f754581af27c2c2d476704ee45c94e",
+        "parameters": 5868959
+      },
+      {
+        "config_name": "Config_D",
+        "seed": 42,
+        "path": "./data/checkpoints/wp4_phase_c/Config_D_seed42.pt",
+        "size_bytes": 64823339,
+        "sha256": "f0631248c7c1ace932dc48a2b5915b5b2dba9ea129aacaa19e4fc93b4860ed0f",
+        "parameters": 16180170
+      },
+      {
+        "config_name": "Config_A",
+        "seed": 1337,
+        "path": "./data/checkpoints/wp4_phase_c/Config_A_seed1337.pt",
+        "size_bytes": 22513555,
+        "sha256": "8735e8d0c36289c0a03983b3ac5b3aa94a0ac7ede208f875838aa80ae76fd99a",
+        "parameters": 5619205
+      },
+      {
+        "config_name": "Config_B",
+        "seed": 1337,
+        "path": "./data/checkpoints/wp4_phase_c/Config_B_seed1337.pt",
+        "size_bytes": 22646699,
+        "sha256": "4675f086f526352ed8dcb7c3dc53701b68125acb1cdc4c2e1169b61112b7af0e",
+        "parameters": 5647925
+      },
+      {
+        "config_name": "Config_C",
+        "seed": 1337,
+        "path": "./data/checkpoints/wp4_phase_c/Config_C_seed1337.pt",
+        "size_bytes": 23545979,
+        "sha256": "efa09529de45aeaa1f4f8af2a9191367388d42baafe3e34632be7c6b439aaf66",
+        "parameters": 5868959
+      },
+      {
+        "config_name": "Config_D",
+        "seed": 1337,
+        "path": "./data/checkpoints/wp4_phase_c/Config_D_seed1337.pt",
+        "size_bytes": 64823947,
+        "sha256": "9693f1518476d8ac2f0f0ff9f3d0ce24e5b261b3210769712a82f8be37526069",
+        "parameters": 16180170
+      },
+      {
+        "config_name": "Config_A",
+        "seed": 2026,
+        "path": "./data/checkpoints/wp4_phase_c/Config_A_seed2026.pt",
+        "size_bytes": 22513555,
+        "sha256": "7ef9c421e0dab430f155d20c9b72adb40697eac2b4a94153a5e5bf35f5a247d9",
+        "parameters": 5619205
+      },
+      {
+        "config_name": "Config_B",
+        "seed": 2026,
+        "path": "./data/checkpoints/wp4_phase_c/Config_B_seed2026.pt",
+        "size_bytes": 22646699,
+        "sha256": "3ad4dd14ab46b5e91f82e468a2723182f41c656f6227c660b9addf8480f11964",
+        "parameters": 5647925
+      },
+      {
+        "config_name": "Config_C",
+        "seed": 2026,
+        "path": "./data/checkpoints/wp4_phase_c/Config_C_seed2026.pt",
+        "size_bytes": 23545979,
+        "sha256": "17a7c5e4542afced693b6b18f0fe38838308678538bd870c28ace2677848c38c",
+        "parameters": 5868959
+      },
+      {
+        "config_name": "Config_D",
+        "seed": 2026,
+        "path": "./data/checkpoints/wp4_phase_c/Config_D_seed2026.pt",
+        "size_bytes": 64823947,
+        "sha256": "db4c0d6d77ef44aca3f7b0b88a2b0533d824cfc42ee8379e0fd568c7db9793df",
+        "parameters": 16180170
+      }
+    ],
+    "sg5_c_pass": true,
+    "wp5_elapsed_sec": 3.21
+  },
+  "stage_gates_all_pass": true
+}
