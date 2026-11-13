@@ -19,3 +19,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+-------------------------------------------------------------------------------
+BUNDLED DATA LICENSES & TRADEMARK DISCLAIMER
+-------------------------------------------------------------------------------
+
+1. Bundled Catalog & Benchmark Data Files:
+   All first-party Python source code, scripts, configurations, and tests in
+   this repository (`topo_chess` and `topo_brick`) are licensed under the MIT
+   License above. Certain pre-compiled part-catalog archives and external
+   benchmark datasets under `src/topo_brick/` derive from upstream CC-BY-4.0,
+   CC-BY-SA-4.0, CCAL v2.0, and MIT works and are governed by the terms in
+   `DATA_LICENSE.md` and `THIRD_PARTY_NOTICES.md`.
+
+2. Trademark Disclaimer:
+   LEGO® is a trademark of the LEGO Group of companies which does not sponsor,
+   authorize, or endorse this software or research.

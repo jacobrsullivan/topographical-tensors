@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-05  
 **Status:** Active Architectural Specification (Refines Implementation Plan `v1.0`)  
-**Tracked Alterations:** `ALT-001`, `ALT-002`, `ALT-003`, `ALT-004` (recorded in [`../flight-recorder.md`](../flight-recorder.md))
+**Tracked Alterations:** `ALT-001`, `ALT-002`, `ALT-003`, `ALT-004` (see [`12-expert-review-synopsis.md`](12-expert-review-synopsis.md))
 
 ---
 

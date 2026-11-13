@@ -1,0 +1,2657 @@
+{
+  "schema_version": "1.0.0",
+  "legolization_package": "legolization==0.5.0 (GPL-3.0-or-later, invoked strictly out-of-process via CLI)",
+  "bricklayer_package": "bricklayer-sdk==0.1.0 (AvaLovelace1/brickwright, MIT)",
+  "gate2_legolization": {
+    "luo_rows": [
+      {
+        "mesh_id": "b1_ext_e2.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.46703601108033244,
+        "internal_voxel_iou": 0.5887191539365453,
+        "voxelization_iou_loss": 0.48379351740696275,
+        "chamfer_l2_ldu": 8.379338699674614,
+        "hausdorff95_ldu": 16.97329859151945,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.3874709976798144,
+        "wall_ms": 92.0,
+        "subprocess_wall_ms": 14286.17904195562
+      },
+      {
+        "mesh_id": "b1_ext_e3.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.35248756218905475,
+        "internal_voxel_iou": 0.4554801148900261,
+        "voxelization_iou_loss": 0.5322368421052632,
+        "chamfer_l2_ldu": 11.376629770455212,
+        "hausdorff95_ldu": 24.427205928106236,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.7088607594936709,
+        "wall_ms": 229.0,
+        "subprocess_wall_ms": 843.4504999313504
+      },
+      {
+        "mesh_id": "b1_ext_e4.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.31285878300803677,
+        "internal_voxel_iou": 0.40606060606060607,
+        "voxelization_iou_loss": 0.7392563978754225,
+        "chamfer_l2_ldu": 7.908524691455883,
+        "hausdorff95_ldu": 17.309467611504473,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.866785079928952,
+        "wall_ms": 40.0,
+        "subprocess_wall_ms": 653.1107500195503
+      },
+      {
+        "mesh_id": "b1_ext_e5.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.3117563065207044,
+        "internal_voxel_iou": 0.3015141080536176,
+        "voxelization_iou_loss": 0.6913063691306369,
+        "chamfer_l2_ldu": 8.02430708427837,
+        "hausdorff95_ldu": 22.171730759905135,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.6095380029806259,
+        "wall_ms": 183.0,
+        "subprocess_wall_ms": 796.0042080376297
+      },
+      {
+        "mesh_id": "b1_ext_e6.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.16267942583732056,
+        "internal_voxel_iou": 0.17958913187541417,
+        "voxelization_iou_loss": 0.6670448099829835,
+        "chamfer_l2_ldu": 10.212469451946333,
+        "hausdorff95_ldu": 28.485091779802147,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 1.7457627118644068,
+        "wall_ms": 537.0,
+        "subprocess_wall_ms": 1153.421290917322
+      },
+      {
+        "mesh_id": "b1_ext_e8.obj",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.18063583815028902,
+        "internal_voxel_iou": 0.32625994694960214,
+        "voxelization_iou_loss": 0.7258771929824561,
+        "chamfer_l2_ldu": 10.933539168629189,
+        "hausdorff95_ldu": 29.769620792716108,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 2.936,
+        "wall_ms": 55.0,
+        "subprocess_wall_ms": 668.4420419624075
+      },
+      {
+        "mesh_id": "b1_unseen_00",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 36.0,
+        "subprocess_wall_ms": 649.2222499800846
+      },
+      {
+        "mesh_id": "b1_unseen_01",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 51.0,
+        "subprocess_wall_ms": 666.0419169347733
+      },
+      {
+        "mesh_id": "b1_unseen_02",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 37.0,
+        "subprocess_wall_ms": 647.9366670828313
+      },
+      {
+        "mesh_id": "b1_unseen_03",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 52.0,
+        "subprocess_wall_ms": 675.7882089586928
+      },
+      {
+        "mesh_id": "b1_unseen_04",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 36.0,
+        "subprocess_wall_ms": 648.1666669715196
+      },
+      {
+        "mesh_id": "b1_unseen_05",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 52.0,
+        "subprocess_wall_ms": 665.4143750201911
+      },
+      {
+        "mesh_id": "b1_unseen_06",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 36.0,
+        "subprocess_wall_ms": 646.3379169581458
+      },
+      {
+        "mesh_id": "b1_unseen_07",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 52.0,
+        "subprocess_wall_ms": 664.1283330973238
+      },
+      {
+        "mesh_id": "b1_unseen_08",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 36.0,
+        "subprocess_wall_ms": 645.7737080054358
+      },
+      {
+        "mesh_id": "b1_unseen_09",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 52.0,
+        "subprocess_wall_ms": 663.9761250698939
+      },
+      {
+        "mesh_id": "b1_unseen_10",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 36.0,
+        "subprocess_wall_ms": 645.7648749928921
+      },
+      {
+        "mesh_id": "b1_unseen_11",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 51.0,
+        "subprocess_wall_ms": 669.5380000164732
+      },
+      {
+        "mesh_id": "b1_unseen_12",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 37.0,
+        "subprocess_wall_ms": 650.1305840210989
+      },
+      {
+        "mesh_id": "b1_unseen_13",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 52.0,
+        "subprocess_wall_ms": 665.6863329699263
+      },
+      {
+        "mesh_id": "b2_unseen_00",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 112.0,
+        "subprocess_wall_ms": 726.7670829314739
+      },
+      {
+        "mesh_id": "b2_unseen_01",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 153.0,
+        "subprocess_wall_ms": 770.197540987283
+      },
+      {
+        "mesh_id": "b2_unseen_02",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 96.0,
+        "subprocess_wall_ms": 711.9632919784635
+      },
+      {
+        "mesh_id": "b2_unseen_03",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 113.0,
+        "subprocess_wall_ms": 727.7018749155104
+      },
+      {
+        "mesh_id": "b2_unseen_04",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 151.0,
+        "subprocess_wall_ms": 775.1367500750348
+      },
+      {
+        "mesh_id": "b2_unseen_05",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 95.0,
+        "subprocess_wall_ms": 706.3603329006582
+      },
+      {
+        "mesh_id": "b2_unseen_06",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 111.0,
+        "subprocess_wall_ms": 724.2850000038743
+      },
+      {
+        "mesh_id": "b2_unseen_07",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 151.0,
+        "subprocess_wall_ms": 762.322667054832
+      },
+      {
+        "mesh_id": "b2_unseen_08",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 95.0,
+        "subprocess_wall_ms": 706.613083020784
+      },
+      {
+        "mesh_id": "b2_unseen_09",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 111.0,
+        "subprocess_wall_ms": 723.4773329691961
+      },
+      {
+        "mesh_id": "b2_unseen_10",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 151.0,
+        "subprocess_wall_ms": 762.9797089612111
+      },
+      {
+        "mesh_id": "b2_unseen_11",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 94.0,
+        "subprocess_wall_ms": 708.8280000025406
+      },
+      {
+        "mesh_id": "b2_unseen_12",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 113.0,
+        "subprocess_wall_ms": 729.792624944821
+      },
+      {
+        "mesh_id": "b2_unseen_13",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 153.0,
+        "subprocess_wall_ms": 773.1778330635279
+      },
+      {
+        "mesh_id": "b2_unseen_14",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 96.0,
+        "subprocess_wall_ms": 714.5735420053825
+      },
+      {
+        "mesh_id": "b2_unseen_15",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 112.0,
+        "subprocess_wall_ms": 727.2545410087332
+      },
+      {
+        "mesh_id": "b2_unseen_16",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 153.0,
+        "subprocess_wall_ms": 770.6256670644507
+      },
+      {
+        "mesh_id": "b2_unseen_17",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 94.0,
+        "subprocess_wall_ms": 721.70599992387
+      },
+      {
+        "mesh_id": "b2_unseen_18",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 112.0,
+        "subprocess_wall_ms": 730.1253750920296
+      },
+      {
+        "mesh_id": "b2_unseen_19",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 152.0,
+        "subprocess_wall_ms": 772.4437919678167
+      },
+      {
+        "mesh_id": "b3_unseen_00",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 334.0,
+        "subprocess_wall_ms": 950.4939999897033
+      },
+      {
+        "mesh_id": "b3_unseen_01",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 276.0,
+        "subprocess_wall_ms": 891.456332989037
+      },
+      {
+        "mesh_id": "b3_unseen_02",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 334.0,
+        "subprocess_wall_ms": 949.143624980934
+      },
+      {
+        "mesh_id": "b3_unseen_03",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 276.0,
+        "subprocess_wall_ms": 891.4463330293074
+      },
+      {
+        "mesh_id": "b3_unseen_04",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 334.0,
+        "subprocess_wall_ms": 949.1281249793246
+      },
+      {
+        "mesh_id": "b3_unseen_05",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 277.0,
+        "subprocess_wall_ms": 890.4682919383049
+      },
+      {
+        "mesh_id": "b3_unseen_06",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 336.0,
+        "subprocess_wall_ms": 955.2023330470547
+      },
+      {
+        "mesh_id": "b3_unseen_07",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 277.0,
+        "subprocess_wall_ms": 895.4301659250632
+      },
+      {
+        "mesh_id": "b3_unseen_08",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 336.0,
+        "subprocess_wall_ms": 966.7870419798419
+      },
+      {
+        "mesh_id": "b3_unseen_09",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 278.0,
+        "subprocess_wall_ms": 896.6507910517976
+      },
+      {
+        "mesh_id": "b3_unseen_10",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 336.0,
+        "subprocess_wall_ms": 956.7205839557573
+      },
+      {
+        "mesh_id": "b3_unseen_11",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 277.0,
+        "subprocess_wall_ms": 903.9306659251451
+      },
+      {
+        "mesh_id": "b3_unseen_12",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 334.0,
+        "subprocess_wall_ms": 958.9402079582214
+      },
+      {
+        "mesh_id": "b3_unseen_13",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 277.0,
+        "subprocess_wall_ms": 903.6057919729501
+      },
+      {
+        "mesh_id": "b3_unseen_14",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 336.0,
+        "subprocess_wall_ms": 955.9659590013325
+      },
+      {
+        "mesh_id": "b3_unseen_15",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 276.0,
+        "subprocess_wall_ms": 893.4330000774935
+      },
+      {
+        "mesh_id": "b3_unseen_16",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 337.0,
+        "subprocess_wall_ms": 952.1968750050291
+      },
+      {
+        "mesh_id": "b3_unseen_17",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 278.0,
+        "subprocess_wall_ms": 894.1521669039503
+      },
+      {
+        "mesh_id": "b3_unseen_18",
+        "size_band": "Band3_61to120",
+        "certified": false,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 336.0,
+        "subprocess_wall_ms": 963.010250008665
+      },
+      {
+        "mesh_id": "b3_unseen_19",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 279.0,
+        "subprocess_wall_ms": 912.5083340331912
+      },
+      {
+        "mesh_id": "b4_unseen_00",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1012.0,
+        "subprocess_wall_ms": 1631.513167056255
+      },
+      {
+        "mesh_id": "b4_unseen_01",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1012.9999999999999,
+        "subprocess_wall_ms": 1635.5617090594023
+      },
+      {
+        "mesh_id": "b4_unseen_02",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1004.0,
+        "subprocess_wall_ms": 1620.989584014751
+      },
+      {
+        "mesh_id": "b4_unseen_03",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1008.0,
+        "subprocess_wall_ms": 1624.5369169628248
+      },
+      {
+        "mesh_id": "b4_unseen_04",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1004.9999999999999,
+        "subprocess_wall_ms": 1625.7140829693526
+      },
+      {
+        "mesh_id": "b4_unseen_05",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1012.9999999999999,
+        "subprocess_wall_ms": 1639.3073329236358
+      },
+      {
+        "mesh_id": "b4_unseen_06",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1008.0,
+        "subprocess_wall_ms": 1627.8827909845859
+      },
+      {
+        "mesh_id": "b4_unseen_07",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1012.9999999999999,
+        "subprocess_wall_ms": 1631.6664170008153
+      },
+      {
+        "mesh_id": "b4_unseen_08",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1012.9999999999999,
+        "subprocess_wall_ms": 1633.3327080355957
+      },
+      {
+        "mesh_id": "b4_unseen_09",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1004.9999999999999,
+        "subprocess_wall_ms": 1622.6780839497223
+      },
+      {
+        "mesh_id": "b4_unseen_10",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1008.0,
+        "subprocess_wall_ms": 1625.1327500212938
+      },
+      {
+        "mesh_id": "b4_unseen_11",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1010.0,
+        "subprocess_wall_ms": 1639.7417499683797
+      },
+      {
+        "mesh_id": "b4_unseen_12",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1006.9999999999999,
+        "subprocess_wall_ms": 1627.3570000194013
+      },
+      {
+        "mesh_id": "b4_unseen_13",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1016.9999999999999,
+        "subprocess_wall_ms": 1637.8164170309901
+      },
+      {
+        "mesh_id": "b4_unseen_14",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1010.0,
+        "subprocess_wall_ms": 1632.0333749754354
+      },
+      {
+        "mesh_id": "b4_unseen_15",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1012.9999999999999,
+        "subprocess_wall_ms": 1636.0417089890689
+      },
+      {
+        "mesh_id": "b4_unseen_16",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1004.0,
+        "subprocess_wall_ms": 1625.3493750700727
+      },
+      {
+        "mesh_id": "b4_unseen_17",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1008.9999999999999,
+        "subprocess_wall_ms": 1637.1615419629961
+      },
+      {
+        "mesh_id": "b4_unseen_18",
+        "size_band": "Band4_121to250",
+        "certified": false,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 1004.9999999999999,
+        "subprocess_wall_ms": 1623.4652920393273
+      },
+      {
+        "mesh_id": "b4_unseen_19",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 1012.0,
+        "subprocess_wall_ms": 1630.6795830605552
+      }
+    ],
+    "greedy_rows": [
+      {
+        "mesh_id": "b1_ext_e2.obj",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.46703601108033244,
+        "internal_voxel_iou": 0.5887191539365453,
+        "voxelization_iou_loss": 0.48379351740696275,
+        "chamfer_l2_ldu": 8.379338699674614,
+        "hausdorff95_ldu": 16.97329859151945,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.3874709976798144,
+        "wall_ms": 97.0,
+        "subprocess_wall_ms": 724.6874580159783
+      },
+      {
+        "mesh_id": "b1_ext_e3.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.35248756218905475,
+        "internal_voxel_iou": 0.4554801148900261,
+        "voxelization_iou_loss": 0.5322368421052632,
+        "chamfer_l2_ldu": 11.376629770455212,
+        "hausdorff95_ldu": 24.427205928106236,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.7088607594936709,
+        "wall_ms": 432.0,
+        "subprocess_wall_ms": 1056.4916669391096
+      },
+      {
+        "mesh_id": "b1_ext_e4.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.31285878300803677,
+        "internal_voxel_iou": 0.40606060606060607,
+        "voxelization_iou_loss": 0.7392563978754225,
+        "chamfer_l2_ldu": 7.908524691455883,
+        "hausdorff95_ldu": 17.309467611504473,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.866785079928952,
+        "wall_ms": 99.0,
+        "subprocess_wall_ms": 717.0464169466868
+      },
+      {
+        "mesh_id": "b1_ext_e5.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.3117563065207044,
+        "internal_voxel_iou": 0.3015141080536176,
+        "voxelization_iou_loss": 0.6913063691306369,
+        "chamfer_l2_ldu": 8.02430708427837,
+        "hausdorff95_ldu": 22.171730759905135,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.6095380029806259,
+        "wall_ms": 309.0,
+        "subprocess_wall_ms": 933.4357919869944
+      },
+      {
+        "mesh_id": "b1_ext_e6.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.16267942583732056,
+        "internal_voxel_iou": 0.17958913187541417,
+        "voxelization_iou_loss": 0.6670448099829835,
+        "chamfer_l2_ldu": 10.212469451946333,
+        "hausdorff95_ldu": 28.485091779802147,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 1.7457627118644068,
+        "wall_ms": 785.0,
+        "subprocess_wall_ms": 1404.8861659830436
+      },
+      {
+        "mesh_id": "b1_ext_e8.obj",
+        "size_band": "Band1_le25",
+        "certified": false,
+        "original_mesh_iou": 0.18063583815028902,
+        "internal_voxel_iou": 0.32625994694960214,
+        "voxelization_iou_loss": 0.7258771929824561,
+        "chamfer_l2_ldu": 10.933539168629189,
+        "hausdorff95_ldu": 29.769620792716108,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 2.936,
+        "wall_ms": 99.0,
+        "subprocess_wall_ms": 729.1308329440653
+      },
+      {
+        "mesh_id": "b1_unseen_00",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 82.0,
+        "subprocess_wall_ms": 710.5643750401214
+      },
+      {
+        "mesh_id": "b1_unseen_01",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 701.1965420097113
+      },
+      {
+        "mesh_id": "b1_unseen_02",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 695.8809170173481
+      },
+      {
+        "mesh_id": "b1_unseen_03",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 680.6022500386462
+      },
+      {
+        "mesh_id": "b1_unseen_04",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 697.8277079761028
+      },
+      {
+        "mesh_id": "b1_unseen_05",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 676.2768330518156
+      },
+      {
+        "mesh_id": "b1_unseen_06",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 696.4967909734696
+      },
+      {
+        "mesh_id": "b1_unseen_07",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 680.6073330808431
+      },
+      {
+        "mesh_id": "b1_unseen_08",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 700.2148749306798
+      },
+      {
+        "mesh_id": "b1_unseen_09",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 683.7482079863548
+      },
+      {
+        "mesh_id": "b1_unseen_10",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 697.9466249467805
+      },
+      {
+        "mesh_id": "b1_unseen_11",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 681.4860840095207
+      },
+      {
+        "mesh_id": "b1_unseen_12",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.5216666666666666,
+        "internal_voxel_iou": 0.5591397849462365,
+        "voxelization_iou_loss": 0.41778273809523814,
+        "chamfer_l2_ldu": 9.207816909064444,
+        "hausdorff95_ldu": 19.244513305394165,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.4447284345047923,
+        "wall_ms": 80.0,
+        "subprocess_wall_ms": 704.4963330263272
+      },
+      {
+        "mesh_id": "b1_unseen_13",
+        "size_band": "Band1_le25",
+        "certified": true,
+        "original_mesh_iou": 0.4445378151260504,
+        "internal_voxel_iou": 0.4129032258064516,
+        "voxelization_iou_loss": 0.24857954545454541,
+        "chamfer_l2_ldu": 7.756239248589054,
+        "hausdorff95_ldu": 16.48076777072041,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.9187145557655955,
+        "wall_ms": 61.0,
+        "subprocess_wall_ms": 695.4001670237631
+      },
+      {
+        "mesh_id": "b2_unseen_00",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 159.0,
+        "subprocess_wall_ms": 780.5482500698417
+      },
+      {
+        "mesh_id": "b2_unseen_01",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 137.0,
+        "subprocess_wall_ms": 758.0459170276299
+      },
+      {
+        "mesh_id": "b2_unseen_02",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 102.0,
+        "subprocess_wall_ms": 720.9702080581337
+      },
+      {
+        "mesh_id": "b2_unseen_03",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 159.0,
+        "subprocess_wall_ms": 778.7287080427632
+      },
+      {
+        "mesh_id": "b2_unseen_04",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 139.0,
+        "subprocess_wall_ms": 759.6597080118954
+      },
+      {
+        "mesh_id": "b2_unseen_05",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 102.0,
+        "subprocess_wall_ms": 724.6411249507219
+      },
+      {
+        "mesh_id": "b2_unseen_06",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 158.0,
+        "subprocess_wall_ms": 779.8708330374211
+      },
+      {
+        "mesh_id": "b2_unseen_07",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 138.0,
+        "subprocess_wall_ms": 756.7328329896554
+      },
+      {
+        "mesh_id": "b2_unseen_08",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 102.0,
+        "subprocess_wall_ms": 726.8052500439808
+      },
+      {
+        "mesh_id": "b2_unseen_09",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 158.0,
+        "subprocess_wall_ms": 784.2219170415774
+      },
+      {
+        "mesh_id": "b2_unseen_10",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 138.0,
+        "subprocess_wall_ms": 766.3813749095425
+      },
+      {
+        "mesh_id": "b2_unseen_11",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 101.0,
+        "subprocess_wall_ms": 721.5992080746219
+      },
+      {
+        "mesh_id": "b2_unseen_12",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 158.0,
+        "subprocess_wall_ms": 806.7458749283105
+      },
+      {
+        "mesh_id": "b2_unseen_13",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 139.0,
+        "subprocess_wall_ms": 765.3497499413788
+      },
+      {
+        "mesh_id": "b2_unseen_14",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 104.0,
+        "subprocess_wall_ms": 727.4915419984609
+      },
+      {
+        "mesh_id": "b2_unseen_15",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 159.0,
+        "subprocess_wall_ms": 785.5533340480179
+      },
+      {
+        "mesh_id": "b2_unseen_16",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 137.0,
+        "subprocess_wall_ms": 759.4283750513569
+      },
+      {
+        "mesh_id": "b2_unseen_17",
+        "size_band": "Band2_26to60",
+        "certified": false,
+        "original_mesh_iou": 0.6350931677018633,
+        "internal_voxel_iou": 0.4918032786885246,
+        "voxelization_iou_loss": 0.197972972972973,
+        "chamfer_l2_ldu": 8.231329699140858,
+        "hausdorff95_ldu": 18.285615114962454,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.4792176039119804,
+        "wall_ms": 110.0,
+        "subprocess_wall_ms": 756.2187080038711
+      },
+      {
+        "mesh_id": "b2_unseen_18",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.5811081441922563,
+        "internal_voxel_iou": 0.5027932960893855,
+        "voxelization_iou_loss": 0.21040408732001858,
+        "chamfer_l2_ldu": 8.814887090255597,
+        "hausdorff95_ldu": 18.228816159722673,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.6042504307869041,
+        "wall_ms": 172.0,
+        "subprocess_wall_ms": 844.0859169932082
+      },
+      {
+        "mesh_id": "b2_unseen_19",
+        "size_band": "Band2_26to60",
+        "certified": true,
+        "original_mesh_iou": 0.6055133079847909,
+        "internal_voxel_iou": 0.5893854748603352,
+        "voxelization_iou_loss": 0.2987062404870624,
+        "chamfer_l2_ldu": 11.16125549150754,
+        "hausdorff95_ldu": 23.030728534382273,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.44583987441130296,
+        "wall_ms": 139.0,
+        "subprocess_wall_ms": 787.1951250126585
+      },
+      {
+        "mesh_id": "b3_unseen_00",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 353.0,
+        "subprocess_wall_ms": 972.398417070508
+      },
+      {
+        "mesh_id": "b3_unseen_01",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 816.2657499779016
+      },
+      {
+        "mesh_id": "b3_unseen_02",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 351.0,
+        "subprocess_wall_ms": 972.6005418924615
+      },
+      {
+        "mesh_id": "b3_unseen_03",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 816.5140419732779
+      },
+      {
+        "mesh_id": "b3_unseen_04",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 353.0,
+        "subprocess_wall_ms": 984.0020419796929
+      },
+      {
+        "mesh_id": "b3_unseen_05",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 830.8646660298109
+      },
+      {
+        "mesh_id": "b3_unseen_06",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 352.0,
+        "subprocess_wall_ms": 983.8690829928964
+      },
+      {
+        "mesh_id": "b3_unseen_07",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 197.0,
+        "subprocess_wall_ms": 826.3896250864491
+      },
+      {
+        "mesh_id": "b3_unseen_08",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 352.0,
+        "subprocess_wall_ms": 974.6534579899162
+      },
+      {
+        "mesh_id": "b3_unseen_09",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 816.4751670556143
+      },
+      {
+        "mesh_id": "b3_unseen_10",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 352.0,
+        "subprocess_wall_ms": 969.2573330830783
+      },
+      {
+        "mesh_id": "b3_unseen_11",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 825.2411249559373
+      },
+      {
+        "mesh_id": "b3_unseen_12",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 352.0,
+        "subprocess_wall_ms": 969.3540420848876
+      },
+      {
+        "mesh_id": "b3_unseen_13",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 815.032416023314
+      },
+      {
+        "mesh_id": "b3_unseen_14",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 352.0,
+        "subprocess_wall_ms": 973.4134169993922
+      },
+      {
+        "mesh_id": "b3_unseen_15",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 197.0,
+        "subprocess_wall_ms": 825.3682079957798
+      },
+      {
+        "mesh_id": "b3_unseen_16",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 353.0,
+        "subprocess_wall_ms": 976.4286249410361
+      },
+      {
+        "mesh_id": "b3_unseen_17",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 197.0,
+        "subprocess_wall_ms": 819.4658339489251
+      },
+      {
+        "mesh_id": "b3_unseen_18",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6268973891924712,
+        "internal_voxel_iou": 0.6158113730929264,
+        "voxelization_iou_loss": 0.14267886855241263,
+        "chamfer_l2_ldu": 10.743082135522291,
+        "hausdorff95_ldu": 20.4102296943973,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.44455205811138016,
+        "wall_ms": 353.0,
+        "subprocess_wall_ms": 974.0226250141859
+      },
+      {
+        "mesh_id": "b3_unseen_19",
+        "size_band": "Band3_61to120",
+        "certified": true,
+        "original_mesh_iou": 0.6888238573021181,
+        "internal_voxel_iou": 0.685823754789272,
+        "voxelization_iou_loss": 0.24599871959026887,
+        "chamfer_l2_ldu": 12.548738399944547,
+        "hausdorff95_ldu": 30.09898994594001,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.29293951041877403,
+        "wall_ms": 196.0,
+        "subprocess_wall_ms": 818.1794169358909
+      },
+      {
+        "mesh_id": "b4_unseen_00",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 636.0,
+        "subprocess_wall_ms": 1258.4462499944493
+      },
+      {
+        "mesh_id": "b4_unseen_01",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 903.0,
+        "subprocess_wall_ms": 1524.9911660794169
+      },
+      {
+        "mesh_id": "b4_unseen_02",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 633.0,
+        "subprocess_wall_ms": 1251.6111669829115
+      },
+      {
+        "mesh_id": "b4_unseen_03",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 907.0,
+        "subprocess_wall_ms": 1527.8798330109566
+      },
+      {
+        "mesh_id": "b4_unseen_04",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 634.0,
+        "subprocess_wall_ms": 1260.7374580111355
+      },
+      {
+        "mesh_id": "b4_unseen_05",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 906.0,
+        "subprocess_wall_ms": 1527.99325005617
+      },
+      {
+        "mesh_id": "b4_unseen_06",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 635.0,
+        "subprocess_wall_ms": 1259.6467919647694
+      },
+      {
+        "mesh_id": "b4_unseen_07",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 906.0,
+        "subprocess_wall_ms": 1532.5874160043895
+      },
+      {
+        "mesh_id": "b4_unseen_08",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 637.0,
+        "subprocess_wall_ms": 1263.657416915521
+      },
+      {
+        "mesh_id": "b4_unseen_09",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 906.0,
+        "subprocess_wall_ms": 1529.731124988757
+      },
+      {
+        "mesh_id": "b4_unseen_10",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 634.0,
+        "subprocess_wall_ms": 1253.109708079137
+      },
+      {
+        "mesh_id": "b4_unseen_11",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 906.0,
+        "subprocess_wall_ms": 1539.5597500028089
+      },
+      {
+        "mesh_id": "b4_unseen_12",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 632.0,
+        "subprocess_wall_ms": 1254.5910829212517
+      },
+      {
+        "mesh_id": "b4_unseen_13",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 907.0,
+        "subprocess_wall_ms": 1531.2602499034256
+      },
+      {
+        "mesh_id": "b4_unseen_14",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 635.0,
+        "subprocess_wall_ms": 1260.4127919767052
+      },
+      {
+        "mesh_id": "b4_unseen_15",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 908.0,
+        "subprocess_wall_ms": 1533.6705829249695
+      },
+      {
+        "mesh_id": "b4_unseen_16",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 636.0,
+        "subprocess_wall_ms": 1258.2148329820484
+      },
+      {
+        "mesh_id": "b4_unseen_17",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 909.0,
+        "subprocess_wall_ms": 1550.1999999396503
+      },
+      {
+        "mesh_id": "b4_unseen_18",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.6791315713040953,
+        "internal_voxel_iou": 0.6432584269662921,
+        "voxelization_iou_loss": 0.054193679092382485,
+        "chamfer_l2_ldu": 14.041315855196569,
+        "hausdorff95_ldu": 29.110382121660294,
+        "required_opening_clear": false,
+        "external_support_volume_ratio": 0.425531914893617,
+        "wall_ms": 633.0,
+        "subprocess_wall_ms": 1252.4515410186723
+      },
+      {
+        "mesh_id": "b4_unseen_19",
+        "size_band": "Band4_121to250",
+        "certified": true,
+        "original_mesh_iou": 0.7366004026170105,
+        "internal_voxel_iou": 0.7419156144133046,
+        "voxelization_iou_loss": 0.21311763671531558,
+        "chamfer_l2_ldu": 19.59901510871527,
+        "hausdorff95_ldu": 49.30881688274192,
+        "required_opening_clear": true,
+        "external_support_volume_ratio": 0.2548466991203348,
+        "wall_ms": 906.0,
+        "subprocess_wall_ms": 1524.9419999308884
+      }
+    ]
+  },
+  "gate5_bricklayer": {
+    "sa_sdk": [
+      {
+        "native_valid": false,
+        "sdk_ms": 163.7838330352679
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 2.076250035315752
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.3230000622570515
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.8434159681200981
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6494580302387476
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.5374160138890147
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.8836250053718686
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.1030409950762987
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6827500183135271
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.767374993301928
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.0834590066224337
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.135458005592227
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9141250047832727
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.8350000716745853
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6425840547308326
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9940419113263488
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.1062079574912786
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9969170205295086
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7029169937595725
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.773457926698029
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9096249705180526
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9754999773576856
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9180420311167836
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.8339579217135906
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6365419831126928
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.0598329827189445
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.04674999602139
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.0055830935016274
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6989160319790244
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7658330723643303
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.661000027321279
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.0708330664783716
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9156250162050128
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.8442910620942712
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.644249957986176
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.125458045862615
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.897665973752737
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9977079462260008
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7032080320641398
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7573749171569943
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9196249302476645
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.1568749323487282
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9185840608552098
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.847332994453609
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.650790985673666
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9955840650945902
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 1.0342500172555447
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.9949579834938049
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7065830286592245
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7680000271648169
+      }
+    ],
+    "ka_sdk": [
+      {
+        "native_valid": true,
+        "sdk_ms": 161.02583310566843
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 4.248333047144115
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.5135840037837625
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.4404160426929593
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 2.047915942966938
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.789166078902781
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.4985419800505042
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.33599999733269215
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.26700005400925875
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3263329854235053
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.7561249658465385
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 2.7490000938996673
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2925409935414791
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.32041699159890413
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2880000974982977
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.6011659279465675
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3580839838832617
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3342078998684883
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2621659077703953
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3305409336462617
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.49512495752424
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3326250007376075
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2928749890998006
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.31183299142867327
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2763330703601241
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.6409159395843744
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.4184579011052847
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3334169741719961
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.26370794512331486
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.32424996607005596
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.4749160725623369
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.40320900734514
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2877080114558339
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3122079651802778
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.2821669913828373
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.6188750267028809
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.29387499671429396
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3284580307081342
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.26320805773139
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.3260000376030803
+      },
+      {
+        "native_valid": false,
+        "sdk_ms": 0.524875009432435
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.46491704415529966
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.28820906300097704
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.31116604804992676
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.280959066003561
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.5948330508545041
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.358042074367404
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.33354107290506363
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.262749963440001
+      },
+      {
+        "native_valid": true,
+        "sdk_ms": 0.32916595228016376
+      }
+    ]
+  }
+}

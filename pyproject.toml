@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "topo-chess"
-version = "5.0.0"
-description = "Geometric Move-Potential Representations, Local-Frame Invariant Point Attention, and Action-Only D3PM Discrete Diffusion for Searchless Chess"
+name = "topographical-tensors"
+version = "5.1.0"
+description = "Topographical Tensor Representations, Local-Frame Invariant Point Attention, Discrete Diffusion, and Certified 3D Digital Brick Assembly (topo_chess & topo_brick)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -16,6 +16,8 @@ dependencies = [
     "torch>=2.4.0",
     "numpy>=1.26.0",
     "scipy>=1.12.0",
+    "highspy>=1.7.0",
+    "transformers>=4.40.0",
     "chess>=1.10.0",
     "pyyaml>=6.0.1",
     "zstandard>=0.22.0",
@@ -27,10 +29,20 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.4.0",
+    "build>=1.2.0",
+]
+compiler = [
+    "coacd>=1.0.14",
+    "pyarrow>=15.0.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"topo_brick.interface" = ["*.json", "*.json.gz", "*.npz"]
+"topo_brick.kernel" = ["*.json", "*.json.gz"]
+"topo_brick.evaluation" = ["*.json", "*.json.gz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

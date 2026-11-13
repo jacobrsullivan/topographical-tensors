@@ -1,0 +1,24 @@
+{
+  "catalog_gz_sha256": "6cedd7f83b0d1a2ecf3ed84aab7bca139dfedc66f3cf8d00241496227d73407c",
+  "coacd_decomposed_parts": 6828,
+  "coacd_npz_sha256": "207bce9ddc81a35662cc92e859e33c872140c37f104786d87c48798e8b7db888",
+  "coacd_unique_shells": 320,
+  "compile_wall_seconds": 238.795,
+  "connector_license_shadow": "CC-BY-SA-4.0 (LDCad Shadow Library LICENSE.md)",
+  "excluded_counts": {
+    "empty_geometry_or_no_ports": 777,
+    "internal_subpart_helper": 1987,
+    "obsolete_or_moved": 2563,
+    "sticker_or_non_system_scale": 3586
+  },
+  "geometry_license": "CC-BY-4.0 (LDraw Official Library CAreadme.txt)",
+  "ldraw_release": "2610",
+  "schema_version": "1.0.0",
+  "shadow_source": "RolandMelkert/LDCadShadowLibrary@9b1131fb1991f8c0bfc072325e4e12f6271aba35",
+  "tier_counts": {
+    "TIER_B_BASE_MOLD_SHADOW": 49,
+    "TIER_B_LDCAD_SHADOW_DAG": 15105,
+    "TIER_C_LDRAW_PRIMITIVE_GEOMETRIC": 918
+  },
+  "total_compiled_parts": 16072
+}

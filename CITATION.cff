@@ -1,17 +1,19 @@
 cff-version: 1.2.0
-message: "If you use this software or manuscript in your research, please cite it as below."
-title: "Geometric Move-Potential Representations and Action-Only Discrete Diffusion for Searchless Chess"
-version: 5.0.0
-date-released: 2026-11-07
+message: "If you use this software, catalog pipeline, or manuscripts in your research, please cite it as below."
+title: "Topographical Tensors: Geometric Move-Potential Chess and Certified 3D Digital Brick Assembly"
+version: 5.1.0
+date-released: 2026-11-13
 license: MIT
 repository-code: "https://github.com/jacobrsullivan/topographical-tensors"
 authors:
   - family-names: Sullivan
     given-names: Jacob
 keywords:
+  - certified 3D brick assembly
+  - LEGO legolization
+  - static equilibrium verification
   - searchless chess
   - geometric deep learning
   - invariant point attention
   - discrete diffusion
   - D3PM
-  - move-potential fields

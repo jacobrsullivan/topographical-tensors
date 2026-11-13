@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify hardware, PyTorch MPS/CUDA backend, Stockfish binary, and data staging directories."""
+"""Verify hardware, PyTorch backend, Stockfish UCI engine, HiGHS/Transformers, and topo_brick catalog."""
 
 from __future__ import annotations
 
@@ -15,18 +15,34 @@ def main() -> int:
     print("=" * 72)
     print("Topographical Tensors — Host & Environment Diagnostics")
     print("=" * 72)
-    print(f"Hostname:       {platform.node()}")
     print(f"Platform:       {platform.platform()} ({platform.machine()})")
-    print(f"Python:         {sys.version.split()[0]} ({sys.executable})")
+    print(f"Python:         {sys.version.split()[0]}")
 
     try:
         import torch
 
         mps_avail = torch.backends.mps.is_available()
-        mps_built = torch.backends.mps.is_built()
-        print(f"PyTorch:        {torch.__version__} (MPS built={mps_built}, available={mps_avail})")
+        cuda_avail = torch.cuda.is_available()
+        print(f"PyTorch:        {torch.__version__} (CUDA={cuda_avail}, MPS={mps_avail})")
     except ImportError:
         print("PyTorch:        NOT INSTALLED")
+
+    for pkg_name in ("highspy", "transformers", "scipy", "chess"):
+        try:
+            mod = __import__(pkg_name)
+            ver = getattr(mod, "__version__", "installed")
+            print(f"{pkg_name + ':':16s}{ver}")
+        except ImportError:
+            print(f"{pkg_name + ':':16s}NOT INSTALLED")
+
+    try:
+        from topo_brick import COMBINED_BRICK_CATALOG, compute_catalog_sha256
+
+        n_compiled = len(COMBINED_BRICK_CATALOG)
+        cat_sha = compute_catalog_sha256()[:16]
+        print(f"topo_brick:     OK ({n_compiled:,} unified parts, catalog_sha256={cat_sha}...)")
+    except Exception as exc:
+        print(f"topo_brick:     ERROR ({exc})")
 
     sf_path = os.environ.get("STOCKFISH_PATH") or shutil.which("stockfish") or "/opt/homebrew/bin/stockfish"
     if Path(sf_path).is_file():

@@ -2,13 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, public-release]
   pull_request:
-    branches: [main]
+    branches: [main, public-release]
 
 jobs:
   test-and-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -35,10 +36,24 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          ruff check src/ tests/
+          ruff check src/ tests/ scripts/
 
-      - name: Run unit test suite
+      - name: Verify non-editable wheel build & bundled data assets
+        run: |
+          python -m build --wheel --outdir dist/
+          python -c "import zipfile; z = zipfile.ZipFile(next(__import__('pathlib').Path('dist').glob('*.whl'))); assert any('compiled_ldraw_catalog.json.gz' in n for n in z.namelist()); assert any('compiled_mold_retrieval_index.npz' in n for n in z.namelist())"
+
+      - name: Run topo_chess unit & compliance test suite
         env:
           STOCKFISH_PATH: /usr/games/stockfish
         run: |
           pytest -v tests/test_gate1_encoding_and_hygiene.py tests/test_gate2_ipa_equivariance.py tests/test_gate3_d3pm_legality.py tests/test_phase_d_audit_compliance.py tests/test_phase_e_round2_compliance.py
+
+      - name: Run topo_brick core kernel, catalog, verifier & quickstart CI gate
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          pytest -v tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_wp_l2_fields.py tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py tests/test_topo_brick/test_wp_l4_l5_diffusion_and_benchmarks.py tests/test_topo_brick/test_revised_construction_kernel.py
+          python scripts/run_topo_brick_quickstart.py

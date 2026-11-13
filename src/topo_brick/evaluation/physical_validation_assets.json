@@ -1,0 +1,1167 @@
+{
+  "provenance": {
+    "stable_lego_repo": "https://github.com/intelligent-control-lab/StableLego",
+    "stable_lego_license": "MIT",
+    "bricksim_repo": "https://github.com/intelligent-control-lab/BrickSim",
+    "bricksim_license": "MIT"
+  },
+  "config": {
+    "Lego_fname": "./test_lego/external_weight_good.json",
+    "Brick_Library_fname": "./lego_library.json",
+    "g": 9.8,
+    "T": 100,
+    "Brick_Unit_Height": 0.0096,
+    "Brick_Unit_Length": 0.0078,
+    "Visualize_Analysis": 0,
+    "Print_Log": 0,
+    "World_Dimension": [
+      64,
+      64,
+      64
+    ],
+    "Alpha": 0.001,
+    "Beta": 1e-06
+  },
+  "lego_library": {
+    "1": {
+      "height": 2,
+      "width": 2,
+      "mass": 0.2
+    },
+    "2": {
+      "height": 2,
+      "width": 4,
+      "mass": 0.00216
+    },
+    "3": {
+      "height": 2,
+      "width": 6,
+      "mass": 0.00323
+    },
+    "4": {
+      "height": 1,
+      "width": 8,
+      "mass": 0.00303
+    },
+    "5": {
+      "height": 1,
+      "width": 4,
+      "mass": 0.00157
+    },
+    "6": {
+      "height": 1,
+      "width": 6,
+      "mass": 0.00228
+    },
+    "9": {
+      "height": 1,
+      "width": 2,
+      "mass": 0.00081
+    },
+    "10": {
+      "height": 1,
+      "width": 1,
+      "inventory": 100000,
+      "mass": 0.00043
+    },
+    "12": {
+      "height": 2,
+      "width": 2,
+      "mass": 0.00115
+    }
+  },
+  "stable_lego_physical_cases": {
+    "external_weight_good": {
+      "expected_physically_stable": true,
+      "sha256": "4fdb4b01129762d9472bfd18c4c95821fb036a483c21df3df7d6619a39555796",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "2": {
+          "y": 21,
+          "x": 2,
+          "z": 1,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "3": {
+          "y": 21,
+          "x": 4,
+          "z": 2,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "4": {
+          "y": 21,
+          "x": 5,
+          "z": 3,
+          "brick_id": 1,
+          "ori": 1
+        }
+      }
+    },
+    "external_weight_fail": {
+      "expected_physically_stable": false,
+      "sha256": "0c02324716e8fa6d711d1347baf687c5d1096058862e228baf5860e5df58c09b",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "2": {
+          "y": 21,
+          "x": 2,
+          "z": 1,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "3": {
+          "y": 21,
+          "x": 4,
+          "z": 2,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "5": {
+          "y": 21,
+          "x": 6,
+          "z": 3,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "4": {
+          "y": 21,
+          "x": 7,
+          "z": 4,
+          "brick_id": 1,
+          "ori": 1
+        }
+      }
+    },
+    "stair_19": {
+      "expected_physically_stable": true,
+      "sha256": "eb7d5b7cda327f44636972cfb2291ed80a842a019585891bf7a6cdc8374b2fa1",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "2": {
+          "y": 21,
+          "x": 2,
+          "z": 1,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "3": {
+          "y": 21,
+          "x": 4,
+          "z": 2,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "4": {
+          "y": 21,
+          "x": 6,
+          "z": 3,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "5": {
+          "y": 21,
+          "x": 8,
+          "z": 4,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "6": {
+          "y": 21,
+          "x": 10,
+          "z": 5,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "7": {
+          "y": 21,
+          "x": 12,
+          "z": 6,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "8": {
+          "y": 21,
+          "x": 14,
+          "z": 7,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "9": {
+          "y": 21,
+          "x": 16,
+          "z": 8,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "10": {
+          "y": 21,
+          "x": 18,
+          "z": 9,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "11": {
+          "y": 21,
+          "x": 20,
+          "z": 10,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "12": {
+          "y": 21,
+          "x": 22,
+          "z": 11,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "13": {
+          "y": 21,
+          "x": 24,
+          "z": 12,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "14": {
+          "y": 21,
+          "x": 26,
+          "z": 13,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "15": {
+          "y": 21,
+          "x": 28,
+          "z": 14,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "16": {
+          "y": 21,
+          "x": 30,
+          "z": 15,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "17": {
+          "y": 21,
+          "x": 32,
+          "z": 16,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "18": {
+          "y": 21,
+          "x": 34,
+          "z": 17,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "19": {
+          "y": 21,
+          "x": 36,
+          "z": 18,
+          "brick_id": 2,
+          "ori": 1
+        }
+      }
+    },
+    "stair_20": {
+      "expected_physically_stable": false,
+      "sha256": "506b03b0a2666a352b3d0970efa6544164c2a4a363075a30bdee83fd531a184f",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "2": {
+          "y": 21,
+          "x": 2,
+          "z": 1,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "3": {
+          "y": 21,
+          "x": 4,
+          "z": 2,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "4": {
+          "y": 21,
+          "x": 6,
+          "z": 3,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "5": {
+          "y": 21,
+          "x": 8,
+          "z": 4,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "6": {
+          "y": 21,
+          "x": 10,
+          "z": 5,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "7": {
+          "y": 21,
+          "x": 12,
+          "z": 6,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "8": {
+          "y": 21,
+          "x": 14,
+          "z": 7,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "9": {
+          "y": 21,
+          "x": 16,
+          "z": 8,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "10": {
+          "y": 21,
+          "x": 18,
+          "z": 9,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "11": {
+          "y": 21,
+          "x": 20,
+          "z": 10,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "12": {
+          "y": 21,
+          "x": 22,
+          "z": 11,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "13": {
+          "y": 21,
+          "x": 24,
+          "z": 12,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "14": {
+          "y": 21,
+          "x": 26,
+          "z": 13,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "15": {
+          "y": 21,
+          "x": 28,
+          "z": 14,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "16": {
+          "y": 21,
+          "x": 30,
+          "z": 15,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "17": {
+          "y": 21,
+          "x": 32,
+          "z": 16,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "18": {
+          "y": 21,
+          "x": 34,
+          "z": 17,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "19": {
+          "y": 21,
+          "x": 36,
+          "z": 18,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "20": {
+          "y": 21,
+          "x": 38,
+          "z": 19,
+          "brick_id": 2,
+          "ori": 1
+        }
+      }
+    },
+    "stair_20_good": {
+      "expected_physically_stable": true,
+      "sha256": "de64ffefa3fae043830d94494d79a7bb6719ccee88e61ffa5b398ff5cb7d8aab",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "2": {
+          "y": 21,
+          "x": 2,
+          "z": 1,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "3": {
+          "y": 21,
+          "x": 4,
+          "z": 2,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "4": {
+          "y": 21,
+          "x": 6,
+          "z": 3,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "5": {
+          "y": 21,
+          "x": 8,
+          "z": 4,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "6": {
+          "y": 21,
+          "x": 10,
+          "z": 5,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "7": {
+          "y": 21,
+          "x": 12,
+          "z": 6,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "8": {
+          "y": 21,
+          "x": 14,
+          "z": 7,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "9": {
+          "y": 21,
+          "x": 16,
+          "z": 8,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "10": {
+          "y": 21,
+          "x": 18,
+          "z": 9,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "11": {
+          "y": 21,
+          "x": 20,
+          "z": 10,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "12": {
+          "y": 21,
+          "x": 22,
+          "z": 11,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "13": {
+          "y": 21,
+          "x": 24,
+          "z": 12,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "14": {
+          "y": 21,
+          "x": 26,
+          "z": 13,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "15": {
+          "y": 21,
+          "x": 28,
+          "z": 14,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "16": {
+          "y": 21,
+          "x": 30,
+          "z": 15,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "17": {
+          "y": 21,
+          "x": 32,
+          "z": 16,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "18": {
+          "y": 21,
+          "x": 34,
+          "z": 17,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "19": {
+          "y": 21,
+          "x": 36,
+          "z": 18,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "20": {
+          "y": 21,
+          "x": 38,
+          "z": 19,
+          "brick_id": 2,
+          "ori": 1
+        },
+        "21": {
+          "y": 21,
+          "x": 4,
+          "z": 0,
+          "brick_id": 9,
+          "ori": 0
+        }
+      }
+    },
+    "stick_light": {
+      "expected_physically_stable": true,
+      "sha256": "57ebeeab8c0772d74cd2dced62c53be30a62f85625e7069ffcbcd073c0393632",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "2": {
+          "y": 21,
+          "x": 6,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "13": {
+          "y": 21,
+          "x": 8,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "3": {
+          "y": 21,
+          "x": 10,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "4": {
+          "y": 21,
+          "x": 16,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "5": {
+          "y": 21,
+          "x": 22,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "6": {
+          "y": 21,
+          "x": 26,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "7": {
+          "y": 21,
+          "x": 30,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "8": {
+          "y": 21,
+          "x": 34,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "9": {
+          "y": 21,
+          "x": 38,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "10": {
+          "y": 21,
+          "x": 42,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "11": {
+          "y": 21,
+          "x": 44,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "12": {
+          "y": 21,
+          "x": 44,
+          "z": 4,
+          "ori": 1,
+          "brick_id": 5
+        }
+      }
+    },
+    "stick_heavy": {
+      "expected_physically_stable": false,
+      "sha256": "bb1214f8951e4630016711bbd52fa6ee48111d2df2eeef9e24472a67ccc45ccb",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "2": {
+          "y": 21,
+          "x": 6,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "13": {
+          "y": 21,
+          "x": 8,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "3": {
+          "y": 21,
+          "x": 10,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "4": {
+          "y": 21,
+          "x": 16,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "5": {
+          "y": 21,
+          "x": 22,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "6": {
+          "y": 21,
+          "x": 26,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "7": {
+          "y": 21,
+          "x": 30,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "8": {
+          "y": 21,
+          "x": 34,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "9": {
+          "y": 21,
+          "x": 38,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "10": {
+          "y": 21,
+          "x": 42,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "11": {
+          "y": 21,
+          "x": 44,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "12": {
+          "y": 21,
+          "x": 44,
+          "z": 4,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "14": {
+          "y": 21,
+          "x": 44,
+          "z": 5,
+          "ori": 1,
+          "brick_id": 5
+        }
+      }
+    },
+    "stick_heavy_good": {
+      "expected_physically_stable": true,
+      "sha256": "1b529bf92d0c617d9b244fe2071532e6559d4d78e02567daeb6b040f97c9e1b8",
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "2": {
+          "y": 21,
+          "x": 6,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "13": {
+          "y": 21,
+          "x": 8,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "3": {
+          "y": 21,
+          "x": 10,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "4": {
+          "y": 21,
+          "x": 16,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "5": {
+          "y": 21,
+          "x": 22,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "6": {
+          "y": 21,
+          "x": 26,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "7": {
+          "y": 21,
+          "x": 30,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "8": {
+          "y": 21,
+          "x": 34,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "9": {
+          "y": 21,
+          "x": 38,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "10": {
+          "y": 21,
+          "x": 42,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "11": {
+          "y": 21,
+          "x": 44,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "12": {
+          "y": 21,
+          "x": 44,
+          "z": 4,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "14": {
+          "y": 21,
+          "x": 44,
+          "z": 5,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "15": {
+          "y": 21,
+          "x": 8,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 9
+        }
+      }
+    }
+  },
+  "bricksim_demo_topology": {
+    "sha256": "775597965f65d43044580b9b034acd3d711e1a912f68e02ee163727c3cbc3a2e",
+    "topology": {
+      "schema": "bricksim/lego_topology@2",
+      "parts": [
+        {
+          "id": 0,
+          "type": "brick",
+          "payload": {
+            "L": 20,
+            "W": 20,
+            "H": 1,
+            "color": [
+              155,
+              161,
+              157
+            ]
+          }
+        },
+        {
+          "id": 1,
+          "type": "brick",
+          "payload": {
+            "L": 2,
+            "W": 4,
+            "H": 3,
+            "color": [
+              201,
+              26,
+              9
+            ]
+          }
+        },
+        {
+          "id": 2,
+          "type": "brick",
+          "payload": {
+            "L": 2,
+            "W": 4,
+            "H": 3,
+            "color": [
+              0,
+              85,
+              191
+            ]
+          }
+        },
+        {
+          "id": 3,
+          "type": "brick",
+          "payload": {
+            "L": 2,
+            "W": 6,
+            "H": 3,
+            "color": [
+              252,
+              151,
+              172
+            ]
+          }
+        },
+        {
+          "id": 4,
+          "type": "brick",
+          "payload": {
+            "L": 2,
+            "W": 2,
+            "H": 3,
+            "color": [
+              35,
+              120,
+              65
+            ]
+          }
+        }
+      ],
+      "connections": [
+        {
+          "id": 0,
+          "stud_id": 1,
+          "stud_iface": 1,
+          "hole_id": 2,
+          "hole_iface": 0,
+          "offset": [
+            0,
+            2
+          ],
+          "yaw": 0
+        },
+        {
+          "id": 1,
+          "stud_id": 0,
+          "stud_iface": 1,
+          "hole_id": 1,
+          "hole_iface": 0,
+          "offset": [
+            9,
+            8
+          ],
+          "yaw": 1
+        },
+        {
+          "id": 2,
+          "stud_id": 2,
+          "stud_iface": 1,
+          "hole_id": 3,
+          "hole_iface": 0,
+          "offset": [
+            0,
+            0
+          ],
+          "yaw": 0
+        },
+        {
+          "id": 3,
+          "stud_id": 3,
+          "stud_iface": 1,
+          "hole_id": 4,
+          "hole_iface": 0,
+          "offset": [
+            1,
+            0
+          ],
+          "yaw": 0
+        }
+      ],
+      "pose_hints": [
+        {
+          "part": 0,
+          "pos": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rot": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    }
+  },
+  "stable_lego_solver_fixtures": {
+    "stick_heavy_good_test_horizontal_force": {
+      "git_blob_sha1": "e5c1175606c447e10600f80a89f04b3d99374a82",
+      "sha256": "2cef0c2ae50244c4a11874355bad229df3c139b0d4aa050b12998e3eb280aa9d",
+      "num_bricks": 16,
+      "label_source": "upstream_stablelego_solver_fixture_adjacent_brick_horizontal_press",
+      "is_confirmed_hardware_experiment": false,
+      "bricks": {
+        "1": {
+          "y": 21,
+          "x": 0,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "2": {
+          "y": 21,
+          "x": 6,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "3": {
+          "y": 21,
+          "x": 8,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "4": {
+          "y": 21,
+          "x": 12,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "5": {
+          "y": 21,
+          "x": 16,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "6": {
+          "y": 21,
+          "x": 20,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "7": {
+          "y": 21,
+          "x": 24,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "8": {
+          "y": 21,
+          "x": 28,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "9": {
+          "y": 21,
+          "x": 34,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "10": {
+          "y": 21,
+          "x": 40,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 4
+        },
+        "11": {
+          "y": 21,
+          "x": 42,
+          "z": 2,
+          "ori": 1,
+          "brick_id": 6
+        },
+        "12": {
+          "y": 21,
+          "x": 44,
+          "z": 3,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "13": {
+          "y": 21,
+          "x": 44,
+          "z": 4,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "14": {
+          "y": 21,
+          "x": 8,
+          "z": 0,
+          "ori": 1,
+          "brick_id": 9
+        },
+        "15": {
+          "y": 21,
+          "x": 44,
+          "z": 5,
+          "ori": 1,
+          "brick_id": 5
+        },
+        "16": {
+          "y": 21,
+          "x": 10,
+          "z": 1,
+          "ori": 1,
+          "brick_id": 9
+        }
+      }
+    }
+  }
+}

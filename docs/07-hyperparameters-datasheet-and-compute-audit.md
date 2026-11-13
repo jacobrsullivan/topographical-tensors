@@ -74,7 +74,7 @@
 
 ## 4. Risk R4 Dual-Benchmark Editorial Report: CPU Alpha-Beta NNUE vs. GPU/MPS Topographical-D3PM
 
-In accordance with **Stage-Gate 5 (`SG5-B`)** and **Risk R4** ([`implementation-plan-v1.0.md`](../reference-docs/markdown/implementation-plan-v1.0.md#L199-L203)), we explicitly report **both** raw CPU alpha-beta search throughput and FLOPS-normalized GPU/MPS neural trajectory efficiency so reviewers do not conflate sequential CPU tree search with single-pass generative horizon planning:
+In accordance with **Stage-Gate 5 (`SG5-B`)** and **Risk R4** (see [`12-expert-review-synopsis.md`](12-expert-review-synopsis.md)), we explicitly report **both** raw CPU alpha-beta search throughput and FLOPS-normalized GPU/MPS neural trajectory efficiency so reviewers do not conflate sequential CPU tree search with single-pass generative horizon planning:
 
 | Benchmark Dimension | Classical CPU Engine (`Stockfish 16/19 NNUE`) | Autoregressive Neural Transformer (`Config_B / CF-6M` & `Config_C` Beam) | Proposed Topographical-IPA + D3PM (`Config_D`) |
 | :--- | :--- | :--- | :--- |
