@@ -45,6 +45,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -150,10 +151,11 @@ class SingleCoreAuditReport:
     cpu_to_wall_ratio: float
     peak_rss_mb: float
     strictly_single_core_verified: bool
+    pre_existing_env_pinned: bool = False
 
 
 def enforce_and_audit_single_core() -> SingleCoreAuditReport:
-    """Pin BLAS/OpenMP/Accelerate/PyTorch/HiGHS to 1 thread and verify CPU-to-wall <= 1.08."""
+    """Inspect pre-existing thread env vars, pin BLAS/OpenMP/PyTorch/HiGHS to 1 thread, and verify CPU-to-wall <= 1.08."""
     thread_vars = (
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
@@ -161,6 +163,7 @@ def enforce_and_audit_single_core() -> SingleCoreAuditReport:
         "VECLIB_MAXIMUM_THREADS",
         "NUMEXPR_NUM_THREADS",
     )
+    pre_pinned = all(os.environ.get(k) == "1" for k in thread_vars)
     pinned: Dict[str, str] = {}
     for k in thread_vars:
         os.environ[k] = "1"
@@ -175,9 +178,11 @@ def enforce_and_audit_single_core() -> SingleCoreAuditReport:
             LDUBox(20, 20, 72, 100, 60, 120),
         )
     )
+    # Warm-up 1 call so import/cache jitter does not distort the 5-run CPU/wall ratio
+    kernel.realize(tf, allowed_part_ids=EXTENDED_10PART_RECT_KIT, kit_name="EXTENDED_10PART_RECT_KIT")
     w0 = time.perf_counter()
     c0 = time.process_time()
-    for _ in range(3):
+    for _ in range(6):
         kernel.realize(tf, allowed_part_ids=EXTENDED_10PART_RECT_KIT, kit_name="EXTENDED_10PART_RECT_KIT")
     wall_ms = (time.perf_counter() - w0) * 1000.0
     cpu_ms = (time.process_time() - c0) * 1000.0
@@ -185,7 +190,7 @@ def enforce_and_audit_single_core() -> SingleCoreAuditReport:
     ok = (
         all(v == "1" for v in pinned.values())
         and t_threads == 1
-        and ratio <= 1.12
+        and ratio <= 1.08
     )
     return SingleCoreAuditReport(
         env_threads_pinned=pinned,
@@ -196,6 +201,7 @@ def enforce_and_audit_single_core() -> SingleCoreAuditReport:
         cpu_to_wall_ratio=ratio,
         peak_rss_mb=_peak_rss_mb(),
         strictly_single_core_verified=ok,
+        pre_existing_env_pinned=pre_pinned,
     )
 
 
@@ -335,6 +341,7 @@ class Gate1EvidenceAuditReport:
     s2b_600_hosts_verified: Tuple[str, ...]
     s2b_600_cross_host_identical_outcomes: bool
     gate1_passed: bool
+    evidence_kind: str = "external_hardware_8cases_plus_synthetic_motif_holdout_plus_archived_s2b600"
 
 
 def run_gate1_evidence_and_confusion_audit() -> Gate1EvidenceAuditReport:
@@ -807,56 +814,110 @@ def _combine_meshes(parts: Sequence[Tuple[np.ndarray, np.ndarray]]) -> Tuple[np.
     return np.vstack(vs), np.vstack(fs)
 
 
+def _is_closed_edge_manifold_mesh(verts: np.ndarray, faces: np.ndarray) -> bool:
+    """Verify non-empty finite triangle mesh where every non-degenerate undirected edge has even (>=2) incident triangles."""
+    if verts.ndim != 2 or verts.shape[1] != 3 or faces.ndim != 2 or faces.shape[1] != 3:
+        return False
+    if verts.shape[0] < 4 or faces.shape[0] < 4 or not np.all(np.isfinite(verts)):
+        return False
+    # Quantize coincident vertices to check closed topological shell (ignoring zero-area sliver faces)
+    q_v = [tuple(int(round(float(c) * 1e5)) for c in row) for row in verts]
+    edge_counts: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], int] = {}
+    valid_tris = 0
+    for tri in faces:
+        p0, p1, p2 = q_v[int(tri[0])], q_v[int(tri[1])], q_v[int(tri[2])]
+        if p0 == p1 or p1 == p2 or p2 == p0:
+            continue
+        valid_tris += 1
+        for a, b in ((p0, p1), (p1, p2), (p2, p0)):
+            ek = (a, b) if a <= b else (b, a)
+            edge_counts[ek] = edge_counts.get(ek, 0) + 1
+    return valid_tris >= 4 and bool(edge_counts) and all(cnt >= 2 and cnt % 2 == 0 for cnt in edge_counts.values())
+
+
+def _canonical_mesh_geometry_sha256(
+    verts: np.ndarray,
+    faces: np.ndarray,
+) -> str:
+    """Canonical SHA-256 over rounded `(verts, faces)` alone (even stricter than including openings!)."""
+    h = hashlib.sha256()
+    h.update(np.ascontiguousarray(np.round(np.asarray(verts, dtype=np.float64), 6)).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(faces, dtype=np.int32)).tobytes())
+    return h.hexdigest()
+
+
 def load_frozen_80_unseen_mesh_corpus() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Build the frozen `n = 80` unseen continuous triangle-mesh benchmark across 4 size bands
-    (`20` meshes per band: `Band1_le25`, `Band2_26to60`, `Band3_61to120`, `Band4_121to250`),
-    with explicit `required_openings_ldu` on all portal/viaduct/aqueduct meshes and a complete
-    `selection_funnel` audit.
+    (`20` strictly unique geometries per band: `Band1_le25`, `Band2_26to60`, `Band3_61to120`,
+    `Band4_121to250`; `80 / 80` distinct SHA-256 geometry hashes, `F4` remediated), with live
+    manifold screening and disjointness verification computing `selection_funnel` from data.
     """
-    corpus: List[Dict[str, Any]] = []
+    from topo_brick import (
+        LOCKED_STABLETEXT2BRICK_MANIFEST,
+        UNTOUCHED_STABLETEXT2BRICK_21_MANIFEST,
+    )
+
+    raw_candidates: List[Dict[str, Any]] = []
     ext_meshes: List[Dict[str, Any]] = []
     if _RAW_MESH_ASSETS_PATH.exists():
         with gzip.open(_RAW_MESH_ASSETS_PATH, "rt", encoding="utf-8") as gz:
             data = json.load(gz)
         ext_meshes = list(data.get("brickanything_meshes", []))
 
-    # Band 1 (20 meshes, <= 25 bricks): 6 external BrickAnything .obj + 14 unseen sloped shrines/portals
+    # Band 1 (20 distinct closed-manifold meshes, <= 25 bricks): screen all external BrickAnything .obj
+    # assets (`e2.obj` & `e5.obj` have open boundary edges and are genuinely excluded by `_is_closed_edge_manifold_mesh`,
+    # leaving `4` closed-manifold external `.obj` meshes + `16` unique procedural shrines/portals).
+    n_ext_valid = 0
     for m in ext_meshes[:6]:
         v_raw = np.asarray(m["verts"], dtype=np.float64)[:, [0, 2, 1]]
-        corpus.append(
+        f_raw = np.asarray(m["faces"], dtype=np.int32)
+        if _is_closed_edge_manifold_mesh(v_raw, f_raw):
+            n_ext_valid += 1
+        raw_candidates.append(
             {
                 "mesh_id": f"b1_ext_{m['name']}",
                 "size_band": "Band1_le25",
                 "cohort": "external_brickanything_obj",
                 "verts": v_raw,
-                "faces": np.asarray(m["faces"], dtype=np.int32),
+                "faces": f_raw,
                 "max_xy_studs": 5,
                 "max_z_courses": 4,
                 "required_openings_ldu": (),
             }
         )
-    for i in range(20 - len(corpus)):
+    n_b1_rem = 20 - n_ext_valid
+    for i in range(n_b1_rem):
+        k = i // 2
         if i % 2 == 0:
-            # Sloped obelisk / tapered gable shrine
+            wx = 3.4 + 0.12 * k
+            wy = 2.8 + 0.17 * k
+            z1 = 1.9 + 0.09 * k
+            z2 = 3.6 + 0.11 * k
+            sh1 = 0.08 + 0.014 * k
+            sh2 = 0.17 + 0.016 * k
+            inset = 0.32 + 0.03 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 4.0, 3.0 + (i % 2), 2.2, top_shrink=0.12),
-                    _make_wedge_or_frustum_mesh(0.4, 0.4, 2.2, 3.6, 2.6 + (i % 2), 4.0, top_shrink=0.22),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, wy, z1, top_shrink=sh1),
+                    _make_wedge_or_frustum_mesh(inset, inset, z1, wx - inset, wy - inset, z2, top_shrink=sh2),
                 ]
             )
             openings: Tuple[LDUBox, ...] = ()
         else:
-            # Compact arch gate with required clear opening `[20, 60] x [0, 40] x [0, 46]`!
+            wy = 2.0 + 0.14 * k
+            z_lintel = 2.45 + 0.05 * k
+            z_crown = 3.65 + 0.09 * k
+            sh_top = 0.06 + 0.018 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 1.0, 2.0, 2.5, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(3.0, 0.0, 0.0, 4.0, 2.0, 2.5, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 2.5, 4.0, 2.0, 3.8, top_shrink=0.10),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 1.0, wy, z_lintel, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(3.0, 0.0, 0.0, 4.0, wy, z_lintel, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_lintel, 4.0, wy, z_crown, top_shrink=sh_top),
                 ]
             )
-            openings = (LDUBox(20, 0, 0, 60, 40, 46),)
-        corpus.append(
+            openings = (LDUBox(20, 0, 0, 60, 40, 44),)
+        raw_candidates.append(
             {
                 "mesh_id": f"b1_unseen_{i:02d}",
                 "size_band": "Band1_le25",
@@ -869,41 +930,64 @@ def load_frozen_80_unseen_mesh_corpus() -> Tuple[List[Dict[str, Any]], Dict[str,
             }
         )
 
-    # Band 2 (20 meshes, 26..60 bricks): portals, sloped gables, cantilevered canopies
+    # Band 2 (20 distinct meshes, 26..60 bricks): 4 distinct families x 5 unique parameterizations
     for i in range(20):
-        kind = i % 3
+        kind = i % 4
+        k = i // 4
         if kind == 0:
-            # Twin-pier portal with gabled lintel & required clear central doorway
+            wy = 2.7 + 0.18 * k
+            z_l = 3.62 + 0.06 * k
+            z_t = 5.05 + 0.13 * k
+            sh = 0.10 + 0.018 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, 3.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(4.0, 0.0, 0.0, 6.0, 3.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 3.7, 6.0, 3.0, 5.2, top_shrink=0.14),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, wy, z_l, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(4.0, 0.0, 0.0, 6.0, wy, z_l, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_l, 6.0, wy, z_t, top_shrink=sh),
                 ]
             )
-            openings = (LDUBox(40, 0, 0, 80, 60, 70),)
+            openings = (LDUBox(40, 0, 0, 80, 60, 68),)
             xy_s, z_c = 6, 5
         elif kind == 1:
-            # Stepped tapered tower with side wing
+            wx = 5.4 + 0.16 * k
+            wy = 3.6 + 0.18 * k
+            z1 = 2.2 + 0.11 * k
+            z2 = 4.65 + 0.14 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 6.0, 4.0, 2.4, top_shrink=0.08),
-                    _make_wedge_or_frustum_mesh(1.0, 0.5, 2.4, 5.0, 3.5, 5.0, top_shrink=0.18),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, wy, z1, top_shrink=0.06 + 0.012 * k),
+                    _make_wedge_or_frustum_mesh(0.85 + 0.05 * k, 0.45, z1, wx - 0.85, wy - 0.45, z2, top_shrink=0.15 + 0.018 * k),
                 ]
             )
             openings = ()
             xy_s, z_c = 6, 5
-        else:
-            # Cantilevered canopy with required clear side underpass `[40, 80]` while `[100, 120]` allows an end column!
+        elif kind == 2:
+            wy = 2.65 + 0.19 * k
+            z_l = 3.64 + 0.05 * k
+            z_t = 4.90 + 0.12 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, 3.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 3.7, 6.0, 3.0, 5.0, top_shrink=0.06),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, wy, z_l, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_l, 6.0, wy, z_t, top_shrink=0.05 + 0.014 * k),
                 ]
             )
-            openings = (LDUBox(40, 0, 0, 80, 60, 70),)
+            openings = (LDUBox(40, 0, 0, 80, 60, 68),)
             xy_s, z_c = 6, 5
-        corpus.append(
+        else:
+            wx = 5.2 + 0.18 * k
+            wy = 4.8 + 0.16 * k
+            z1 = 2.3 + 0.09 * k
+            z2 = 4.75 + 0.13 * k
+            v, f = _combine_meshes(
+                [
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, 2.4 + 0.08 * k, z1, top_shrink=0.04 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(0.0, 2.4 + 0.08 * k, 0.0, 2.5 + 0.08 * k, wy, z1, top_shrink=0.04 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(0.3, 0.3, z1, 2.8 + 0.10 * k, 2.8 + 0.10 * k, z2, top_shrink=0.14 + 0.016 * k),
+                ]
+            )
+            openings = ()
+            xy_s, z_c = 6, 5
+        raw_candidates.append(
             {
                 "mesh_id": f"b2_unseen_{i:02d}",
                 "size_band": "Band2_26to60",
@@ -916,32 +1000,69 @@ def load_frozen_80_unseen_mesh_corpus() -> Tuple[List[Dict[str, Any]], Dict[str,
             }
         )
 
-    # Band 3 (20 meshes, 61..120 bricks): multi-bay viaducts, cloisters, terraced basilicas
+    # Band 3 (20 distinct meshes, 61..120 bricks): 4 distinct families x 5 unique parameterizations
     for i in range(20):
-        if i % 2 == 0:
-            # Two-bay viaduct with two required clear archways `[40, 80]` and `[120, 160]`
+        kind = i % 4
+        k = i // 4
+        if kind == 0:
+            wy = 3.6 + 0.18 * k
+            z_a = 3.65 + 0.05 * k
+            z_t = 5.45 + 0.13 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, 4.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(4.0, 0.0, 0.0, 6.0, 4.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(8.0, 0.0, 0.0, 10.0, 4.0, 3.7, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 3.7, 10.0, 4.0, 5.6, top_shrink=0.10),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 2.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(4.0, 0.0, 0.0, 6.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(8.0, 0.0, 0.0, 10.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_a, 10.0, wy, z_t, top_shrink=0.08 + 0.016 * k),
                 ]
             )
-            openings = (LDUBox(40, 0, 0, 80, 80, 70), LDUBox(120, 0, 0, 160, 80, 70))
+            openings = (LDUBox(40, 0, 0, 80, 80, 68), LDUBox(120, 0, 0, 160, 80, 68))
             xy_s, z_c = 10, 6
-        else:
-            # L-wing terraced basilica with sloped clerestory
+        elif kind == 1:
+            wx = 8.4 + 0.18 * k
+            wy = 7.4 + 0.18 * k
+            z1 = 2.8 + 0.09 * k
+            z2 = 5.55 + 0.14 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 9.0, 4.0, 3.0, top_shrink=0.05),
-                    _make_wedge_or_frustum_mesh(0.0, 4.0, 0.0, 4.0, 8.0, 3.0, top_shrink=0.05),
-                    _make_wedge_or_frustum_mesh(1.0, 0.5, 3.0, 8.0, 3.5, 5.8, top_shrink=0.15),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, 3.8 + 0.08 * k, z1, top_shrink=0.05 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(0.0, 3.8 + 0.08 * k, 0.0, 3.8 + 0.08 * k, wy, z1, top_shrink=0.05 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(0.9, 0.5, z1, wx - 0.9, 3.4 + 0.08 * k, z2, top_shrink=0.13 + 0.016 * k),
                 ]
             )
             openings = ()
             xy_s, z_c = 9, 6
-        corpus.append(
+        elif kind == 2:
+            wx = 8.2 + 0.18 * k
+            wy = 6.8 + 0.16 * k
+            z1 = 2.6 + 0.09 * k
+            z2 = 5.35 + 0.13 * k
+            v, f = _combine_meshes(
+                [
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, 2.4, z1, top_shrink=0.04),
+                    _make_wedge_or_frustum_mesh(0.0, 2.4, 0.0, 2.4, wy, z1, top_shrink=0.04),
+                    _make_wedge_or_frustum_mesh(wx - 2.4, 2.4, 0.0, wx, wy, z1, top_shrink=0.04),
+                    _make_wedge_or_frustum_mesh(0.6, 0.3, z1, wx - 0.6, 2.2, z2, top_shrink=0.11 + 0.016 * k),
+                ]
+            )
+            openings = ()
+            xy_s, z_c = 9, 6
+        else:
+            wx = 7.8 + 0.22 * k
+            wy = 6.8 + 0.18 * k
+            z1 = 2.1 + 0.08 * k
+            z2 = 4.05 + 0.10 * k
+            z3 = 5.75 + 0.13 * k
+            v, f = _combine_meshes(
+                [
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, wy, z1, top_shrink=0.05 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(1.1, 0.9, z1, wx - 1.1, wy - 0.9, z2, top_shrink=0.09 + 0.012 * k),
+                    _make_wedge_or_frustum_mesh(2.2, 1.8, z2, wx - 2.2, wy - 1.8, z3, top_shrink=0.14 + 0.015 * k),
+                ]
+            )
+            openings = ()
+            xy_s, z_c = 9, 6
+        raw_candidates.append(
             {
                 "mesh_id": f"b3_unseen_{i:02d}",
                 "size_band": "Band3_61to120",
@@ -954,32 +1075,68 @@ def load_frozen_80_unseen_mesh_corpus() -> Tuple[List[Dict[str, Any]], Dict[str,
             }
         )
 
-    # Band 4 (20 meshes, 121..250 bricks): grand aqueducts, 3-tier ziggurats, fortress gates
+    # Band 4 (20 distinct meshes, 121..250 bricks): 4 distinct families x 5 unique parameterizations
     for i in range(20):
-        if i % 2 == 0:
-            # Grand 3-pier aqueduct (`14` studs wide, `7` courses tall) with two required waterways
+        kind = i % 4
+        k = i // 4
+        if kind == 0:
+            wy = 4.6 + 0.18 * k
+            z_a = 4.85 + 0.05 * k
+            z_t = 7.05 + 0.14 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 3.0, 5.0, 4.9, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(5.0, 0.0, 0.0, 8.0, 5.0, 4.9, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(10.0, 0.0, 0.0, 13.0, 5.0, 4.9, top_shrink=0.0),
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 4.9, 13.0, 5.0, 7.2, top_shrink=0.08),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 3.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(5.0, 0.0, 0.0, 8.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(10.0, 0.0, 0.0, 13.0, wy, z_a, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_a, 13.0, wy, z_t, top_shrink=0.07 + 0.014 * k),
                 ]
             )
-            openings = (LDUBox(60, 0, 0, 100, 100, 94), LDUBox(160, 0, 0, 200, 100, 94))
+            openings = (LDUBox(60, 0, 0, 100, 100, 92), LDUBox(160, 0, 0, 200, 100, 92))
             xy_s, z_c = 13, 7
-        else:
-            # 3-tier stepped grand ziggurat (`12 x 10` base, `8` courses tall)
+        elif kind == 1:
+            wx = 11.4 + 0.22 * k
+            wy = 8.6 + 0.20 * k
+            z1 = 2.65 + 0.08 * k
+            z2 = 5.20 + 0.11 * k
+            z3 = 7.40 + 0.15 * k
             v, f = _combine_meshes(
                 [
-                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 12.0, 9.0, 2.8, top_shrink=0.06),
-                    _make_wedge_or_frustum_mesh(1.5, 1.0, 2.8, 10.5, 8.0, 5.4, top_shrink=0.10),
-                    _make_wedge_or_frustum_mesh(3.0, 2.5, 5.4, 9.0, 6.5, 7.6, top_shrink=0.15),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, wy, z1, top_shrink=0.05 + 0.01 * k),
+                    _make_wedge_or_frustum_mesh(1.4, 1.0, z1, wx - 1.4, wy - 1.0, z2, top_shrink=0.09 + 0.012 * k),
+                    _make_wedge_or_frustum_mesh(2.8, 2.2, z2, wx - 2.8, wy - 2.2, z3, top_shrink=0.14 + 0.014 * k),
                 ]
             )
             openings = ()
             xy_s, z_c = 12, 8
-        corpus.append(
+        elif kind == 2:
+            wy = 4.7 + 0.18 * k
+            z_g = 4.86 + 0.05 * k
+            z_tw = 7.25 + 0.15 * k
+            v, f = _combine_meshes(
+                [
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, 4.0, wy, z_g, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(7.0, 0.0, 0.0, 11.0, wy, z_g, top_shrink=0.0),
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, z_g, 11.0, wy, z_tw, top_shrink=0.07 + 0.015 * k),
+                ]
+            )
+            openings = (LDUBox(80, 0, 0, 140, 100, 92),)
+            xy_s, z_c = 11, 7
+        else:
+            wx = 11.2 + 0.22 * k
+            wy = 8.4 + 0.18 * k
+            z_ai = 2.85 + 0.08 * k
+            z_nv = 5.55 + 0.12 * k
+            z_sp = 7.45 + 0.15 * k
+            v, f = _combine_meshes(
+                [
+                    _make_wedge_or_frustum_mesh(0.0, 0.0, 0.0, wx, wy, z_ai, top_shrink=0.04 + 0.008 * k),
+                    _make_wedge_or_frustum_mesh(1.8, 1.2, z_ai, wx - 1.8, wy - 1.2, z_nv, top_shrink=0.08 + 0.012 * k),
+                    _make_wedge_or_frustum_mesh(3.6, 2.4, z_nv, wx - 3.6, wy - 2.4, z_sp, top_shrink=0.15 + 0.015 * k),
+                ]
+            )
+            openings = ()
+            xy_s, z_c = 12, 8
+        raw_candidates.append(
             {
                 "mesh_id": f"b4_unseen_{i:02d}",
                 "size_band": "Band4_121to250",
@@ -992,18 +1149,47 @@ def load_frozen_80_unseen_mesh_corpus() -> Tuple[List[Dict[str, Any]], Dict[str,
             }
         )
 
+    s2b600_records = load_untouched_s2b_600_cohort().get("records", ())
+    prior_ids = (
+        {str(getattr(r, "object_id", r.get("object_id") if isinstance(r, dict) else "")) for r in LOCKED_STABLETEXT2BRICK_MANIFEST}
+        | {str(getattr(r, "object_id", r.get("object_id") if isinstance(r, dict) else "")) for r in UNTOUCHED_STABLETEXT2BRICK_21_MANIFEST}
+        | {str(r["object_id"] if isinstance(r, dict) else getattr(r, "object_id", "")) for r in s2b600_records}
+    )
+    corpus: List[Dict[str, Any]] = []
+    excluded_non_manifold = 0
+    excluded_prior_overlap = 0
+    seen_geom_hashes: Set[str] = set()
+    for cand in raw_candidates:
+        if str(cand["mesh_id"]) in prior_ids:
+            excluded_prior_overlap += 1
+            continue
+        if not _is_closed_edge_manifold_mesh(cand["verts"], cand["faces"]):
+            excluded_non_manifold += 1
+            continue
+        g_sha = _canonical_mesh_geometry_sha256(cand["verts"], cand["faces"])
+        if g_sha in seen_geom_hashes:
+            raise AssertionError(f"Duplicate mesh geometry SHA-256 detected on {cand['mesh_id']}!")
+        seen_geom_hashes.add(g_sha)
+        corpus.append({**cand, "geometry_sha256": g_sha})
+
+    if len(corpus) != 80 or len(seen_geom_hashes) != 80:
+        raise AssertionError(f"Expected 80 strictly unique unseen meshes, got {len(corpus)} ({len(seen_geom_hashes)} unique).")
+
+    bands_4 = ("Band1_le25", "Band2_26to60", "Band3_61to120", "Band4_121to250")
     funnel = {
-        "candidate_meshes_considered": 82,
-        "excluded_non_manifold_or_empty": 2,
+        "candidate_meshes_considered": len(raw_candidates),
+        "excluded_non_manifold_or_empty": excluded_non_manifold,
+        "excluded_prior_overlap": excluded_prior_overlap,
         "selected_total_meshes": len(corpus),
-        "band_counts": {
-            b: sum(1 for m in corpus if m["size_band"] == b)
-            for b in ("Band1_le25", "Band2_26to60", "Band3_61to120", "Band4_121to250")
+        "unique_geometry_sha256_count": len(seen_geom_hashes),
+        "band_counts": {b: sum(1 for m in corpus if m["size_band"] == b) for b in bands_4},
+        "band_unique_geometry_counts": {
+            b: len({m["geometry_sha256"] for m in corpus if m["size_band"] == b}) for b in bands_4
         },
         "meshes_with_required_openings": sum(
             1 for m in corpus if len(m["required_openings_ldu"]) > 0
         ),
-        "zero_prior_tuning_overlap_verified": True,
+        "zero_prior_tuning_overlap_verified": (excluded_prior_overlap == 0 and all(m["mesh_id"] not in prior_ids for m in corpus)),
     }
     return corpus, funnel
 
@@ -1051,6 +1237,7 @@ class Gate2FreshMeshBenchmarkReport:
     solver_summaries: Dict[str, Gate2SolverSummary]
     external_legolization_source: str
     gate2_passed: bool
+    evidence_kind: str = "held_out_80_unique_meshes_4_external_obj_plus_76_procedural_architectural"
 
 
 def _run_external_legolization_cli_on_corpus(
@@ -1149,6 +1336,7 @@ def _run_external_legolization_cli_on_corpus(
             rows.append(
                 {
                     "mesh_id": m["mesh_id"],
+                    "geometry_sha256": m["geometry_sha256"],
                     "size_band": m["size_band"],
                     "certified": cert_ok,
                     "original_mesh_iou": fid.original_mesh_iou,
@@ -1384,6 +1572,7 @@ class Gate3FalsificationReport:
     csg_false_acceptance_count: int
     csg_false_rejection_count: int
     gate3_passed: bool
+    evidence_kind: str = "adversarial_synthetic_falsification_plus_csg_collider_audit"
 
 
 def run_gate3_certificate_falsification_suite(csg_samples: int = 200) -> Gate3FalsificationReport:
@@ -1403,7 +1592,13 @@ def run_gate3_certificate_falsification_suite(csg_samples: int = 200) -> Gate3Fa
     cur_p = t2
     for _ in range(10):
         cur_p = cs_sad.attach_articulated_part(cur_p, 1, "3005", 0, joint_angle_rad=0.0)
-    c_sad = kernel.certify(cs_sad, verify_prefix=False, verify_insertion=False, verify_perturbation=True)
+    c_sad = kernel.certify(
+        cs_sad,
+        foundation_policy=FoundationPolicy.FIXED_ANCHOR,
+        verify_prefix=False,
+        verify_insertion=False,
+        verify_perturbation=True,
+    )
     c7_ok = (
         c_sad.static_mechanics.status == CertStatus.PASS
         and c_sad.perturbation_mechanics.status == CertStatus.FAIL
@@ -1670,6 +1865,7 @@ class VersatilityCellResult:
     certified_ci95: Tuple[float, float]
     luo_inspired_certified_count: int
     external_legolization_certified_count: int
+    calibrated_model_agreement_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1691,6 +1887,8 @@ class Gate4VersatilityMatrixReport:
     held_out_continuous_pitches_deg: Tuple[float, ...]
     max_pitch_discovery_error_deg: float
     gate4_passed: bool
+    overall_calibrated_model_agreement: int = 0
+    evidence_kind: str = "synthetic_held_out_24cell_versatility_matrix_no_new_hardware_runs"
 
 
 def _discover_roof_pitch_from_sloped_mesh_deg(verts: np.ndarray, faces: np.ndarray) -> float:
@@ -1764,6 +1962,7 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
             syn_ok = 0
             cert_ok = 0
             phys_ok = 0
+            cal_agree_ok = 0
             luo_ok = 0
             lego_ok = 0
 
@@ -1857,7 +2056,13 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
                     imp_ok += 1
                     if abs(inferred_pitch - target_pitch) <= 0.25:
                         syn_ok += 1
-                    c_rf = kernel.certify(cs_rf, verify_prefix=True, verify_insertion=True, verify_perturbation=True)
+                    c_rf = kernel.certify(
+                        cs_rf,
+                        foundation_policy=FoundationPolicy.FIXED_ANCHOR,
+                        verify_prefix=True,
+                        verify_insertion=True,
+                        verify_perturbation=True,
+                    )
                     if c_rf.overall_certified and abs(inferred_pitch - target_pitch) <= 0.25:
                         cert_ok += 1
 
@@ -1960,12 +2165,16 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
                             st_ms,
                             execution_trace=tr_ms,
                             foundation_policy=FoundationPolicy.TABLE_FRICTION_ONLY,
+                            verify_calibrated_substud_physics=True,
                         )
                         imp_ok += 1
                         syn_ok += 1
+                        if c_ms.physical_validation.status != CertStatus.UNKNOWN:
+                            phys_ok += 1
                         if c_ms.overall_certified:
                             cert_ok += 1
-                            phys_ok += 1
+                            if c_ms.model_agreement.status == CertStatus.PASS:
+                                cal_agree_ok += 1
                     else:
                         # Official Set `10698-1` tight inventory build (with `3001` depleted in `tight_inventory`)
                         inv_10698 = dict(SET_10698_OFFICIAL_INVENTORY)
@@ -1997,9 +2206,21 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
                         imp_ok += 1
                         if res_m.assembly.num_parts >= 2:
                             syn_ok += 1
+                        if res_m.certificates.physical_validation.status != CertStatus.UNKNOWN:
+                            phys_ok += 1
                         if res_m.status == KernelResultStatus.COMPLETED_CERTIFIED:
                             cert_ok += 1
-                            phys_ok += 1  # Standard rectangular stud clutch is physically hardware-calibrated!
+                            c_m_cal = kernel.certify(
+                                res_m.assembly,
+                                target_field=tf_m,
+                                inventory_counts=inv_10698,
+                                verify_calibrated_substud_physics=True,
+                            )
+                            if (
+                                c_m_cal.physical_validation.status == CertStatus.UNKNOWN
+                                and c_m_cal.model_agreement.status == CertStatus.PASS
+                            ):
+                                cal_agree_ok += 1
                         if cond != "tight_inventory":
                             luo_ok += 1
                             lego_ok += 1
@@ -2015,6 +2236,7 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
                 certified_ci95=clopper_pearson_95_ci(cert_ok, 5),
                 luo_inspired_certified_count=luo_ok,
                 external_legolization_certified_count=lego_ok,
+                calibrated_model_agreement_count=cal_agree_ok,
             )
 
     fam_totals: Dict[str, Dict[str, Any]] = {}
@@ -2027,6 +2249,7 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
             "import_verified": sum(c.import_verified_count for c in f_cells),
             "blind_synthesis": sum(c.blind_synthesis_count for c in f_cells),
             "kernel_certified": c_f,
+            "calibrated_model_agreement": sum(c.calibrated_model_agreement_count for c in f_cells),
             "physically_validated": sum(c.physically_validated_count for c in f_cells),
             "certified_rate": float(c_f / max(n_f, 1)),
             "certified_ci95": clopper_pearson_95_ci(c_f, n_f),
@@ -2039,6 +2262,7 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
     tot_syn = sum(c.blind_synthesis_count for c in cells.values())
     tot_cert = sum(c.kernel_certified_count for c in cells.values())
     tot_phys = sum(c.physically_validated_count for c in cells.values())
+    tot_cal_agree = sum(c.calibrated_model_agreement_count for c in cells.values())
     tot_luo = sum(c.luo_inspired_certified_count for c in cells.values())
     tot_lego = sum(c.external_legolization_certified_count for c in cells.values())
 
@@ -2049,8 +2273,10 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
         and max_pitch_err <= 0.05
         and tot_cert > tot_lego
         and tot_cert > tot_luo
-        # Honesty check: non-stud families (clips, hinges, pins, loops) MUST report 0 physical hardware validation!
-        and tot_phys == 20
+        # F9 honesty check: analytical sub-stud LP agreement is reported in `overall_calibrated_model_agreement`
+        # (20/120), while `overall_physically_validated` MUST be 0 without external bench observations!
+        and tot_phys == 0
+        and tot_cal_agree == 20
     )
     return Gate4VersatilityMatrixReport(
         total_cells=len(cells),
@@ -2068,6 +2294,7 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
         held_out_continuous_pitches_deg=held_out_pitches,
         max_pitch_discovery_error_deg=max_pitch_err,
         gate4_passed=gate4_ok,
+        overall_calibrated_model_agreement=tot_cal_agree,
     )
 
 
@@ -2078,7 +2305,10 @@ def run_gate4_24cell_generative_versatility_matrix() -> Gate4VersatilityMatrixRe
 
 @dataclass(frozen=True, slots=True)
 class BrickLayerAgentArmSummary:
-    """Metrics for one arm (`BrickLayer_Standalone` vs `BrickLayer_Plus_TopoBrickKernel`) on `n = 50` tasks."""
+    """
+    Metrics for one arm (`BrickLayer_Standalone` vs `BrickLayer_Plus_TopoBrickKernel`) in the
+    paired deterministic construction / SDK adapter study (`n = 50` tasks, matched 10-part kit, no LLM).
+    """
 
     arm_id: str
     num_tasks: int
@@ -2095,6 +2325,9 @@ class BrickLayerAgentArmSummary:
     median_tool_ms: float
     median_model_ms: float
     total_cpu_seconds: float
+    mean_emitted_brick_ops: float = 0.0
+    mean_solver_attempts: float = 1.0
+    study_protocol: str = "paired_deterministic_sdk_adapter_matched_10part_kit_no_llm"
 
 
 @dataclass(frozen=True, slots=True)
@@ -2130,6 +2363,8 @@ class Gate5AgentAndControlsReport:
     m1_raw_metadata_control_rate: float
     m1_verdict_summary: str
     gate5_passed: bool
+    study_protocol: str = "paired_deterministic_sdk_adapter_matched_10part_kit_no_llm"
+    evidence_kind: str = "deterministic_sdk_adapter_ablation_plus_synthetic_m3_m1_controls"
 
 
 def _build_50_agent_coding_targets() -> List[Dict[str, Any]]:
@@ -2373,10 +2608,10 @@ def run_gate5_bricklayer_agent_and_m3_controls(
     kernel = TopoBrickKernel()
 
     # ------------------------------------------------------------------
-    # Part A: Paired Constructive Coding Agent on Real `BrickLayer` (`n = 50`)
+    # Part A: Paired Deterministic Construction / `BrickLayer` SDK Adapter Study (`n = 50`)
+    # (`F6` remediated: matched `EXTENDED_10PART_RECT_KIT` & `forbidden_support_boxes` in both
+    #  arms, actual retry execution, and ZERO proxy LLM token / dummy MLP / model-ms formulas)
     # ------------------------------------------------------------------
-    # Pinned local neural code-action scorer (`build_compact_brickgpt_causal_lm` / MLP scorer)
-    agent_scorer = nn.Sequential(nn.Linear(16, 24), nn.GELU(), nn.Linear(24, 1))
     tasks_50 = _build_50_agent_coding_targets()
 
     sa_programs: List[List[Tuple[int, int, int, int, int, int]]] = []
@@ -2384,58 +2619,62 @@ def run_gate5_bricklayer_agent_and_m3_controls(
     sa_assemblies: List[AssemblyState] = []
     ka_assemblies: List[AssemblyState] = []
 
-    sa_prompts, sa_mcalls, sa_tokens, sa_retries, sa_mod_ms, sa_tool_ms = [], [], [], [], [], []
-    ka_prompts, ka_mcalls, ka_tokens, ka_retries, ka_mod_ms, ka_tool_ms = [], [], [], [], [], []
+    sa_retries: List[int] = []
+    sa_attempts: List[int] = []
+    sa_tool_ms: List[float] = []
+    sa_ops_counts: List[int] = []
+
+    ka_retries: List[int] = []
+    ka_attempts: List[int] = []
+    ka_tool_ms: List[float] = []
+    ka_ops_counts: List[int] = []
 
     c_sa0 = time.process_time()
     for t in tasks_50:
         tf_t: SparseTiledTargetField = t["tf"]
-        # Pinned constructive agent draft: greedy layer brick-emitter scored by `agent_scorer`
-        t_m0 = time.perf_counter()
-        with torch.no_grad():
-            _ = agent_scorer(
-                torch.from_numpy(
-                    np.vstack([compute_intrinsic_part_descriptor(p) for p in STABLETEXT2BRICK_8PART_KIT])
-                )
-            )
-        m_ms = (time.perf_counter() - t_m0) * 1000.0 + 0.15
+        openings_t = t["required_openings_ldu"]
         t_tl0 = time.perf_counter()
         res_draft = kernel.realize(
-            tf_t, solver_id="GreedyLayerMerge_Control", allowed_part_ids=STABLETEXT2BRICK_8PART_KIT
+            tf_t,
+            solver_id="GreedyLayerMerge_Control",
+            allowed_part_ids=EXTENDED_10PART_RECT_KIT,
+            forbidden_support_boxes=tuple(openings_t),
         )
         st_sa = res_draft.assembly
-        # If BrickLayer would see >1 connected component (e.g. disconnected deck), agent retries up to 3 times
-        depths_sa = st_sa.compute_support_depths()
+        # If BrickLayer's graph check sees disconnected support components, actually execute up to 2 retries
         retries_a = 0
-        if any(d >= 999 for d in depths_sa.values()):
-            retries_a = 2
+        for _retry_idx in range(2):
+            depths_sa = st_sa.compute_support_depths()
+            if not any(d >= 999 for d in depths_sa.values()):
+                break
+            retries_a += 1
+            res_retry = kernel.realize(
+                tf_t,
+                solver_id="GreedyLayerMerge_Control",
+                allowed_part_ids=EXTENDED_10PART_RECT_KIT,
+                forbidden_support_boxes=tuple(openings_t),
+            )
+            st_sa = res_retry.assembly
+        ops_sa = _assembly_to_bricklayer_ops(st_sa)
         sa_tool_ms.append((time.perf_counter() - t_tl0) * 1000.0)
-        sa_mod_ms.append(m_ms * (1 + retries_a))
-        sa_prompts.append(1 + retries_a)
-        sa_mcalls.append(1 + retries_a)
-        sa_tokens.append(int(st_sa.num_parts * 14 * (1 + retries_a)))
         sa_retries.append(retries_a)
+        sa_attempts.append(1 + retries_a)
+        sa_ops_counts.append(len(ops_sa))
         sa_assemblies.append(st_sa)
-        sa_programs.append(_assembly_to_bricklayer_ops(st_sa))
+        sa_programs.append(ops_sa)
     sa_cpu_s = float(time.process_time() - c_sa0)
 
     c_ka0 = time.process_time()
     for t in tasks_50:
         tf_t = t["tf"]
         openings_t = t["required_openings_ldu"]
-        t_m0 = time.perf_counter()
-        with torch.no_grad():
-            _ = agent_scorer(
-                torch.from_numpy(
-                    np.vstack([compute_intrinsic_part_descriptor(p) for p in EXTENDED_10PART_RECT_KIT])
-                )
-            )
-        m_ms = (time.perf_counter() - t_m0) * 1000.0 + 0.15
-
         t_tl0 = time.perf_counter()
-        # Draft 1: same greedy draft -> kernel `certify()` checks 6-DoF tipping + prefix + insertion + seam connectivity!
+        # Draft 1: identical greedy draft with matched 10-part kit -> kernel `certify()` checks 6-DoF tipping + prefix + insertion!
         res_d1 = kernel.realize(
-            tf_t, solver_id="GreedyLayerMerge_Control", allowed_part_ids=EXTENDED_10PART_RECT_KIT
+            tf_t,
+            solver_id="GreedyLayerMerge_Control",
+            allowed_part_ids=EXTENDED_10PART_RECT_KIT,
+            forbidden_support_boxes=tuple(openings_t),
         )
         c_d1 = kernel.certify(res_d1.assembly, target_field=tf_t, verify_prefix=True, verify_insertion=True)
         retries_b = 0
@@ -2460,7 +2699,7 @@ def run_gate5_bricklayer_agent_and_m3_controls(
             or d1_open_blocked
             or d1_unbonded_seam
         ):
-            # Kernel rejects draft (`FAIL` with weakest contact / blocked step / unbonded seam) -> retry with `S1`!
+            # Kernel rejects draft (`FAIL` with weakest contact / blocked step / unbonded seam) -> repair/resynthesize with `S1`!
             retries_b += 1
             res_k = kernel.realize(
                 tf_t,
@@ -2470,14 +2709,13 @@ def run_gate5_bricklayer_agent_and_m3_controls(
                 forbidden_support_boxes=tuple(openings_t),
             )
             st_ka = res_k.assembly
+        ops_ka = _assembly_to_bricklayer_ops(st_ka)
         ka_tool_ms.append((time.perf_counter() - t_tl0) * 1000.0)
-        ka_mod_ms.append(m_ms * (1 + retries_b))
-        ka_prompts.append(1 + retries_b)
-        ka_mcalls.append(1 + retries_b)
-        ka_tokens.append(int(st_ka.num_parts * 14 * (1 + retries_b)))
         ka_retries.append(retries_b)
+        ka_attempts.append(1 + retries_b)
+        ka_ops_counts.append(len(ops_ka))
         ka_assemblies.append(st_ka)
-        ka_programs.append(_assembly_to_bricklayer_ops(st_ka))
+        ka_programs.append(ops_ka)
     ka_cpu_s = float(time.process_time() - c_ka0)
 
     eff_bl_py = bricklayer_python or os.environ.get("TOPO_BRICK_BRICKLAYER_PYTHON")
@@ -2494,18 +2732,16 @@ def run_gate5_bricklayer_agent_and_m3_controls(
         if g5_bl.get("sa_sdk") and g5_bl.get("ka_sdk"):
             sa_bl_res = g5_bl["sa_sdk"]
             ka_bl_res = g5_bl["ka_sdk"]
-            bl_source = "verified_saved_bricklayer_sdk_ledger"
+            bl_source = "cached_bricklayer_sdk_ledger"
 
     def _summarize_agent_arm(
         arm_id: str,
         asms: Sequence[AssemblyState],
         sdk_res: Optional[Sequence[Dict[str, Any]]],
-        prompts_l: Sequence[int],
-        mcalls_l: Sequence[int],
-        toks_l: Sequence[int],
         retries_l: Sequence[int],
+        attempts_l: Sequence[int],
+        ops_l: Sequence[int],
         tool_ms_l: Sequence[float],
-        mod_ms_l: Sequence[float],
         cpu_s: float,
     ) -> BrickLayerAgentArmSummary:
         n_a = len(asms)
@@ -2557,37 +2793,35 @@ def run_gate5_bricklayer_agent_and_m3_controls(
             qualified_build_rate=float(qual_cnt / max(n_a, 1)),
             qualified_ci95=clopper_pearson_95_ci(qual_cnt, n_a),
             mean_target_iou=float(np.mean(ious_a)),
-            mean_prompts=float(np.mean(prompts_l)),
-            mean_model_calls=float(np.mean(mcalls_l)),
-            mean_tokens_generated=float(np.mean(toks_l)),
+            mean_prompts=0.0,
+            mean_model_calls=0.0,
+            mean_tokens_generated=0.0,
             mean_retries_used=float(np.mean(retries_l)),
             median_tool_ms=float(np.median(tot_tool_ms)),
-            median_model_ms=float(np.median(mod_ms_l)),
+            median_model_ms=0.0,
             total_cpu_seconds=cpu_s,
+            mean_emitted_brick_ops=float(np.mean(ops_l)),
+            mean_solver_attempts=float(np.mean(attempts_l)),
         )
 
     arm_sa = _summarize_agent_arm(
         "BrickLayer_Standalone",
         sa_assemblies,
         sa_bl_res,
-        sa_prompts,
-        sa_mcalls,
-        sa_tokens,
         sa_retries,
+        sa_attempts,
+        sa_ops_counts,
         sa_tool_ms,
-        sa_mod_ms,
         sa_cpu_s,
     )
     arm_ka = _summarize_agent_arm(
         "BrickLayer_Plus_TopoBrickKernel",
         ka_assemblies,
         ka_bl_res,
-        ka_prompts,
-        ka_mcalls,
-        ka_tokens,
         ka_retries,
+        ka_attempts,
+        ka_ops_counts,
         ka_tool_ms,
-        ka_mod_ms,
         ka_cpu_s,
     )
 
@@ -3033,15 +3267,25 @@ def generate_and_save_external_comparator_ledger(
     ext_luo = _run_external_legolization_cli_on_corpus(prepared, legolization_bin, "luo")
     ext_grd = _run_external_legolization_cli_on_corpus(prepared, legolization_bin, "greedy")
 
-    # Run BrickLayer 50-task programs
+    # Run BrickLayer 50-task programs (matched EXTENDED_10PART_RECT_KIT + forbidden_support_boxes in both arms)
     kernel = TopoBrickKernel()
     tasks_50 = _build_50_agent_coding_targets()
     sa_progs = []
     ka_progs = []
     for t in tasks_50:
-        r_sa = kernel.realize(t["tf"], solver_id="GreedyLayerMerge_Control", allowed_part_ids=STABLETEXT2BRICK_8PART_KIT)
+        r_sa = kernel.realize(
+            t["tf"],
+            solver_id="GreedyLayerMerge_Control",
+            allowed_part_ids=EXTENDED_10PART_RECT_KIT,
+            forbidden_support_boxes=tuple(t["required_openings_ldu"]),
+        )
         sa_progs.append(_assembly_to_bricklayer_ops(r_sa.assembly))
-        r_d1 = kernel.realize(t["tf"], solver_id="GreedyLayerMerge_Control", allowed_part_ids=EXTENDED_10PART_RECT_KIT)
+        r_d1 = kernel.realize(
+            t["tf"],
+            solver_id="GreedyLayerMerge_Control",
+            allowed_part_ids=EXTENDED_10PART_RECT_KIT,
+            forbidden_support_boxes=tuple(t["required_openings_ldu"]),
+        )
         c_d1 = kernel.certify(r_d1.assembly, target_field=t["tf"], verify_prefix=True, verify_insertion=True)
         d1_boxes = [wb for p in r_d1.assembly.placed_parts.values() for wb in p.world_boxes]
         d1_open_blocked = any(pb.intersects(ob) for pb in d1_boxes for ob in t["required_openings_ldu"])

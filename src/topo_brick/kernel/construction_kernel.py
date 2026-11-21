@@ -266,13 +266,13 @@ class PrefixMechanicsCert:
 
 @dataclass(frozen=True, slots=True)
 class InsertionCert:
-    """Certificate for monotone single-axis translation insertion clearance."""
+    """Certificate for exact continuous single-axis half-ray (`t in (0, +inf)`) insertion clearance."""
 
     status: CertStatus
     evaluated_steps: int
     monotone_axis_insertable_steps: int
     blocked_steps: Tuple[int, ...] = ()
-    scope: str = "monotone_single_axis_corridor"
+    scope: str = "continuous_cardinal_half_ray_swept_box_to_infinity"
 
 
 class AtomicOpType(str, Enum):
@@ -336,6 +336,20 @@ class ModelAgreementCert:
     kernel_lp_stable: bool = True
     substud_polygon_stable: bool = True
     substud_peak_utilization: float = 0.0
+    calibration_reference: str = "uncalibrated"
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalPhysicalObservation:
+    """
+    Recorded observation from an external multi-body simulator (MuJoCo/Bullet/PhysX) or physical rig.
+    Required before `PhysicalValidationCert` can ever transition out of `CertStatus.UNKNOWN` (`F9`).
+    """
+
+    rig_or_simulator_id: str
+    run_sha256: str
+    observed_stable: bool
+    notes: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,8 +374,25 @@ class PhysicalValidationCert:
 
 
 @dataclass(frozen=True, slots=True)
+class InventoryCert:
+    """
+    Certificate verifying zero mold or `(part_id, color_id)` overruns against declared finite kits (`Phase 11 Ext 1 & 2`).
+    """
+
+    status: CertStatus = CertStatus.NOT_APPLICABLE
+    mold_overruns: Tuple[Tuple[str, int, int], ...] = ()
+    color_overruns: Tuple[Tuple[str, int, int, int], ...] = ()
+    inventory_counts: Optional[Dict[str, int]] = None
+    colored_inventory: Optional[Any] = None
+    skin_mean_delta_e00: float = 0.0
+    fifo_baseline_skin_mean_delta_e00: float = 0.0
+    core_parts_count: int = 0
+    chromatic_splits_accepted: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class CertificateBundle:
-    """Complete multi-domain verification certificate bundle (`R8-WS1` strict contract)."""
+    """Complete multi-domain verification certificate bundle (`R8-WS1` + `Phase 11` strict contract)."""
 
     geometry: GeometryCert
     static_mechanics: StaticMechanicsCert
@@ -371,6 +402,7 @@ class CertificateBundle:
     perturbation_mechanics: PerturbationMechanicsCert = field(default_factory=PerturbationMechanicsCert)
     model_agreement: ModelAgreementCert = field(default_factory=ModelAgreementCert)
     loop_closure: LoopClosureCert = field(default_factory=LoopClosureCert)
+    inventory: InventoryCert = field(default_factory=InventoryCert)
     foundation_policy: str = FoundationPolicy.CLUTCHED_BASEPLATE.value
     execution_trace: Optional[ExecutionTrace] = None
 
@@ -384,6 +416,7 @@ class CertificateBundle:
             and self.perturbation_mechanics.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
             and self.model_agreement.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
             and self.loop_closure.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
+            and self.inventory.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
         )
 
     def summary_dict(self) -> Dict[str, str]:
@@ -396,6 +429,7 @@ class CertificateBundle:
             "perturbation_mechanics": self.perturbation_mechanics.status.value,
             "model_agreement": self.model_agreement.status.value,
             "loop_closure": self.loop_closure.status.value,
+            "inventory": self.inventory.status.value,
         }
 
 
@@ -649,6 +683,8 @@ class KernelRealizeResult:
     realization_mode: str = "blind"
     open_catalog_diagnostics: Optional[Any] = None
     evaluated_target_field: Optional[Any] = None
+    inventory_shortfall: Optional[Any] = None
+    compositional_mpd_text: Optional[str] = None
 
 
 class RepairEditType(str, Enum):
@@ -719,46 +755,222 @@ class KernelConstrainResult:
     updated_cache: Optional[IncrementalCandidateCache] = None
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedConstraintSpec:
+    """
+    Canonical normalized constraint bundle (`F3`) shared across `realize()`, `certify()`, and `repair()`
+    so finite mold/color inventories, forbidden openings, kit limits, and foundation policies are never dropped.
+    """
+
+    allowed_part_ids: Optional[Tuple[str, ...]] = None
+    inventory_counts: Optional[Dict[str, int]] = None
+    colored_inventory: Optional[Any] = None
+    foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE
+    support_policy: str = "none"
+    forbidden_support_boxes: Tuple[LDUBox, ...] = ()
+    license_filter: str = "all"
+    min_retained_iou: Optional[float] = None
+    max_deleted_volume_ratio: Optional[float] = None
+
+    @classmethod
+    def from_args(
+        cls,
+        allowed_part_ids: Optional[Sequence[str]] = None,
+        inventory_counts: Optional[Dict[str, int]] = None,
+        colored_inventory: Optional[Any] = None,
+        foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
+        support_policy: str = "none",
+        forbidden_support_boxes: Sequence[LDUBox] = (),
+        license_filter: str = "all",
+        min_retained_iou: Optional[float] = None,
+        max_deleted_volume_ratio: Optional[float] = None,
+    ) -> "ValidatedConstraintSpec":
+        fp_enum = (
+            foundation_policy
+            if isinstance(foundation_policy, FoundationPolicy)
+            else FoundationPolicy(str(foundation_policy))
+        )
+        if support_policy not in ("none", "minimal_permanent_pillars", "temporary_props_only"):
+            raise ValueError(f"Unsupported support_policy={support_policy!r}.")
+        if license_filter not in ("all", "cc_by_4_0_only"):
+            raise ValueError(f"Unsupported license_filter={license_filter!r}.")
+        norm_inv: Optional[Dict[str, int]] = None
+        if inventory_counts is not None:
+            norm_inv = {str(k): int(v) for k, v in inventory_counts.items()}
+            if any(v < 0 for v in norm_inv.values()):
+                raise ValueError("inventory_counts cannot contain negative quantities.")
+        return cls(
+            allowed_part_ids=tuple(str(p) for p in allowed_part_ids) if allowed_part_ids is not None else None,
+            inventory_counts=norm_inv,
+            colored_inventory=colored_inventory,
+            foundation_policy=fp_enum,
+            support_policy=str(support_policy),
+            forbidden_support_boxes=tuple(forbidden_support_boxes),
+            license_filter=str(license_filter),
+            min_retained_iou=float(min_retained_iou) if min_retained_iou is not None else None,
+            max_deleted_volume_ratio=(
+                float(max_deleted_volume_ratio) if max_deleted_volume_ratio is not None else None
+            ),
+        )
+
+
+def _boxes_have_continuous_cardinal_corridor(
+    new_boxes: Sequence[LDUBox],
+    existing_boxes: Sequence[LDUBox],
+) -> bool:
+    """
+    Exact continuous 1D swept-volume half-ray clearance (`t in (0, +inf)`) along any of the
+    6 cardinal world directions `(+Z, -Z, +X, -X, +Y, -Y)` (`F10`: zero intermediate tunneling
+    and zero `48 LDU` horizon cutoff).
+    """
+    if not new_boxes or not existing_boxes:
+        return True
+    # 1. +Z extraction (t > 0): collides iff XY strictly overlap AND eb.zmax > nb.zmin
+    if not any(
+        nb.xmin < eb.xmax
+        and nb.xmax > eb.xmin
+        and nb.ymin < eb.ymax
+        and nb.ymax > eb.ymin
+        and eb.zmax > nb.zmin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    # 2. -Z extraction (t > 0 along -Z): collides iff XY strictly overlap AND eb.zmin < nb.zmax
+    if not any(
+        nb.xmin < eb.xmax
+        and nb.xmax > eb.xmin
+        and nb.ymin < eb.ymax
+        and nb.ymax > eb.ymin
+        and eb.zmin < nb.zmax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    # 3. +X extraction
+    if not any(
+        nb.ymin < eb.ymax
+        and nb.ymax > eb.ymin
+        and nb.zmin < eb.zmax
+        and nb.zmax > eb.zmin
+        and eb.xmax > nb.xmin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    # 4. -X extraction
+    if not any(
+        nb.ymin < eb.ymax
+        and nb.ymax > eb.ymin
+        and nb.zmin < eb.zmax
+        and nb.zmax > eb.zmin
+        and eb.xmin < nb.xmax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    # 5. +Y extraction
+    if not any(
+        nb.xmin < eb.xmax
+        and nb.xmax > eb.xmin
+        and nb.zmin < eb.zmax
+        and nb.zmax > eb.zmin
+        and eb.ymax > nb.ymin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    # 6. -Y extraction
+    if not any(
+        nb.xmin < eb.xmax
+        and nb.xmax > eb.xmin
+        and nb.zmin < eb.zmax
+        and nb.zmax > eb.zmin
+        and eb.ymin < nb.ymax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    return False
+
+
+def _swept_obb_hits_along_ray(
+    obb_moving: Any,
+    obb_static: Any,
+    ray_dir: np.ndarray,
+    allowed_penetration_ldu: float = 0.25,
+) -> bool:
+    """
+    Exact continuous 1D Minkowski-ray SAT intersection for `obb_moving + t * ray_dir` (`t in (0, +inf)`)
+    against `obb_static` (`F10` continuous $SE(3)$ swept-OBB check).
+    """
+    ax_a = np.asarray(obb_moving.axes_rows, dtype=np.float64)
+    he_a = np.asarray(obb_moving.half_extents, dtype=np.float64)
+    ct_a = np.asarray(obb_moving.center, dtype=np.float64)
+    ax_b = np.asarray(obb_static.axes_rows, dtype=np.float64)
+    he_b = np.asarray(obb_static.half_extents, dtype=np.float64)
+    ct_b = np.asarray(obb_static.center, dtype=np.float64)
+    delta0 = ct_a - ct_b
+    d_v = np.asarray(ray_dir, dtype=np.float64)
+
+    cand_axes: List[np.ndarray] = [ax_a[0], ax_a[1], ax_a[2], ax_b[0], ax_b[1], ax_b[2]]
+    for i in range(3):
+        for j in range(3):
+            cr = np.cross(ax_a[i], ax_b[j])
+            nrm = float(np.linalg.norm(cr))
+            if nrm > 1e-8:
+                cand_axes.append(cr / nrm)
+        cr_da = np.cross(d_v, ax_a[i])
+        n_da = float(np.linalg.norm(cr_da))
+        if n_da > 1e-8:
+            cand_axes.append(cr_da / n_da)
+        cr_db = np.cross(d_v, ax_b[i])
+        n_db = float(np.linalg.norm(cr_db))
+        if n_db > 1e-8:
+            cand_axes.append(cr_db / n_db)
+
+    t_lo = 0.0
+    t_hi = float("inf")
+    eps = float(allowed_penetration_ldu)
+    for u in cand_axes:
+        r_sum = float(np.sum(np.abs(ax_a @ u) * he_a) + np.sum(np.abs(ax_b @ u) * he_b)) - eps
+        if r_sum <= 0.0:
+            return False
+        alpha = float(np.dot(d_v, u))
+        beta = float(np.dot(delta0, u))
+        if abs(alpha) <= 1e-12:
+            if abs(beta) >= r_sum:
+                return False
+        else:
+            t1 = (-beta - r_sum) / alpha
+            t2 = (-beta + r_sum) / alpha
+            lo_u = t1 if t1 < t2 else t2
+            hi_u = t2 if t1 < t2 else t1
+            if lo_u > t_lo:
+                t_lo = lo_u
+            if hi_u < t_hi:
+                t_hi = hi_u
+            if t_lo >= t_hi - 1e-7 or t_hi <= 1e-6:
+                return False
+    return t_lo < t_hi - 1e-7 and t_hi > 1e-6
+
+
 def check_monotone_insertion_corridor(
     state_before: AssemblyState,
     part_id: str,
     pose: LDUFrame,
 ) -> bool:
     """
-    Check whether placing `(part_id, pose)` into `state_before` has a collision-free
-    monotone single-axis insertion corridor along any of the 6 cardinal world directions
-    (+Z, -Z, +X, -X, +Y, -Y) out to 48 LDU.
+    Check whether placing `(part_id, pose)` into `state_before` has an exact continuous half-ray
+    (`t in (0, +inf)`) swept-box insertion corridor along any of the 6 cardinal world axes
+    `(+Z, -Z, +X, -X, +Y, -Y)` (`F10`: zero tunneling, zero `48 LDU` horizon cutoff).
     """
+    if not state_before._parts:
+        return True
     prim = get_brick_primitive(part_id)
     base_boxes = tuple(b.transform(pose) for b in prim.hull_boxes)
-    directions = (
-        (0, 0, 1),
-        (0, 0, -1),
-        (1, 0, 0),
-        (-1, 0, 0),
-        (0, 1, 0),
-        (0, -1, 0),
-    )
-    for dx, dy, dz in directions:
-        clear_along_dir = True
-        for dist in (8, 16, 24, 36, 48):
-            shifted_boxes = tuple(
-                LDUBox(
-                    b.xmin + dx * dist,
-                    b.ymin + dy * dist,
-                    b.zmin + dz * dist,
-                    b.xmax + dx * dist,
-                    b.ymax + dy * dist,
-                    b.zmax + dz * dist,
-                )
-                for b in base_boxes
-            )
-            if state_before.check_boxes_collision(shifted_boxes):
-                clear_along_dir = False
-                break
-        if clear_along_dir:
-            return True
-    return False
+    existing_boxes = [eb for p in state_before._parts.values() for eb in p.world_boxes]
+    return _boxes_have_continuous_cardinal_corridor(base_boxes, existing_boxes)
 
 
 def check_rigid_group_insertion_corridor(
@@ -767,39 +979,13 @@ def check_rigid_group_insertion_corridor(
 ) -> bool:
     """
     Check whether a pre-assembled rigid subassembly (`PLACE_SUBASSEMBLY`) with combined
-    hull boxes `group_boxes` has a collision-free monotone single-axis insertion corridor
-    into `state_before` along any of the 6 cardinal world directions out to 48 LDU.
+    hull boxes `group_boxes` has an exact continuous half-ray (`t in (0, +inf)`) insertion
+    corridor into `state_before` along any of the 6 cardinal world directions (`F10`).
     """
-    if not group_boxes:
+    if not group_boxes or not state_before._parts:
         return True
-    directions = (
-        (0, 0, 1),
-        (0, 0, -1),
-        (1, 0, 0),
-        (-1, 0, 0),
-        (0, 1, 0),
-        (0, -1, 0),
-    )
-    for dx, dy, dz in directions:
-        clear_along_dir = True
-        for dist in (8, 16, 24, 36, 48):
-            shifted = tuple(
-                LDUBox(
-                    b.xmin + dx * dist,
-                    b.ymin + dy * dist,
-                    b.zmin + dz * dist,
-                    b.xmax + dx * dist,
-                    b.ymax + dy * dist,
-                    b.zmax + dz * dist,
-                )
-                for b in group_boxes
-            )
-            if state_before.check_boxes_collision(shifted):
-                clear_along_dir = False
-                break
-        if clear_along_dir:
-            return True
-    return False
+    existing_boxes = [eb for p in state_before._parts.values() for eb in p.world_boxes]
+    return _boxes_have_continuous_cardinal_corridor(group_boxes, existing_boxes)
 
 
 def _order_course_atomic_1by1(
@@ -2202,6 +2388,60 @@ class TopoBrickKernel:
         self.s3_solver = RecurrentBatchRefiner()
         self.s4_solver = D3PMBatchSampler()
 
+    @staticmethod
+    def _evaluate_inventory_cert(
+        parts_map: Dict[int, Any],
+        inventory_counts: Optional[Dict[str, int]] = None,
+        colored_inventory: Optional[Any] = None,
+    ) -> InventoryCert:
+        if inventory_counts is None and colored_inventory is None:
+            return InventoryCert()
+        mold_used: Dict[str, int] = {}
+        color_used: Dict[Tuple[str, int], int] = {}
+        for p_inv in parts_map.values():
+            mold_used[p_inv.part_id] = mold_used.get(p_inv.part_id, 0) + 1
+            ck = (p_inv.part_id, int(getattr(p_inv, "color_id", 15)))
+            color_used[ck] = color_used.get(ck, 0) + 1
+        eff_mold_lim: Optional[Dict[str, int]] = (
+            dict(inventory_counts) if inventory_counts is not None else None
+        )
+        if eff_mold_lim is None and colored_inventory is not None and hasattr(colored_inventory, "marginal_mold_counts"):
+            eff_mold_lim = colored_inventory.marginal_mold_counts()
+        m_over: List[Tuple[str, int, int]] = []
+        if eff_mold_lim is not None:
+            for pid_k, u_cnt in sorted(mold_used.items()):
+                allow_m = int(eff_mold_lim.get(pid_k, 0))
+                if u_cnt > allow_m:
+                    m_over.append((pid_k, u_cnt, allow_m))
+        c_over: List[Tuple[str, int, int, int]] = []
+        if colored_inventory is not None and hasattr(colored_inventory, "counts"):
+            for (pid_c, cid_c), u_c in sorted(color_used.items()):
+                allow_c = int(colored_inventory.get_count(pid_c, cid_c))
+                if u_c > allow_c:
+                    c_over.append((pid_c, cid_c, u_c, allow_c))
+        inv_ok = (len(m_over) == 0) and (len(c_over) == 0)
+        return InventoryCert(
+            status=CertStatus.PASS if inv_ok else CertStatus.FAIL,
+            mold_overruns=tuple(m_over),
+            color_overruns=tuple(c_over),
+            inventory_counts=eff_mold_lim,
+            colored_inventory=colored_inventory,
+        )
+
+    @staticmethod
+    def _evaluate_physical_validation_cert(
+        external_physical_observation: Optional[ExternalPhysicalObservation] = None,
+    ) -> PhysicalValidationCert:
+        if external_physical_observation is None:
+            return PhysicalValidationCert(status=CertStatus.UNKNOWN)
+        return PhysicalValidationCert(
+            status=CertStatus.PASS if external_physical_observation.observed_stable else CertStatus.FAIL,
+            simulator_or_rig=str(external_physical_observation.rig_or_simulator_id),
+            notes=(
+                f"run_sha256={external_physical_observation.run_sha256}: {external_physical_observation.notes}".strip()
+            ),
+        )
+
     def _certify_continuous_assembly(
         self,
         assembly: Any,
@@ -2210,6 +2450,9 @@ class TopoBrickKernel:
         execution_trace: Optional[ExecutionTrace] = None,
         foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
         verify_perturbation: bool = False,
+        inventory_counts: Optional[Dict[str, int]] = None,
+        colored_inventory: Optional[Any] = None,
+        external_physical_observation: Optional[ExternalPhysicalObservation] = None,
     ) -> CertificateBundle:
         """Certify a `ContinuousAssemblyState` (15-axis OBB-SAT, continuous joint wrench LP, perturbation)."""
         from topo_brick.interface.se3_kinematics import (
@@ -2315,7 +2558,7 @@ class TopoBrickKernel:
             violating_pairs=tuple(sorted(violating_set)),
         )
 
-        eq = assembly.evaluate_static_equilibrium()
+        eq = assembly.evaluate_static_equilibrium(foundation_policy=fp_enum)
         static_cert = StaticMechanicsCert(
             status=CertStatus.PASS if (eq.is_stable and geom_pass) else CertStatus.FAIL,
             is_stable=bool(eq.is_stable),
@@ -2328,10 +2571,26 @@ class TopoBrickKernel:
             solve_time_ms=float(eq.solve_time_ms),
         )
 
-        has_trace = execution_trace is not None or getattr(assembly, "has_execution_trace", True)
+        has_trace = execution_trace is not None or bool(getattr(assembly, "has_execution_trace", False))
+        eff_c_trace: Optional[ExecutionTrace] = execution_trace
+        if eff_c_trace is None and has_trace:
+            raw_ord = list(getattr(assembly, "placement_order", ()))
+            order_ids = [i for i in raw_ord if i in parts]
+            if len(order_ids) != len(parts):
+                order_ids = list(part_ids_sorted)
+            eff_c_trace = ExecutionTrace(
+                steps=tuple(
+                    AtomicBuildStep(op_type=AtomicOpType.PLACE_PART, instance_ids=(iid,))
+                    for iid in order_ids
+                ),
+                trace_source="continuous_placement_order",
+            )
+
         if not verify_prefix and not verify_insertion:
             prefix_cert = PrefixMechanicsCert(CertStatus.NOT_APPLICABLE, 0, 0, None, 0.0)
-            ins_cert = InsertionCert(CertStatus.NOT_APPLICABLE, 0, 0, ())
+            ins_cert = InsertionCert(
+                CertStatus.NOT_APPLICABLE, 0, 0, (), scope="continuous_cardinal_half_ray_swept_obb_to_infinity"
+            )
         elif not has_trace and len(part_ids_sorted) > 0:
             prefix_cert = (
                 PrefixMechanicsCert(CertStatus.UNKNOWN, 0, 0, None, 0.0)
@@ -2339,9 +2598,13 @@ class TopoBrickKernel:
                 else PrefixMechanicsCert(CertStatus.NOT_APPLICABLE, 0, 0, None, 0.0)
             )
             ins_cert = (
-                InsertionCert(CertStatus.UNKNOWN, 0, 0, ())
+                InsertionCert(
+                    CertStatus.UNKNOWN, 0, 0, (), scope="continuous_cardinal_half_ray_swept_obb_to_infinity"
+                )
                 if verify_insertion
-                else InsertionCert(CertStatus.NOT_APPLICABLE, 0, 0, ())
+                else InsertionCert(
+                    CertStatus.NOT_APPLICABLE, 0, 0, (), scope="continuous_cardinal_half_ray_swept_obb_to_infinity"
+                )
             )
         else:
             sim_c = ContinuousAssemblyState()
@@ -2352,6 +2615,7 @@ class TopoBrickKernel:
             eval_i = 0
             ok_i = 0
             blocked_i: List[int] = []
+            cur_grav = (0.0, 0.0, -1.0)
             dirs_6 = (
                 np.array([0.0, 0.0, 1.0]),
                 np.array([0.0, 0.0, -1.0]),
@@ -2360,52 +2624,91 @@ class TopoBrickKernel:
                 np.array([0.0, 1.0, 0.0]),
                 np.array([0.0, -1.0, 0.0]),
             )
-            for s_idx, iid in enumerate(part_ids_sorted):
-                cp = parts[iid]
+            steps_c = eff_c_trace.steps if eff_c_trace is not None else ()
+            if len(part_ids_sorted) > 0 and len(steps_c) == 0:
+                first_u = 0
+                max_u = float("inf")
+                blocked_i.append(-1)
+            for s_idx, step in enumerate(steps_c):
+                if step.op_type == AtomicOpType.REORIENT_ASSEMBLY:
+                    if not (eff_c_trace is not None and eff_c_trace.allow_reorientation):
+                        if first_u is None:
+                            first_u = s_idx
+                            max_u = float("inf")
+                        continue
+                    cur_grav = step.gravity_unit
+                    if verify_prefix and len(sim_c.placed_parts) > 0:
+                        eval_s += 1
+                        eq_r = sim_c.evaluate_static_equilibrium(
+                            foundation_policy=fp_enum, gravity_unit=cur_grav
+                        )
+                        if eq_r.is_stable:
+                            stable_s += 1
+                        elif first_u is None:
+                            first_u = s_idx
+                            max_u = float("inf")
+                    continue
+
+                if step.op_type not in (AtomicOpType.PLACE_PART, AtomicOpType.PLACE_SUBASSEMBLY):
+                    if first_u is None:
+                        first_u = s_idx
+                        max_u = float("inf")
+                    continue
+                if step.op_type == AtomicOpType.PLACE_SUBASSEMBLY and not (
+                    eff_c_trace is not None and eff_c_trace.allow_subassemblies
+                ):
+                    if first_u is None:
+                        first_u = s_idx
+                        max_u = float("inf")
+                    continue
+
+                step_iids = list(step.instance_ids)
+                if not step_iids or any(i not in parts or i in sim_c.placed_parts for i in step_iids):
+                    if first_u is None:
+                        first_u = s_idx
+                        max_u = float("inf")
+                    blocked_i.append(s_idx)
+                    continue
+
                 if verify_insertion:
                     eval_i += 1
-                    prim_c = get_brick_primitive(cp.part_id)
-                    ins_ok = False
-                    for d_vec in dirs_6:
-                        clear_d = True
-                        for dist in (8.0, 16.0, 24.0, 36.0, 48.0):
-                            sh_pose = type(cp.continuous_pose)(
-                                rot_matrix=cp.continuous_pose.rot_matrix,
-                                pos=tuple(
-                                    float(cp.continuous_pose.pos[k] + d_vec[k] * dist)
-                                    for k in range(3)
-                                ),
-                            )
-                            sh_obbs = [box_to_obb(hb, sh_pose) for hb in prim_c.hull_boxes]
-                            if any(
-                                obb_intersects_sat(so, ex_o, allowed_penetration_ldu=0.25)
-                                for ex_p in sim_c.placed_parts.values()
-                                for ex_o in ex_p.world_obbs
-                                for so in sh_obbs
-                            ):
-                                clear_d = False
-                                break
-                        if clear_d:
-                            ins_ok = True
-                            break
+                    group_obbs = [ob for i in step_iids for ob in parts[i].world_obbs]
+                    ex_obbs = [ex_o for ex_p in sim_c.placed_parts.values() for ex_o in ex_p.world_obbs]
+                    ins_ok = (not ex_obbs) or any(
+                        not any(
+                            _swept_obb_hits_along_ray(so, ex_o, d_vec, allowed_penetration_ldu=0.25)
+                            for ex_o in ex_obbs
+                            for so in group_obbs
+                        )
+                        for d_vec in dirs_6
+                    )
                     if ins_ok:
                         ok_i += 1
                     else:
-                        blocked_i.append(iid)
-                try:
-                    sim_c._next_id = iid
-                    sim_c.place_part(
-                        cp.part_id, cp.continuous_pose, is_grounded=cp.is_grounded, check_collision=True
-                    )
-                    for ga, gb in assembly.matched_port_pairs.items():
-                        if ga[0] in sim_c.placed_parts and gb[0] in sim_c.placed_parts:
-                            sim_c.matched_port_pairs[ga] = gb
-                    for jk, jv in getattr(assembly, "articulated_joints", {}).items():
-                        if jk[0] in sim_c.placed_parts and jk[1] in sim_c.placed_parts:
-                            sim_c.articulated_joints[jk] = jv
-                    placed_ok_c = True
-                except ValueError:
-                    placed_ok_c = False
+                        blocked_i.append(step_iids[0])
+
+                placed_ok_c = True
+                for iid in step_iids:
+                    cp = parts[iid]
+                    try:
+                        sim_c._next_id = iid
+                        sim_c.place_part(
+                            cp.part_id,
+                            cp.continuous_pose,
+                            is_grounded=cp.is_grounded,
+                            check_collision=True,
+                            color_id=getattr(cp, "color_id", 15),
+                        )
+                    except ValueError:
+                        placed_ok_c = False
+                        break
+                for ga, gb in assembly.matched_port_pairs.items():
+                    if ga[0] in sim_c.placed_parts and gb[0] in sim_c.placed_parts:
+                        sim_c.matched_port_pairs[ga] = gb
+                for jk, jv in getattr(assembly, "articulated_joints", {}).items():
+                    if jk[0] in sim_c.placed_parts and jk[1] in sim_c.placed_parts:
+                        sim_c.articulated_joints[jk] = jv
+
                 if verify_prefix:
                     eval_s += 1
                     if not placed_ok_c:
@@ -2413,7 +2716,9 @@ class TopoBrickKernel:
                             first_u = s_idx
                             max_u = float("inf")
                     else:
-                        eq_s = sim_c.evaluate_static_equilibrium()
+                        eq_s = sim_c.evaluate_static_equilibrium(
+                            foundation_policy=fp_enum, gravity_unit=cur_grav
+                        )
                         if not np.isinf(eq_s.peak_utilization):
                             max_u = max(max_u, float(eq_s.peak_utilization))
                         if eq_s.is_stable:
@@ -2421,6 +2726,14 @@ class TopoBrickKernel:
                         elif first_u is None:
                             first_u = s_idx
                             max_u = float("inf")
+
+            if set(sim_c.placed_parts.keys()) != set(parts.keys()):
+                if verify_prefix and first_u is None:
+                    first_u = len(steps_c)
+                    max_u = float("inf")
+                if verify_insertion and not blocked_i:
+                    blocked_i.append(-1)
+
             prefix_cert = (
                 PrefixMechanicsCert(
                     CertStatus.PASS if first_u is None else CertStatus.FAIL,
@@ -2438,13 +2751,20 @@ class TopoBrickKernel:
                     eval_i,
                     ok_i,
                     tuple(blocked_i),
+                    scope="continuous_cardinal_half_ray_swept_obb_to_infinity",
                 )
                 if verify_insertion
-                else InsertionCert(CertStatus.NOT_APPLICABLE, 0, 0, ())
+                else InsertionCert(
+                    CertStatus.NOT_APPLICABLE,
+                    0,
+                    0,
+                    (),
+                    scope="continuous_cardinal_half_ray_swept_obb_to_infinity",
+                )
             )
 
         if verify_perturbation:
-            pert = assembly.evaluate_perturbation_stability()
+            pert = assembly.evaluate_perturbation_stability(foundation_policy=fp_enum)
             pert_cert = PerturbationMechanicsCert(
                 status=CertStatus.PASS if pert.is_perturbation_stable else CertStatus.FAIL,
                 is_perturbation_stable=pert.is_perturbation_stable,
@@ -2470,17 +2790,21 @@ class TopoBrickKernel:
         else:
             loop_cert = LoopClosureCert()
 
+        inv_cert_c = self._evaluate_inventory_cert(parts, inventory_counts, colored_inventory)
+        phys_cert_c = self._evaluate_physical_validation_cert(external_physical_observation)
+
         return CertificateBundle(
             geometry=geom_cert,
             static_mechanics=static_cert,
             prefix_mechanics=prefix_cert,
             insertion=ins_cert,
-            physical_validation=PhysicalValidationCert(status=CertStatus.UNKNOWN),
+            physical_validation=phys_cert_c,
             perturbation_mechanics=pert_cert,
             model_agreement=ModelAgreementCert(),
             loop_closure=loop_cert,
+            inventory=inv_cert_c,
             foundation_policy=fp_enum.value,
-            execution_trace=execution_trace,
+            execution_trace=eff_c_trace,
         )
 
     def certify(
@@ -2494,15 +2818,18 @@ class TopoBrickKernel:
         foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
         verify_perturbation: bool = False,
         verify_model_agreement: bool = False,
+        inventory_counts: Optional[Dict[str, int]] = None,
+        colored_inventory: Optional[Any] = None,
+        external_physical_observation: Optional[ExternalPhysicalObservation] = None,
     ) -> CertificateBundle:
         """
         Evaluate independent verification certificates on `assembly` (`AssemblyState` or
-        `ContinuousAssemblyState`, `R8-WS1` strict contract):
+        `ContinuousAssemblyState`, `R8-WS1` + `Phase 12` strict contract):
           - Atomic `ExecutionTrace` 1-by-1 verification for `PrefixMechanicsCert` & `InsertionCert`
             (returns `CertStatus.UNKNOWN` if untraced; never batches unverified sibling placements).
           - Explicit `FoundationPolicy` (`CLUTCHED_BASEPLATE`, `TABLE_FRICTION_ONLY`, `FIXED_ANCHOR`).
-          - Optional `PerturbationMechanicsCert` and `ModelAgreementCert`.
-          - Never conflates analytical static LP results with physical/simulator validation.
+          - Optional `PerturbationMechanicsCert` and `ModelAgreementCert` (calibrated sub-stud LP).
+          - `PhysicalValidationCert` remains `UNKNOWN` unless `external_physical_observation` is provided.
         """
         if not isinstance(assembly, AssemblyState):
             return self._certify_continuous_assembly(
@@ -2512,6 +2839,9 @@ class TopoBrickKernel:
                 execution_trace=execution_trace,
                 foundation_policy=foundation_policy,
                 verify_perturbation=verify_perturbation,
+                inventory_counts=inventory_counts,
+                colored_inventory=colored_inventory,
+                external_physical_observation=external_physical_observation,
             )
 
         fp_enum = (
@@ -2695,9 +3025,31 @@ class TopoBrickKernel:
                                 max_u = float("inf")
                         elif (
                             gr_p
-                            and fp_enum == FoundationPolicy.CLUTCHED_BASEPLATE
                             and cur_lat_xy == (0.0, 0.0)
                             and base_lp_eta <= 1.0 - 1e-6
+                            and (
+                                fp_enum == FoundationPolicy.CLUTCHED_BASEPLATE
+                                or (
+                                    fp_enum == FoundationPolicy.TABLE_FRICTION_ONLY
+                                    and p.world_boxes
+                                    and any(
+                                        b.zmin <= 0
+                                        and (b.xmin + 0.5)
+                                        <= (
+                                            sum(float(bx.volume_ldu3) * 0.5 * (bx.xmin + bx.xmax) for bx in p.world_boxes)
+                                            / max(1.0, sum(float(bx.volume_ldu3) for bx in p.world_boxes))
+                                        )
+                                        <= (b.xmax - 0.5)
+                                        and (b.ymin + 0.5)
+                                        <= (
+                                            sum(float(bx.volume_ldu3) * 0.5 * (bx.ymin + bx.ymax) for bx in p.world_boxes)
+                                            / max(1.0, sum(float(bx.volume_ldu3) for bx in p.world_boxes))
+                                        )
+                                        <= (b.ymax - 0.5)
+                                        for b in p.world_boxes
+                                    )
+                                )
+                            )
                         ):
                             max_u = max(max_u, base_lp_eta)
                             stable_steps += 1
@@ -2719,7 +3071,7 @@ class TopoBrickKernel:
                             can_ext = False
                             peak_d = float("inf")
                             if (
-                                fp_enum == FoundationPolicy.CLUTCHED_BASEPLATE
+                                fp_enum in (FoundationPolicy.CLUTCHED_BASEPLATE, FoundationPolicy.TABLE_FRICTION_ONLY)
                                 and cur_lat_xy == (0.0, 0.0)
                                 and not np.isinf(base_lp_eta)
                             ):
@@ -2729,7 +3081,14 @@ class TopoBrickKernel:
                                     plumb_deltas,
                                     base_witness=base_witness,
                                     hop_cache=plumb_hop_cache,
+                                    foundation_policy=fp_enum,
                                 )
+                                if not can_ext and prefix_state.num_parts >= 40:
+                                    can_ext, peak_d = self.validator.verify_two_pier_bearing_compression(
+                                        prefix_state, foundation_policy=fp_enum
+                                    )
+                                    if can_ext:
+                                        base_lp_eta = min(base_lp_eta, peak_d)
                             if can_ext and max(base_lp_eta, peak_d) <= 1.0 - 1e-5:
                                 max_u = max(max_u, base_lp_eta, peak_d)
                                 stable_steps += 1
@@ -2772,48 +3131,122 @@ class TopoBrickKernel:
                         if verify_prefix and first_unstable is None:
                             first_unstable = s_idx
                         continue
-                    sub_min_z = min(
-                        min(b.zmin for b in parts[sid].world_boxes) for sid in sub_iids
-                    )
-                    sub_state = AssemblyState()
                     sub_ok = True
-                    for sid in sorted(sub_iids, key=lambda i: min(b.zmin for b in parts[i].world_boxes)):
-                        sp_sub = parts[sid]
-                        is_sub_g = min(b.zmin for b in sp_sub.world_boxes) <= sub_min_z
-                        try:
-                            sub_state._next_instance_id = sid
-                            sub_state.place_root_part(
-                                sp_sub.part_id,
-                                sp_sub.pose,
-                                is_grounded=is_sub_g,
-                                color_id=sp_sub.color_id,
+                    if step.subtrace:
+                        # Phase 11 Ext 4A: Replay explicit local-workbench `subtrace` step-by-step, verify
+                        # single-component connectivity, and check rigid-translation correspondence vs `parts[sid]`!
+                        loc_sub_state = AssemblyState()
+                        reindexed_sub_steps: List[AtomicBuildStep] = []
+                        inferred_sub_off: Optional[Tuple[int, int, int]] = None
+                        if len(step.subtrace) != len(sub_iids):
+                            sub_ok = False
+                        else:
+                            for idx_ls, ls_op in enumerate(step.subtrace):
+                                if ls_op.part_id == "" or ls_op.pose is None or len(ls_op.instance_ids) != 1:
+                                    sub_ok = False
+                                    break
+                                w_sid = ls_op.instance_ids[0]
+                                if w_sid not in parts:
+                                    sub_ok = False
+                                    break
+                                wp_ref = parts[w_sid]
+                                if wp_ref.part_id != ls_op.part_id or wp_ref.pose.rot_id != ls_op.pose.rot_id:
+                                    sub_ok = False
+                                    break
+                                cur_off = (
+                                    wp_ref.pose.pos[0] - ls_op.pose.pos[0],
+                                    wp_ref.pose.pos[1] - ls_op.pose.pos[1],
+                                    wp_ref.pose.pos[2] - ls_op.pose.pos[2],
+                                )
+                                if inferred_sub_off is None:
+                                    inferred_sub_off = cur_off
+                                elif cur_off != inferred_sub_off:
+                                    sub_ok = False
+                                    break
+                                try:
+                                    loc_sub_state._next_instance_id = idx_ls
+                                    loc_sub_state.place_root_part(
+                                        ls_op.part_id,
+                                        ls_op.pose,
+                                        is_grounded=ls_op.is_grounded,
+                                        color_id=wp_ref.color_id,
+                                    )
+                                except ValueError:
+                                    sub_ok = False
+                                    break
+                                reindexed_sub_steps.append(
+                                    AtomicBuildStep(
+                                        op_type=ls_op.op_type,
+                                        instance_ids=(idx_ls,),
+                                        part_id=ls_op.part_id,
+                                        pose=ls_op.pose,
+                                        is_grounded=ls_op.is_grounded,
+                                        subtrace=ls_op.subtrace,
+                                    )
+                                )
+                        if sub_ok and len(reindexed_sub_steps) >= 2:
+                            vis_l: Set[int] = {0}
+                            q_l = [0]
+                            while q_l:
+                                cl = q_l.pop()
+                                for nbl in loc_sub_state._part_adj.get(cl, ()):
+                                    if nbl not in vis_l:
+                                        vis_l.add(nbl)
+                                        q_l.append(nbl)
+                            if len(vis_l) != len(reindexed_sub_steps):
+                                sub_ok = False
+                        if sub_ok:
+                            sub_certs = self.certify(
+                                loc_sub_state,
+                                verify_prefix=verify_prefix,
+                                verify_insertion=verify_insertion,
+                                execution_trace=ExecutionTrace(
+                                    steps=tuple(reindexed_sub_steps),
+                                    allow_subassemblies=True,
+                                ),
                             )
-                        except ValueError:
-                            sub_ok = False
-                            break
-                    # Subassembly must be a single connected physical component!
-                    if sub_ok and len(sub_iids) >= 2:
-                        visited_sub: Set[int] = {sub_iids[0]}
-                        queue_sub = [sub_iids[0]]
-                        while queue_sub:
-                            cur_s = queue_sub.pop()
-                            for nb_s in sub_state._part_adj.get(cur_s, ()):
-                                if nb_s not in visited_sub:
-                                    visited_sub.add(nb_s)
-                                    queue_sub.append(nb_s)
-                        if len(visited_sub) != len(sub_iids):
-                            sub_ok = False
-                    if sub_ok:
-                        sub_certs = self.certify(
-                            sub_state,
-                            verify_prefix=verify_prefix,
-                            verify_insertion=verify_insertion,
-                            execution_trace=(
-                                ExecutionTrace(steps=step.subtrace) if step.subtrace else None
-                            ),
+                            if not sub_certs.overall_certified:
+                                sub_ok = False
+                    else:
+                        sub_min_z = min(
+                            min(b.zmin for b in parts[sid].world_boxes) for sid in sub_iids
                         )
-                        if not sub_certs.overall_certified:
-                            sub_ok = False
+                        sub_state = AssemblyState()
+                        for sid in sorted(sub_iids, key=lambda i: min(b.zmin for b in parts[i].world_boxes)):
+                            sp_sub = parts[sid]
+                            is_sub_g = min(b.zmin for b in sp_sub.world_boxes) <= sub_min_z
+                            try:
+                                sub_state._next_instance_id = sid
+                                sub_state.place_root_part(
+                                    sp_sub.part_id,
+                                    sp_sub.pose,
+                                    is_grounded=is_sub_g,
+                                    color_id=sp_sub.color_id,
+                                )
+                            except ValueError:
+                                sub_ok = False
+                                break
+                        # Subassembly must be a single connected physical component!
+                        if sub_ok and len(sub_iids) >= 2:
+                            visited_sub: Set[int] = {sub_iids[0]}
+                            queue_sub = [sub_iids[0]]
+                            while queue_sub:
+                                cur_s = queue_sub.pop()
+                                for nb_s in sub_state._part_adj.get(cur_s, ()):
+                                    if nb_s not in visited_sub:
+                                        visited_sub.add(nb_s)
+                                        queue_sub.append(nb_s)
+                            if len(visited_sub) != len(sub_iids):
+                                sub_ok = False
+                        if sub_ok:
+                            sub_certs = self.certify(
+                                sub_state,
+                                verify_prefix=verify_prefix,
+                                verify_insertion=verify_insertion,
+                                execution_trace=None,
+                            )
+                            if not sub_certs.overall_certified:
+                                sub_ok = False
 
                     group_boxes = [b for sid in sub_iids for b in parts[sid].world_boxes]
                     if verify_insertion:
@@ -3132,36 +3565,29 @@ class TopoBrickKernel:
         else:
             pert_cert = PerturbationMechanicsCert()
 
-        # Optional Model Agreement & Calibrated Sub-Stud Polygon Check
+        # Optional Model Agreement & Calibrated Sub-Stud Polygon Check (`F9`: strictly analytical model agreement!)
         sub_res_cached = None
         if verify_calibrated_substud_physics or verify_model_agreement:
             from topo_brick.evaluation.physical_validation import CalibratedSubStudPolygonValidator
 
             sub_res_cached = CalibratedSubStudPolygonValidator().evaluate_assembly_state(assembly)
 
-        if verify_model_agreement and sub_res_cached is not None:
+        if (verify_calibrated_substud_physics or verify_model_agreement) and sub_res_cached is not None:
             agreed = bool(sub_res_cached.is_stable == eq.is_stable)
+            cal_pass = bool(agreed and sub_res_cached.is_stable) if verify_calibrated_substud_physics else agreed
             agree_cert = ModelAgreementCert(
-                status=CertStatus.PASS if agreed else CertStatus.FAIL,
+                status=CertStatus.PASS if cal_pass else CertStatus.FAIL,
                 agreed_with_substud_polygon=agreed,
                 kernel_lp_stable=bool(eq.is_stable),
                 substud_polygon_stable=bool(sub_res_cached.is_stable),
                 substud_peak_utilization=float(sub_res_cached.peak_utilization),
+                calibration_reference="cmu_stablelego_8hw_holdout120_v1",
             )
         else:
             agree_cert = ModelAgreementCert()
 
-        if verify_calibrated_substud_physics and sub_res_cached is not None:
-            phys_cert = PhysicalValidationCert(
-                status=CertStatus.PASS if sub_res_cached.is_stable else CertStatus.FAIL,
-                simulator_or_rig="calibrated_substud_polygon_lp_cmu_stablelego_v1",
-                notes=(
-                    f"Calibrated sub-stud contact-polygon LP (CMU StableLego hardware suite): "
-                    f"peak_utilization={sub_res_cached.peak_utilization:.4f} (external MuJoCo/hardware rig not run)."
-                ),
-            )
-        else:
-            phys_cert = PhysicalValidationCert(status=CertStatus.UNKNOWN)
+        phys_cert = self._evaluate_physical_validation_cert(external_physical_observation)
+        inv_cert = self._evaluate_inventory_cert(parts, inventory_counts, colored_inventory)
 
         return CertificateBundle(
             geometry=geom_cert,
@@ -3172,6 +3598,7 @@ class TopoBrickKernel:
             perturbation_mechanics=pert_cert,
             model_agreement=agree_cert,
             loop_closure=LoopClosureCert(),
+            inventory=inv_cert,
             foundation_policy=fp_enum.value,
             execution_trace=eff_trace,
         )
@@ -3393,56 +3820,84 @@ class TopoBrickKernel:
         locked_instance_ids: FrozenSet[int] = frozenset(),
         locked_world_boxes: Tuple[LDUBox, ...] = (),
         inventory_counts: Optional[Dict[str, int]] = None,
+        colored_inventory: Optional[Any] = None,
+        forbidden_support_boxes: Sequence[LDUBox] = (),
         support_policy: str = "none",
         min_retained_iou: Optional[float] = None,
         max_deleted_volume_ratio: Optional[float] = None,
         foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
-        time_budget_ms: float = 500.0,
+        time_budget_ms: float = 1200.0,
         max_constructive_steps: int = 1,
     ) -> KernelRepairResult:
         """
-        Task-Aware Constrained Repair (`R8-WS2` & `R9-WS3` §5.6 domain-scoped contract):
-          1. Stage 1 (`REMERGE_SEAM` / `ADD_COUNTERWEIGHT`, 0 deletions): Searches up to
-             `max_constructive_steps` constructive additions (1-step local search by default;
-             multi-step counterweight/tie-plate beam search when `max_constructive_steps >= 2`).
-          2. Stage 2 (`ADD_EXTERNAL_SUPPORT`, 0 deletions): When `support_policy ==
-             "minimal_permanent_pillars"`, synthesizes minimal permanent `1x1` support columns
-             under cantilevered anti-studs and canonicalizes bottom-up execution order.
-          3. Stage 3 (`DELETE_NONLOCKED_PART`): Prunes only non-locked parts while strictly
-             enforcing `locked_instance_ids`, `locked_world_boxes`, `min_retained_iou`,
-             `max_deleted_volume_ratio`, and `inventory_counts`.
-          4. Domain-Scoped Outcome Semantics (`R9-WS3` §5.6): Emits `PROVEN_INFEASIBLE` ONLY
-             when a mathematical domain impossibility proof holds over the declared edit,
-             inventory, support, and fidelity domain; otherwise emits `INCONCLUSIVE` (or
-             `PARTIAL_OR_TIMEOUT` if `time_budget_ms` expired) when bounded search does not
-             locate a certified repair.
+        Task-Aware Constrained Repair (`R8-WS2`, `R9-WS3` & `Phase 12 F3` contract):
+        Threads `ValidatedConstraintSpec` (`inventory_counts`, `colored_inventory`,
+        `forbidden_support_boxes`, `allowed_part_ids`, `foundation_policy`) uniformly across
+        initial certification and Stages 1–3, computing `RepairAuditReport` booleans from
+        verified state rather than literal `True`.
         """
+        # Ensure lazy compiled catalog is loaded before starting `time_budget_ms` clock
+        _ = is_known_part_id("3005")
         t0 = time.perf_counter()
-        kit = tuple(allowed_part_ids) if allowed_part_ids is not None else self.default_kit
-        fp_enum = (
-            foundation_policy
-            if isinstance(foundation_policy, FoundationPolicy)
-            else FoundationPolicy(str(foundation_policy))
+        cspec = ValidatedConstraintSpec.from_args(
+            allowed_part_ids=allowed_part_ids,
+            inventory_counts=inventory_counts,
+            colored_inventory=colored_inventory,
+            foundation_policy=foundation_policy,
+            support_policy=support_policy,
+            forbidden_support_boxes=forbidden_support_boxes,
+            min_retained_iou=min_retained_iou,
+            max_deleted_volume_ratio=max_deleted_volume_ratio,
         )
+        kit = cspec.allowed_part_ids if cspec.allowed_part_ids is not None else self.default_kit
+        explicit_kit_set: Optional[Set[str]] = set(cspec.allowed_part_ids) if cspec.allowed_part_ids is not None else None
+        fp_enum = cspec.foundation_policy
+
+        orig_parts = list(assembly.placed_parts.values())
+        orig_total_vol = max(sum(b.volume_ldu3 for p in orig_parts for b in p.world_boxes), 1)
+        locked_ids_early: Set[int] = set(locked_instance_ids)
+        if locked_world_boxes:
+            for p in orig_parts:
+                if any(pb.intersects(lb) for pb in p.world_boxes for lb in locked_world_boxes):
+                    locked_ids_early.add(p.instance_id)
+        locked_part_poses: Set[Tuple[str, Any]] = {
+            (p.part_id, p.pose) for p in orig_parts if p.instance_id in locked_ids_early
+        }
+
+        def _violates_forbidden_or_kit(st_chk: AssemblyState) -> bool:
+            for pl_c in st_chk.placed_parts.values():
+                if (
+                    explicit_kit_set is not None
+                    and pl_c.part_id not in explicit_kit_set
+                    and (pl_c.part_id, pl_c.pose) not in locked_part_poses
+                ):
+                    return True
+                if cspec.forbidden_support_boxes and any(
+                    wb.intersects(fb) for wb in pl_c.world_boxes for fb in cspec.forbidden_support_boxes
+                ):
+                    return True
+            return False
+
         init_certs = self.certify(
             assembly,
             target_field=target_field,
             verify_prefix=True,
             verify_insertion=True,
             foundation_policy=fp_enum,
+            inventory_counts=cspec.inventory_counts,
+            colored_inventory=cspec.colored_inventory,
         )
         init_iou = float(init_certs.geometry.target_iou)
-        orig_parts = list(assembly.placed_parts.values())
-        orig_total_vol = max(sum(b.volume_ldu3 for p in orig_parts for b in p.world_boxes), 1)
+        init_inv_ok = init_certs.inventory.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
 
-        if init_certs.overall_certified:
+        if init_certs.overall_certified and not _violates_forbidden_or_kit(assembly):
             audit_ok = RepairAuditReport(
                 initial_iou=init_iou,
                 repaired_iou=init_iou,
                 retained_volume_ratio=1.0,
                 deleted_volume_ratio=0.0,
                 locked_features_preserved=True,
-                inventory_respected=True,
+                inventory_respected=init_inv_ok,
                 support_volume_added_ldu3=0,
                 applied_edit_types=(),
             )
@@ -3459,20 +3914,31 @@ class TopoBrickKernel:
                 audit=audit_ok,
             )
 
-        locked_ids: Set[int] = set(locked_instance_ids)
-        if locked_world_boxes:
-            for p in orig_parts:
-                if any(pb.intersects(lb) for pb in p.world_boxes for lb in locked_world_boxes):
-                    locked_ids.add(p.instance_id)
+        locked_ids: Set[int] = locked_ids_early
 
         eff_min_iou = (
-            float(min_retained_iou)
-            if min_retained_iou is not None
+            float(cspec.min_retained_iou)
+            if cspec.min_retained_iou is not None
             else (0.85 * init_iou if target_field is not None else 0.0)
         )
-        rem_inv: Optional[Dict[str, int]] = (
-            dict(inventory_counts) if inventory_counts is not None else None
+        eff_total_inv: Optional[Dict[str, int]] = (
+            dict(cspec.inventory_counts)
+            if cspec.inventory_counts is not None
+            else (
+                cspec.colored_inventory.marginal_mold_counts()
+                if cspec.colored_inventory is not None and hasattr(cspec.colored_inventory, "marginal_mold_counts")
+                else None
+            )
         )
+        rem_inv: Optional[Dict[str, int]] = None
+        if eff_total_inv is not None:
+            used_orig: Dict[str, int] = {}
+            for p_u in orig_parts:
+                used_orig[p_u.part_id] = used_orig.get(p_u.part_id, 0) + 1
+            rem_inv = {
+                pid_k: max(0, int(lim_v) - used_orig.get(pid_k, 0))
+                for pid_k, lim_v in eff_total_inv.items()
+            }
 
         def _can_use_edit(edit_name: str) -> bool:
             return allowed_edits is None or edit_name in allowed_edits
@@ -3480,12 +3946,36 @@ class TopoBrickKernel:
         def _within_budget() -> bool:
             return ((time.perf_counter() - t0) * 1000.0) < float(time_budget_ms)
 
+        stage1_cap_ms = (
+            0.55 * float(time_budget_ms)
+            if cspec.support_policy == "minimal_permanent_pillars"
+            else 0.85 * float(time_budget_ms)
+        )
+
+        def _within_stage1_budget() -> bool:
+            return ((time.perf_counter() - t0) * 1000.0) < stage1_cap_ms
+
         def _prove_repair_domain_infeasible() -> Optional[str]:
             """
             Return an analytical impossibility proof tag ONLY when NO assembly in the declared
             `(locked_ids, allowed_edits, inventory_counts, support_policy, eff_min_iou,
-            max_deleted_volume_ratio)` domain can satisfy `overall_certified` (`R9-WS3` §5.6).
+            max_deleted_volume_ratio)` domain can satisfy `overall_certified` (`R9-WS3` §5.6 + `F3`).
             """
+            if len(orig_parts) > 0 and eff_total_inv is not None and sum(max(0, v) for v in eff_total_inv.values()) == 0:
+                return "zero_total_inventory_budget"
+            if eff_total_inv is not None and locked_ids:
+                locked_mold_used: Dict[str, int] = {}
+                for p_l in orig_parts:
+                    if p_l.instance_id in locked_ids:
+                        locked_mold_used[p_l.part_id] = locked_mold_used.get(p_l.part_id, 0) + 1
+                if any(cnt > int(eff_total_inv.get(pid_l, 0)) for pid_l, cnt in locked_mold_used.items()):
+                    return "locked_parts_exceed_inventory_budget"
+            if cspec.forbidden_support_boxes and any(
+                p_l.instance_id in locked_ids
+                and any(wb.intersects(fb) for wb in p_l.world_boxes for fb in cspec.forbidden_support_boxes)
+                for p_l in orig_parts
+            ):
+                return "locked_parts_intersect_forbidden_boxes"
             # 1. Mutual collision between two locked parts cannot be resolved by any allowed edit
             if any(
                 u in locked_ids and v in locked_ids
@@ -3494,8 +3984,8 @@ class TopoBrickKernel:
                 return "locked_parts_mutually_colliding"
             if (
                 not init_certs.geometry.collision_free
-                and max_deleted_volume_ratio is not None
-                and float(max_deleted_volume_ratio) <= 0.0
+                and cspec.max_deleted_volume_ratio is not None
+                and float(cspec.max_deleted_volume_ratio) <= 0.0
                 and not _can_use_edit(RepairEditType.REORIENT_PART.value)
             ):
                 return "collision_present_with_zero_deletion_budget"
@@ -3700,11 +4190,11 @@ class TopoBrickKernel:
                 )
             ]
             for _step_c in range(max_c_steps):
-                if not _within_budget() or not beam_nodes:
+                if not _within_stage1_budget() or not beam_nodes:
                     break
                 next_beam: List[Tuple[float, AssemblyState, Optional[Dict[str, int]], int, int, Tuple[str, ...]]] = []
                 for _, cur_st, cur_inv, cur_added, cur_vol, cur_tags in beam_nodes:
-                    if not _within_budget():
+                    if not _within_stage1_budget():
                         break
                     cand_kit = tuple(
                         pid for pid in kit if (cur_inv is None or cur_inv.get(pid, 0) > 0)
@@ -3732,7 +4222,7 @@ class TopoBrickKernel:
                     scored_cw.sort(key=lambda x: x[0], reverse=True)
 
                     for _, c_cw in scored_cw[:16]:
-                        if not _within_budget():
+                        if not _within_stage1_budget():
                             break
                         if cur_inv is not None and cur_inv.get(c_cw.part_id, 0) <= 0:
                             continue
@@ -3749,6 +4239,8 @@ class TopoBrickKernel:
                             verify_prefix=True,
                             verify_insertion=True,
                             foundation_policy=fp_enum,
+                            inventory_counts=cspec.inventory_counts,
+                            colored_inventory=cspec.colored_inventory,
                         )
                         if c_chk.static_mechanics.is_stable and not c_chk.overall_certified:
                             # Synthesize a prefix-stable, monotone-insertable assembly order (e.g. placing
@@ -3804,6 +4296,8 @@ class TopoBrickKernel:
                                     verify_prefix=True,
                                     verify_insertion=True,
                                     foundation_policy=fp_enum,
+                                    inventory_counts=cspec.inventory_counts,
+                                    colored_inventory=cspec.colored_inventory,
                                 )
                                 if c_ord.overall_certified:
                                     t_next = ord_st
@@ -3816,14 +4310,20 @@ class TopoBrickKernel:
                             else RepairEditType.ADD_COUNTERWEIGHT.value
                         )
                         new_tags = tuple(dict.fromkeys(cur_tags + (edit_tag,)))
-                        if c_chk.overall_certified and c_chk.geometry.target_iou >= eff_min_iou - 1e-6:
+                        if (
+                            c_chk.overall_certified
+                            and not _violates_forbidden_or_kit(t_next)
+                            and c_chk.geometry.target_iou >= eff_min_iou - 1e-6
+                        ):
                             audit_cw = RepairAuditReport(
                                 initial_iou=init_iou,
                                 repaired_iou=float(c_chk.geometry.target_iou),
                                 retained_volume_ratio=1.0,
                                 deleted_volume_ratio=0.0,
                                 locked_features_preserved=True,
-                                inventory_respected=True,
+                                inventory_respected=(
+                                    c_chk.inventory.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
+                                ),
                                 support_volume_added_ldu3=new_vol,
                                 applied_edit_types=new_tags,
                             )
@@ -3897,11 +4397,14 @@ class TopoBrickKernel:
                     verify_prefix=True,
                     verify_insertion=True,
                     foundation_policy=fp_enum,
+                    inventory_counts=cspec.inventory_counts,
+                    colored_inventory=cspec.colored_inventory,
                 )
                 if (
                     sup_added > 0
                     and ordered_sup.num_parts == trial_sup.num_parts
                     and c_sup_iter.overall_certified
+                    and not _violates_forbidden_or_kit(ordered_sup)
                     and c_sup_iter.geometry.target_iou >= eff_min_iou - 1e-6
                 ):
                     audit_sup = RepairAuditReport(
@@ -3910,7 +4413,9 @@ class TopoBrickKernel:
                         retained_volume_ratio=1.0,
                         deleted_volume_ratio=0.0,
                         locked_features_preserved=True,
-                        inventory_respected=True,
+                        inventory_respected=(
+                            c_sup_iter.inventory.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
+                        ),
                         support_volume_added_ldu3=sup_vol,
                         applied_edit_types=(RepairEditType.ADD_EXTERNAL_SUPPORT.value,),
                     )
@@ -3952,12 +4457,12 @@ class TopoBrickKernel:
                 )
                 placed_col = False
                 for x0_s, y0_s, z_top_s in open_antis:
-                    if all(
-                        not trial_sup.check_boxes_collision(
-                            (LDUBox(x0_s, y0_s, zp, x0_s + 20, y0_s + 20, zp + 24),)
-                        )
-                        for zp in range(min_z_s, z_top_s, 24)
+                    col_boxes = [LDUBox(x0_s, y0_s, zp, x0_s + 20, y0_s + 20, zp + 24) for zp in range(min_z_s, z_top_s, 24)]
+                    if cspec.forbidden_support_boxes and any(
+                        cb_f.intersects(fb) for cb_f in col_boxes for fb in cspec.forbidden_support_boxes
                     ):
+                        continue
+                    if all(not trial_sup.check_boxes_collision((cb_f,)) for cb_f in col_boxes):
                         n_need = (z_top_s - min_z_s) // 24
                         if rem_sup_inv is not None and rem_sup_inv.get("3005", 0) < n_need:
                             continue
@@ -3987,7 +4492,7 @@ class TopoBrickKernel:
                 retained_volume_ratio=1.0,
                 deleted_volume_ratio=0.0,
                 locked_features_preserved=True,
-                inventory_respected=True,
+                inventory_respected=init_inv_ok,
                 support_volume_added_ldu3=0,
                 applied_edit_types=(),
                 rejection_reason=(
@@ -4014,10 +4519,28 @@ class TopoBrickKernel:
         removed_vol = 0
         parts_removed = 0
         locked_failed = False
+        retained_mold_used: Dict[str, int] = {}
+        retained_color_used: Dict[Tuple[str, int], int] = {}
 
         for p in orig_parts:
             trial = copy.deepcopy(repaired)
             try:
+                if (
+                    explicit_kit_set is not None
+                    and p.part_id not in explicit_kit_set
+                    and p.instance_id not in locked_ids
+                ):
+                    raise ValueError("Part outside allowed_part_ids")
+                if cspec.forbidden_support_boxes and any(
+                    wb.intersects(fb) for wb in p.world_boxes for fb in cspec.forbidden_support_boxes
+                ):
+                    raise ValueError("Intersects forbidden_support_boxes")
+                if eff_total_inv is not None and retained_mold_used.get(p.part_id, 0) + 1 > int(eff_total_inv.get(p.part_id, 0)):
+                    raise ValueError("Exceeds inventory_counts")
+                if cspec.colored_inventory is not None and hasattr(cspec.colored_inventory, "get_count"):
+                    ck_p = (p.part_id, int(p.color_id))
+                    if retained_color_used.get(ck_p, 0) + 1 > int(cspec.colored_inventory.get_count(p.part_id, int(p.color_id))):
+                        raise ValueError("Exceeds colored_inventory")
                 trial.place_root_part(
                     p.part_id, p.pose, is_grounded=p.is_grounded, color_id=p.color_id
                 )
@@ -4027,6 +4550,9 @@ class TopoBrickKernel:
                 if not self.validator.evaluate(trial, foundation_policy=fp_enum).is_stable:
                     raise ValueError("Unstable")
                 repaired = trial
+                retained_mold_used[p.part_id] = retained_mold_used.get(p.part_id, 0) + 1
+                ck_ok = (p.part_id, int(p.color_id))
+                retained_color_used[ck_ok] = retained_color_used.get(ck_ok, 0) + 1
             except ValueError:
                 if p.instance_id in locked_ids:
                     locked_failed = True
@@ -4043,7 +4569,7 @@ class TopoBrickKernel:
                 retained_volume_ratio=1.0,
                 deleted_volume_ratio=0.0,
                 locked_features_preserved=False,
-                inventory_respected=True,
+                inventory_respected=init_inv_ok,
                 support_volume_added_ldu3=0,
                 applied_edit_types=(),
                 rejection_reason=(
@@ -4064,9 +4590,17 @@ class TopoBrickKernel:
                 audit=audit_lf,
             )
 
+        stage3_rem_inv: Optional[Dict[str, int]] = (
+            {
+                pid_k: max(0, int(lim_v) - retained_mold_used.get(pid_k, 0))
+                for pid_k, lim_v in eff_total_inv.items()
+            }
+            if eff_total_inv is not None
+            else None
+        )
         parts_added = 0
         added_vol = 0
-        if (target_field is not None or deferred_parts) and _within_budget():
+        if (target_field is not None or deferred_parts) and repaired.num_parts > 0 and _within_budget():
             effective_target = (
                 target_field
                 if target_field is not None
@@ -4079,11 +4613,15 @@ class TopoBrickKernel:
                 pool,
                 effective_target,
                 max_bricks=max(4, len(deferred_parts)),
-                inventory_counts=rem_inv,
+                inventory_counts=stage3_rem_inv,
             )
             for idx in sel_indices:
                 cand = pool.candidates[idx]
-                if rem_inv is not None and rem_inv.get(cand.part_id, 0) <= 0:
+                if stage3_rem_inv is not None and stage3_rem_inv.get(cand.part_id, 0) <= 0:
+                    continue
+                if cspec.forbidden_support_boxes and any(
+                    wb.intersects(fb) for wb in cand.world_boxes for fb in cspec.forbidden_support_boxes
+                ):
                     continue
                 trial = copy.deepcopy(repaired)
                 try:
@@ -4092,10 +4630,36 @@ class TopoBrickKernel:
                         repaired = trial
                         parts_added += 1
                         added_vol += sum(b.volume_ldu3 for b in cand.world_boxes)
-                        if rem_inv is not None:
-                            rem_inv[cand.part_id] -= 1
+                        if stage3_rem_inv is not None:
+                            stage3_rem_inv[cand.part_id] -= 1
                 except ValueError:
                     continue
+
+        if len(orig_parts) > 0 and repaired.num_parts == 0:
+            fb_status, proof_tag = _fallback_unsolved_status()
+            audit_empty = RepairAuditReport(
+                initial_iou=init_iou,
+                repaired_iou=0.0,
+                retained_volume_ratio=0.0,
+                deleted_volume_ratio=1.0,
+                locked_features_preserved=(len(locked_ids) == 0),
+                inventory_respected=init_inv_ok,
+                support_volume_added_ldu3=0,
+                applied_edit_types=(RepairEditType.DELETE_NONLOCKED_PART.value,),
+                rejection_reason=proof_tag or "pruning_eliminated_all_parts_in_assembly",
+            )
+            return KernelRepairResult(
+                status=fb_status,
+                repaired_assembly=copy.deepcopy(assembly),
+                initial_certificates=init_certs,
+                repaired_certificates=init_certs,
+                parts_removed=0,
+                parts_added=0,
+                parts_reoriented=0,
+                edit_volume_ldu3=0,
+                wall_clock_ms=(time.perf_counter() - t0) * 1000.0,
+                audit=audit_empty,
+            )
 
         rep_certs = self.certify(
             repaired,
@@ -4103,12 +4667,15 @@ class TopoBrickKernel:
             verify_prefix=True,
             verify_insertion=True,
             foundation_policy=fp_enum,
+            inventory_counts=cspec.inventory_counts,
+            colored_inventory=cspec.colored_inventory,
         )
+        rep_inv_ok = rep_certs.inventory.status in (CertStatus.PASS, CertStatus.NOT_APPLICABLE)
         del_ratio = float(removed_vol) / float(orig_total_vol)
         ret_ratio = max(0.0, 1.0 - del_ratio)
         fidelity_ok = float(rep_certs.geometry.target_iou) >= eff_min_iou - 1e-6
         del_budget_ok = (
-            max_deleted_volume_ratio is None or del_ratio <= float(max_deleted_volume_ratio) + 1e-6
+            cspec.max_deleted_volume_ratio is None or del_ratio <= float(cspec.max_deleted_volume_ratio) + 1e-6
         )
         if not fidelity_ok or not del_budget_ok:
             fb_status, proof_tag = _fallback_unsolved_status()
@@ -4118,7 +4685,7 @@ class TopoBrickKernel:
                 retained_volume_ratio=ret_ratio,
                 deleted_volume_ratio=del_ratio,
                 locked_features_preserved=True,
-                inventory_respected=True,
+                inventory_respected=rep_inv_ok,
                 support_volume_added_ldu3=0,
                 applied_edit_types=(RepairEditType.DELETE_NONLOCKED_PART.value,),
                 rejection_reason=(
@@ -4139,7 +4706,7 @@ class TopoBrickKernel:
                 audit=audit_rej,
             )
 
-        if rep_certs.overall_certified:
+        if rep_certs.overall_certified and not _violates_forbidden_or_kit(repaired):
             status = KernelResultStatus.COMPLETED_CERTIFIED
         else:
             status, _ = _fallback_unsolved_status()
@@ -4154,7 +4721,7 @@ class TopoBrickKernel:
             retained_volume_ratio=ret_ratio,
             deleted_volume_ratio=del_ratio,
             locked_features_preserved=True,
-            inventory_respected=True,
+            inventory_respected=rep_inv_ok,
             support_volume_added_ldu3=0,
             applied_edit_types=tuple(applied_ops),
         )
@@ -4263,6 +4830,11 @@ class TopoBrickKernel:
         semantic_style_hint: Optional[str] = None,
         vertex_colors_rgb: Optional[np.ndarray] = None,
         verts_ldu: Optional[np.ndarray] = None,
+        colored_inventory: Optional[Any] = None,
+        hollow_shell_policy: Optional[Any] = None,
+        subassembly_graph: Optional[Sequence[Any]] = None,
+        landmark_requests: Sequence[Any] = (),
+        view_priority: Optional[Any] = None,
     ) -> KernelRealizeResult:
         """
         WS-1B: Genuinely Blind Whole-Target Realization (`TopoBrickKernel.realize`).
@@ -4280,7 +4852,21 @@ class TopoBrickKernel:
         max_fr_ports = 0
         tot_cands_gen = 0
         tot_conf_edges = 0
-        kit = tuple(allowed_part_ids) if allowed_part_ids is not None else self.default_kit
+        eff_init_inv: Optional[Dict[str, int]] = None
+        if colored_inventory is not None and hasattr(colored_inventory, "marginal_mold_counts"):
+            eff_init_inv = colored_inventory.marginal_mold_counts()
+            if inventory_counts is not None:
+                for k_i, v_i in inventory_counts.items():
+                    eff_init_inv[k_i] = min(eff_init_inv.get(k_i, int(v_i)), int(v_i))
+        elif inventory_counts is not None:
+            eff_init_inv = dict(inventory_counts)
+
+        if allowed_part_ids is not None:
+            kit = tuple(allowed_part_ids)
+        elif eff_init_inv is not None:
+            kit = tuple(sorted(pid for pid, q in eff_init_inv.items() if int(q) > 0 and is_known_part_id(pid))) or self.default_kit
+        else:
+            kit = self.default_kit
         for pid in kit:
             if not is_known_part_id(pid):
                 empty_st = AssemblyState()
@@ -4323,7 +4909,7 @@ class TopoBrickKernel:
         target_vol = int(target_field.total_volume_ldu3)
         bounds = target_field.occupied_bounds_ldu()
         xmin, ymin, zmin, xmax, ymax, zmax = bounds
-        if target_vol <= 0 or zmax <= zmin:
+        if (target_vol <= 0 or zmax <= zmin) and subassembly_graph is None and adaptive_mesh_target is None:
             empty_st = AssemblyState()
             certs_e = self.certify(empty_st, target_field=target_field, verify_prefix=False, verify_insertion=False)
             rec_e = MinimumBuildRecord(
@@ -4390,7 +4976,7 @@ class TopoBrickKernel:
         t_cands_acc = 0.0
         t_sel_acc = 0.0
         t_rep_acc = 0.0
-        rem_inv: Optional[Dict[str, int]] = dict(inventory_counts) if inventory_counts is not None else None
+        rem_inv: Optional[Dict[str, int]] = dict(eff_init_inv) if eff_init_inv is not None else None
 
         def _active_kit() -> Tuple[str, ...]:
             if rem_inv is None:
@@ -4402,6 +4988,8 @@ class TopoBrickKernel:
         eff_cert_target_field: SparseTiledTargetField | TargetShapeBoxes = target_field
         min_recall_gate = 0.90
         open_cat_diag: Optional[Any] = None
+        comp_mpd_text: Optional[str] = None
+        explicit_exec_trace: Optional[ExecutionTrace] = None
 
         from topo_brick.kernel.adaptive_surface_and_macro_planner import (
             AdaptiveSurfaceTarget,
@@ -4409,7 +4997,55 @@ class TopoBrickKernel:
             realize_adaptive_plate_slope_surface,
         )
 
-        if surface_refinement == "open_catalog_sculpted" or part_retrieval == "open_catalog_top_k":
+        open_cat_diag: Optional[Any] = None
+        phase11_sculpt_trigger = (
+            (hollow_shell_policy is not None and getattr(hollow_shell_policy, "enabled", False))
+            or view_priority is not None
+            or bool(landmark_requests)
+            or (colored_inventory is not None and adaptive_mesh_target is not None)
+        )
+
+        if subassembly_graph is not None:
+            from topo_brick.kernel.subassembly_realizer import realize_compositional_mpd
+
+            t_s0 = time.perf_counter()
+            fp_comp = (
+                foundation_policy
+                if isinstance(foundation_policy, FoundationPolicy)
+                else FoundationPolicy(str(foundation_policy))
+            )
+            comp_res = realize_compositional_mpd(
+                kernel=self,
+                subassembly_graph=subassembly_graph,
+                allowed_part_ids=allowed_part_ids,
+                part_retrieval=(
+                    "open_catalog_top_k"
+                    if (part_retrieval == "open_catalog_top_k" or allowed_part_ids is None)
+                    else part_retrieval
+                ),
+                retrieval_top_k=retrieval_top_k,
+                license_filter=license_filter,
+                semantic_style_hint=semantic_style_hint,
+                inventory_counts=rem_inv,
+                colored_inventory=colored_inventory,
+                landmark_requests=landmark_requests,
+                view_priority=view_priority,
+                support_policy=support_policy if support_policy != "none" else "minimal_permanent_pillars",
+                foundation_policy=fp_comp,
+            )
+            state = comp_res.assembly
+            explicit_exec_trace = comp_res.execution_trace
+            comp_mpd_text = comp_res.mpd_text
+            if comp_res.combined_target_field.total_volume_ldu3 > 0:
+                eff_cert_target_field = comp_res.combined_target_field
+            min_recall_gate = 0.35
+            t_sel_acc += (time.perf_counter() - t_s0) * 1000.0
+            extra_waves = 0
+        elif (
+            surface_refinement == "open_catalog_sculpted"
+            or part_retrieval == "open_catalog_top_k"
+            or (surface_refinement == "none" and phase11_sculpt_trigger)
+        ):
             from topo_brick.kernel.open_catalog_realizer import realize_open_catalog_sculpted
 
             t_s0 = time.perf_counter()
@@ -4462,9 +5098,13 @@ class TopoBrickKernel:
                 vertex_colors_rgb=vertex_colors_rgb,
                 verts_ldu=verts_ldu,
                 inventory_counts=rem_inv,
-                support_policy=support_policy,
+                support_policy=support_policy if support_policy != "none" or not phase11_sculpt_trigger else "minimal_permanent_pillars",
                 foundation_policy=fp_oc,
                 forbidden_support_boxes=forbidden_support_boxes,
+                colored_inventory=colored_inventory,
+                hollow_shell_policy=hollow_shell_policy,
+                view_priority=view_priority,
+                landmark_requests=landmark_requests,
             )
             if fine_oc_tf.total_volume_ldu3 > 0:
                 eff_cert_target_field = fine_oc_tf
@@ -4973,7 +5613,45 @@ class TopoBrickKernel:
             elif not macro_succeeded:
                 extra_waves = 0
 
+        # Phase 11 Ext 1: If `colored_inventory` was passed to a non-sculpted rectangular solver path
+        # (`open_cat_diag is None and subassembly_graph is None`), run two-zone chromatic allocation + splits now!
+        if (
+            colored_inventory is not None
+            and open_cat_diag is None
+            and subassembly_graph is None
+            and state.num_parts > 0
+        ):
+            from topo_brick.kernel.colored_inventory_allocator import (
+                allocate_inventory_colors_min_cost,
+                apply_chromatic_same_footprint_splits,
+            )
+
+            fp_ch = (
+                foundation_policy
+                if isinstance(foundation_policy, FoundationPolicy)
+                else FoundationPolicy(str(foundation_policy))
+            )
+            alloc_rect = allocate_inventory_colors_min_cost(
+                state, colored_inventory, verts_ldu=verts_ldu, vertex_colors_rgb=vertex_colors_rgb
+            )
+            alloc_rect = apply_chromatic_same_footprint_splits(
+                state,
+                alloc_rect,
+                colored_inventory,
+                verts_ldu,
+                vertex_colors_rgb,
+                self.validator,
+                fp_ch,
+            )
+            chrom_summary_obj = alloc_rect
+            precomputed_certs = None
+        else:
+            chrom_summary_obj = getattr(open_cat_diag, "chromatic_allocation", None)
+
         t_cert0 = time.perf_counter()
+        if precomputed_certs is not None and (eff_init_inv is not None or colored_inventory is not None):
+            # Re-certify with finite inventory bounds if macro-block shortcut ran without `InventoryCert`
+            precomputed_certs = None
         certs = (
             precomputed_certs
             if precomputed_certs is not None
@@ -4982,10 +5660,26 @@ class TopoBrickKernel:
                 target_field=eff_cert_target_field,
                 verify_prefix=True,
                 verify_insertion=True,
+                execution_trace=explicit_exec_trace,
                 foundation_policy=foundation_policy,
                 verify_perturbation=verify_perturbation,
+                inventory_counts=eff_init_inv,
+                colored_inventory=colored_inventory,
             )
         )
+        if chrom_summary_obj is not None:
+            from dataclasses import replace as dc_replace
+
+            certs = dc_replace(
+                certs,
+                inventory=dc_replace(
+                    certs.inventory,
+                    skin_mean_delta_e00=float(chrom_summary_obj.skin_mean_delta_e00),
+                    fifo_baseline_skin_mean_delta_e00=float(chrom_summary_obj.fifo_baseline_skin_mean_delta_e00),
+                    core_parts_count=int(chrom_summary_obj.num_core_parts),
+                    chromatic_splits_accepted=int(chrom_summary_obj.splits_accepted),
+                ),
+            )
         t_cert_total = t_cert_pre_ms if precomputed_certs is not None else (time.perf_counter() - t_cert0) * 1000.0
         t_mech_ms = float(certs.static_mechanics.solve_time_ms)
         t_exec_ms = max(0.0, t_cert_total - t_mech_ms)
@@ -4996,6 +5690,26 @@ class TopoBrickKernel:
             if (certs.overall_certified and coverage_ok)
             else KernelResultStatus.PARTIAL_OR_TIMEOUT
         )
+        shortfall_rep: Optional[Any] = None
+        if eff_init_inv is not None and status != KernelResultStatus.COMPLETED_CERTIFIED:
+            from topo_brick.kernel.colored_inventory_allocator import build_inventory_shortfall_report
+
+            used_molds_cur: Dict[str, int] = {}
+            for p_u in state.placed_parts.values():
+                used_molds_cur[p_u.part_id] = used_molds_cur.get(p_u.part_id, 0) + 1
+            rem_molds_cur = {
+                pid_k: max(0, int(q_k) - used_molds_cur.get(pid_k, 0))
+                for pid_k, q_k in eff_init_inv.items()
+            }
+            shortfall_rep = build_inventory_shortfall_report(
+                required_target_volume_ldu3=int(eff_cert_target_field.total_volume_ldu3),
+                state=state,
+                initial_inventory_counts=eff_init_inv,
+                remaining_inventory_counts=rem_molds_cur,
+                colored_inventory=colored_inventory,
+            )
+            if not shortfall_rep.is_volume_sufficient:
+                status = KernelResultStatus.PROVEN_INFEASIBLE
         total_courses = len(z_bands) + extra_waves
         n_tiles = int(getattr(target_field, "num_allocated_tiles", 0))
         tile_mib = float(n_tiles * (614400 * 4 + 76800)) / (1024.0 * 1024.0)
@@ -5052,6 +5766,8 @@ class TopoBrickKernel:
             realization_mode="blind",
             open_catalog_diagnostics=open_cat_diag,
             evaluated_target_field=eff_cert_target_field,
+            inventory_shortfall=shortfall_rep,
+            compositional_mpd_text=comp_mpd_text,
         )
 
     def realize_external_record(

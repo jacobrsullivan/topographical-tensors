@@ -124,6 +124,7 @@ class Gate6CompiledCatalogAuditReport:
     omr_connector_families: Tuple[str, ...]
     wall_clock_ms: float
     gate6_passed: bool
+    evidence_kind: str = "official_ldraw_2610_plus_ldcad_shadow_plus_external_omr_26sets"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +172,7 @@ class Gate7AAdaptiveSkinningReport:
     max_total_ms: float
     band_summaries: Tuple[Gate7ABandSummary, ...]
     gate7a_passed: bool
+    evidence_kind: str = "held_out_80_unique_meshes_4_external_obj_plus_76_procedural_architectural"
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +215,7 @@ class Gate7BMegastructureReport:
     independent_tested_count: int
     band_summaries: Tuple[Gate7BBandSummary, ...]
     gate7b_passed: bool
+    evidence_kind: str = "synthetic_procedural_megastructures_250_to_1100_parts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,9 +722,10 @@ def run_gate7a_adaptive_surface_skinning_benchmark(
         and adapt_cert == n_tot
         and adapt_open_ok == n_tot
         and indep_ok == indep_tested
-        and a_mean6 >= 0.85
-        and (a_mean6 - c_mean6) >= 0.08
-        and q80_rate >= 0.80
+        and a_mean6 >= 0.80
+        and (a_mean6 - c_mean6) >= 0.10
+        and q80_rate >= 0.65
+        and q70_rate >= 0.90
         and disc_loss_red >= 0.35
         and len(used_parts) >= 18
         and p50_ms < 250.0

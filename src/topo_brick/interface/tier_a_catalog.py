@@ -20,8 +20,10 @@ Provides:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from topo_brick.interface.brick_catalog import (
@@ -165,6 +167,34 @@ SET_10698_OFFICIAL_INVENTORY: Dict[str, int] = {
     "96874": 1,
     "99206": 1,
 }
+
+_SET_10698_REBRICKABLE_JSON_PATH: Path = (
+    Path(__file__).resolve().parent / "set_10698_1_rebrickable_inventory.json"
+)
+SET_10698_REBRICKABLE_MANIFEST: Dict[str, Any] = json.loads(
+    _SET_10698_REBRICKABLE_JSON_PATH.read_text(encoding="utf-8")
+)
+
+# Exact 33 LDraw palette colors in Rebrickable Official Inventory `102864` (v2) for Set `10698-1`
+SET_10698_33_LDRAW_COLORS: Tuple[int, ...] = tuple(
+    sorted({int(item["ldraw_color_id"]) for item in SET_10698_REBRICKABLE_MANIFEST["non_spare_items"]})
+)
+
+
+def _load_set_10698_rebrickable_colored_counts() -> Dict[Tuple[str, int], int]:
+    """
+    Load the exact official Rebrickable (`inventory_id=102864`, v2, `CC-BY-4.0`) non-spare
+    `(part_id, ldraw_color_id) -> quantity` manifest for LEGO Set `10698-1` (`225` rows,
+    `790` non-spare pieces across `108` molds and `33` LDraw colors).
+    """
+    out: Dict[Tuple[str, int], int] = {}
+    for item in SET_10698_REBRICKABLE_MANIFEST["non_spare_items"]:
+        key = (str(item["canonical_ldraw_part_id"]), int(item["ldraw_color_id"]))
+        out[key] = out.get(key, 0) + int(item["quantity"])
+    return out
+
+
+SET_10698_COLORED_COUNTS: Dict[Tuple[str, int], int] = _load_set_10698_rebrickable_colored_counts()
 
 
 def _make_tile_part(

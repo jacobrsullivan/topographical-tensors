@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this software, catalog pipeline, or manuscripts in your research, please cite it as below."
 title: "Topographical Tensors: Geometric Move-Potential Chess and Certified 3D Digital Brick Assembly"
-version: 5.1.0
-date-released: 2026-11-13
+version: 5.2.0
+date-released: 2026-11-21
 license: MIT
 repository-code: "https://github.com/jacobrsullivan/topographical-tensors"
 authors:

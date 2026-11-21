@@ -1,15 +1,15 @@
 # `topo-brick`: Frontier-Conditioned 3D Brick Assembly via Exact Lattice Constraints and Candidate-Pool Discrete Diffusion
 
-**Expert Onboarding & Technical Reference Document (`Stage 1–6` Foundation + `Phases 7–10` Universal Construction Kernel)**  
+**Expert Onboarding & Technical Reference Document (`Stage 1–6` Foundation + `Phases 7–12` Universal Construction Kernel)**  
 **Repository:** `topographical-tensors` (`src/topo_brick/`, `tests/test_topo_brick/`)
 
 > [!NOTE]
-> **Architecture & Verification Suite Navigation (`Gates 1–8B`):**  
-> This guide introduces the foundational lattice frame algebra, port manifold, 24-channel topographical frontier tensors, and course-planning foundations (`Stages 1–6`). For the complete Universal Construction Kernel (`TopoBrickKernel`), the `16,085`-part compiled LDraw `2610` + `CoACD` + LDCad Shadow catalog, online 29-D sculptural mold retrieval, sub-second `HierarchicalMacroBlockPlanner` (`263–952` pieces), and `Gates 1–8B` benchmarks, see:
-> * [`system-architecture-and-interfaces.md`](system-architecture-and-interfaces.md) — `TopoBrickKernel` APIs (`realize`, `repair`, `constrain`, `certify`) & planner-free `verify_certificate_independently()`
+> **Architecture & Verification Suite Navigation (`Gates 1–9D`, `v5.2.0`):**  
+> This guide introduces the foundational lattice frame algebra, port manifold, 24-channel topographical frontier tensors, and course-planning foundations (`Stages 1–6`). For the complete Universal Construction Kernel (`TopoBrickKernel`), the `16,085`-part compiled LDraw `2610` + `CoACD` (`6,831` parts) + LDCad Shadow catalog, online 29-D sculptural mold retrieval (`7,178` System molds -> `426` active / `1,499` pose signatures), finite colored inventories (`SET_10698_COLORED_INVENTORY`), ribbed hollow shells, compositional `.mpd` subassemblies, sub-second `HierarchicalMacroBlockPlanner` (`263–952` pieces), and `Gates 1–9D` benchmarks, see:
+> * [`system-architecture-and-interfaces.md`](system-architecture-and-interfaces.md) — `TopoBrickKernel` APIs (`realize`, `repair`, `constrain`, `certify`) & standalone `verify_certificate_independently()`
 > * [`model-architecture-and-component-design.md`](model-architecture-and-component-design.md) — `S1`/`S2` solvers, sculptural retrieval, `HierarchicalMacroBlockPlanner`, and neural components (`M1`–`M3`)
 > * [`data-architecture-and-pipeline.md`](data-architecture-and-pipeline.md) — `16,085`-part provenance tiers (`CC-BY-4.0` vs. `CC-BY-SA-4.0`), `CoACD` hulls, and benchmark funnels
-> * [`capability-assessment-review.md`](capability-assessment-review.md) & [`lego-project-overall-plan.md`](lego-project-overall-plan.md) — Complete `Gates 1–8B` metrics, scope boundaries, and SOTA comparisons
+> * [`capability-assessment-review.md`](capability-assessment-review.md), [`five-extensions.md`](five-extensions.md) & [`lego-project-overall-plan.md`](lego-project-overall-plan.md) — Complete `Gates 1–9D` metrics, `113`-test suite, scope boundaries, and SOTA comparisons
 >
 > *Trademark Disclaimer: LEGO® is a trademark of the LEGO Group of companies which does not sponsor, authorize, or endorse this software or research.*
 

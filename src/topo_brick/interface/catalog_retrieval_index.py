@@ -466,6 +466,11 @@ class CatalogRetrievalResult:
     license_filter: str
     query_wall_ms: float
 
+    @property
+    def essential_backbone_part_ids(self) -> Tuple[str, ...]:
+        """Explicit structural backbone mold IDs available independently of `top_k` (`F11`)."""
+        return self.backbone_part_ids
+
 
 def _build_c4_footprints(
     prim: BrickPrimitive,
@@ -813,6 +818,7 @@ class CatalogShapeRetrievalIndex:
         # Cache per-pose vectorized arrays
         self._pose_mold_idx = pose_mold_idx
         self._pose_rep_u64 = pose_rep_u64
+        self._pose_popcount_f32 = popcount_u64_array(pose_rep_u64).astype(np.float32)
         self._pose_normals_6d = pose_normals_6d
         self._buildable_is_cc4 = np.array(
             [e.license_tier == "cc_by_4_0" for e in self._buildable_entries], dtype=bool
@@ -824,9 +830,17 @@ class CatalogShapeRetrievalIndex:
             [e.height_ldu for e in self._buildable_entries], dtype=np.int32
         )
         valid_sculpt: List[bool] = []
-        for e in self._buildable_entries:
+        n_boxes_list: List[int] = []
+        mold_id_to_bidx: Dict[str, int] = {}
+        sig_to_bidx: Dict[Tuple[Any, ...], int] = {}
+        for b_idx, e in enumerate(self._buildable_entries):
+            mold_id_to_bidx[e.mold_id] = b_idx
             prim_e = get_brick_primitive(e.mold_id)
+            sig_e = _canonical_mechanical_signature(prim_e)
+            if sig_e not in sig_to_bidx:
+                sig_to_bidx[sig_e] = b_idx
             nb = len(prim_e.hull_boxes)
+            n_boxes_list.append(nb)
             t_low = e.title.lower()
             is_non_slope_decor = e.taxonomy_class in ("CURVED_SLOPE", "PLANAR_SLOPE", "STEEP_SLOPE") and any(
                 kw in t_low for kw in ("container", "crate", "fence", "picket", "window", "door", "bar ")
@@ -860,7 +874,104 @@ class CatalogShapeRetrievalIndex:
             else:
                 valid_sculpt.append(True)
         self._valid_sculpt_mask = np.array(valid_sculpt, dtype=bool)
+        self._buildable_n_boxes: Tuple[int, ...] = tuple(n_boxes_list)
+        self._compact_mold_ids: Set[str] = {
+            e.mold_id
+            for e in self._buildable_entries
+            if e.studs_x <= 8 and e.studs_y <= 8 and e.studs_x * e.studs_y <= 16
+        }
+        cls_to_id = {c: i for i, c in enumerate(MOLD_TAXONOMY_CLASSES)}
+        self._buildable_cls_idx = np.array(
+            [cls_to_id.get(e.taxonomy_class, -1) for e in self._buildable_entries], dtype=np.int32
+        )
+        static_bonus_list: List[float] = []
+        for idx_sb, e in enumerate(self._buildable_entries):
+            nb_sb = n_boxes_list[idx_sb]
+            cls_sb = e.taxonomy_class
+            b_sb = 0.0
+            if cls_sb == "CURVED_SLOPE":
+                b_sb += 0.08
+                if nb_sb >= 2:
+                    b_sb += 0.18 + (0.06 if e.height_ldu in (8, 16) else 0.0)
+            elif cls_sb == "PLANAR_SLOPE":
+                if nb_sb >= 2:
+                    b_sb += 0.18 + (0.04 if e.height_ldu in (8, 16) else 0.0)
+            elif cls_sb == "STEEP_SLOPE":
+                if nb_sb >= 2:
+                    b_sb += 0.16
+            elif cls_sb == "INVERTED_SLOPE":
+                if e.num_top_studs == 0:
+                    b_sb -= 0.35
+            elif cls_sb == "XY_WEDGE_ROUND":
+                if nb_sb >= 2 and e.studs_x * e.studs_y <= 9:
+                    b_sb += 0.16
+            elif cls_sb == "THIN_PANEL":
+                if nb_sb >= 2 and e.fill_ratio <= 0.55 and e.studs_x * e.studs_y <= 4:
+                    b_sb += 0.18
+            elif cls_sb == "SMOOTH_TILE":
+                b_sb += 0.18
+            area_sb = e.studs_x * e.studs_y
+            if area_sb > 16 or e.studs_x > 8 or e.studs_y > 8:
+                b_sb -= 0.85
+            elif area_sb == 1:
+                b_sb += 0.16
+            elif area_sb == 2:
+                b_sb += 0.19
+            elif area_sb <= 4:
+                b_sb += 0.16
+            elif area_sb <= 8:
+                b_sb += 0.10
+            elif area_sb <= 12:
+                b_sb += 0.02
+            else:
+                b_sb -= 0.25
+            static_bonus_list.append(b_sb)
+        self._buildable_static_bonus = np.array(static_bonus_list, dtype=np.float32)
+        self._mold_id_to_buildable_idx: Dict[str, int] = mold_id_to_bidx
+        self._sig_to_buildable_idx: Dict[Tuple[Any, ...], int] = sig_to_bidx
+        self._part_to_canonical_cache: Dict[str, Optional[str]] = {}
         self._loaded = True
+
+    def resolve_canonical_mold_id(self, part_id: str) -> Optional[str]:
+        """Map any LDraw `part_id` (including mold revisions or printed variants) to its canonical indexed `mold_id`."""
+        self._ensure_loaded()
+        pid_q = str(part_id).strip()
+        if pid_q in self._part_to_canonical_cache:
+            return self._part_to_canonical_cache[pid_q]
+        pid_l = pid_q.lower()
+        if pid_l in self._by_mold_id:
+            self._part_to_canonical_cache[pid_q] = pid_l
+            return pid_l
+        # Strip print/pattern suffix (`98138pr0008 -> 98138`, `3004p01 -> 3004`)
+        m_pr = _PRINT_SUFFIX_RE.match(pid_l)
+        if m_pr is not None:
+            base_id = m_pr.group(1)
+            if base_id in self._by_mold_id:
+                self._part_to_canonical_cache[pid_q] = base_id
+                return base_id
+        try:
+            prim = get_brick_primitive(pid_q)
+            b_idx = self._sig_to_buildable_idx.get(_canonical_mechanical_signature(prim))
+            if b_idx is not None:
+                res_id = self._buildable_entries[b_idx].mold_id
+                self._part_to_canonical_cache[pid_q] = res_id
+                return res_id
+        except KeyError:
+            pass
+        self._part_to_canonical_cache[pid_q] = None
+        return None
+
+    def funnel_metadata(self) -> Dict[str, int]:
+        """Return exact measured catalog-to-retrieval funnel counts (`F11` terminology transparency)."""
+        self._ensure_loaded()
+        return {
+            "combined_catalog_ids": len(COMBINED_BRICK_CATALOG),
+            "compiled_catalog_ids": len(COMPILED_LDRAW_CATALOG),
+            "canonical_system_molds": len(self._entries),
+            "active_buildable_molds": len(self._buildable_entries),
+            "valid_sculptural_molds": int(np.count_nonzero(self._valid_sculpt_mask)),
+            "pose_signatures": int(self._pose_rep_u64.shape[0]),
+        }
 
     def retrieve_top_k(
         self,
@@ -868,17 +979,25 @@ class CatalogShapeRetrievalIndex:
         top_k: int = 32,
         license_filter: str = "all",
         semantic_style_hint: Optional[str] = None,
+        allowed_part_ids: Optional[Sequence[str]] = None,
     ) -> CatalogRetrievalResult:
         """
         Retrieve a mesh-conditioned `top-K` (`default K = 32`) open-catalog kit in `< 3 ms`
-        using vectorized `uint64` boundary-cell bitmask matching + 6D surface-normal cosine scoring.
+        using vectorized `uint64` boundary-cell bitmask matching + 6D surface-normal scoring
+        (`O(|T| + |I| + P + M log M)` where `|T|` is target sub-voxel count, `|I|` is optional
+        `allowed_part_ids` length, `P` is pose-signature count, and `M` is active buildable molds).
+
+        Respects `1 <= len(retrieved_part_ids) <= top_k` strictly (`no silent floor clamp`), while
+        always exposing available structural backbone IDs on `backbone_part_ids`.
         """
         self._ensure_loaded()
         t0 = time.perf_counter()
         if license_filter not in ("all", "cc_by_4_0_only"):
             raise ValueError(f"Unsupported license_filter={license_filter!r}; expected 'all' or 'cc_by_4_0_only'.")
+        if int(top_k) < 1:
+            raise ValueError(f"top_k must be >= 1, got {top_k!r}.")
 
-        eff_k = max(12, int(top_k))
+        eff_k = int(top_k)
         t_u64 = pack_occ_5x5x6_to_u64(occ_5x5x6)
         pop_cells = popcount_u64_array(t_u64)
 
@@ -949,10 +1068,10 @@ class CatalogShapeRetrievalIndex:
         mold_scores = np.full((n_build,), -1e6, dtype=np.float32)
 
         if b_u64.size > 0 and self._pose_rep_u64.size > 0:
-            # `(P, B)` bitwise AND & overshoot popcount
-            inter = popcount_u64_array(self._pose_rep_u64[:, None] & b_u64[None, :])
-            over = popcount_u64_array(self._pose_rep_u64[:, None] & (~b_u64[None, :]))
-            net_gain = (2.0 * inter.astype(np.float32) - 1.35 * over.astype(np.float32)) / 64.0
+            # `(P, B)` bitwise AND + exact identity `popcount(A & ~B) == popcount(A) - popcount(A & B)`
+            inter_f32 = popcount_u64_array(self._pose_rep_u64[:, None] & b_u64[None, :]).astype(np.float32)
+            over_f32 = self._pose_popcount_f32[:, None] - inter_f32
+            net_gain = (2.0 * inter_f32 - 1.35 * over_f32) / 64.0
             # Top-4 boundary cell match average per pose
             k_top = min(4, net_gain.shape[1])
             part_top = np.partition(net_gain, net_gain.shape[1] - k_top, axis=1)[:, -k_top:]
@@ -961,68 +1080,57 @@ class CatalogShapeRetrievalIndex:
         else:
             mold_scores[:] = 0.0
 
-        # Apply license filter & motif/semantic class priors
+        # Apply license filter, optional finite-inventory mask (`Phase 11 Ext 2`), & vectorized motif priors
         cc4_only = license_filter == "cc_by_4_0_only"
+        inv_mold_set: Optional[Set[str]] = None
+        owned_alias_map: Dict[str, str] = {}
+        if allowed_part_ids is not None:
+            inv_mold_set = set()
+            for raw_pid in allowed_part_ids:
+                pid_s = str(raw_pid).strip()
+                can_m = self.resolve_canonical_mold_id(pid_s)
+                if can_m is not None:
+                    inv_mold_set.add(can_m)
+                    prev_alias = owned_alias_map.get(can_m)
+                    if prev_alias is None:
+                        owned_alias_map[can_m] = pid_s
+                    else:
+                        # Prefer exact canonical ID > unpatterned ID > shorter ID > lexicographic
+                        def _alias_rank(cand: str, target_m: str = can_m) -> Tuple[int, int, int, str]:
+                            return (
+                                0 if cand == target_m else 1,
+                                1 if _PRINT_SUFFIX_RE.match(cand.lower()) else 0,
+                                len(cand),
+                                cand,
+                            )
 
-        for idx, e in enumerate(self._buildable_entries):
-            if not self._valid_sculpt_mask[idx]:
-                mold_scores[idx] = -1e9
-                continue
-            if cc4_only and not self._buildable_is_cc4[idx]:
-                mold_scores[idx] = -1e9
-                continue
-            cls = e.taxonomy_class
-            n_boxes_e = len(get_brick_primitive(e.mold_id).hull_boxes)
-            bonus = 0.0
-            if cls == "CURVED_SLOPE":
-                bonus += 0.36 * w_top_taper + 0.08
-                if n_boxes_e >= 2:
-                    bonus += 0.18 + (0.06 if e.height_ldu in (8, 16) else 0.0)
-            elif cls == "PLANAR_SLOPE":
-                bonus += 0.36 * w_top_taper
-                if n_boxes_e >= 2:
-                    bonus += 0.18 + (0.04 if e.height_ldu in (8, 16) else 0.0)
-            elif cls == "STEEP_SLOPE":
-                bonus += 0.30 * (w_top_taper + 0.5 * w_thin)
-                if n_boxes_e >= 2:
-                    bonus += 0.16
-            elif cls == "INVERTED_SLOPE":
-                bonus += 0.45 * w_inv_overhang
-                if e.num_top_studs == 0:
-                    bonus -= 0.35
-            elif cls == "ARCH":
-                bonus += 0.42 * w_inv_overhang
-            elif cls == "XY_WEDGE_ROUND":
-                bonus += 0.40 * w_xy_diag
-                if n_boxes_e >= 2 and e.studs_x * e.studs_y <= 9:
-                    bonus += 0.16
-            elif cls == "THIN_PANEL":
-                bonus += 0.44 * w_thin
-                if n_boxes_e >= 2 and e.fill_ratio <= 0.55 and e.studs_x * e.studs_y <= 4:
-                    bonus += 0.18
-            elif cls == "JUMPER_HALF_STUD":
-                bonus += 0.58 * max(w_jumper, 0.5 * w_thin)
-            elif cls == "SNOT_ANCHOR":
-                bonus += 0.34 * max(w_thin, w_xy_diag, w_top_taper)
-            elif cls == "SMOOTH_TILE":
-                bonus += 0.18
-            # Prefer compact, versatile footprints (1x1..2x6) and strongly penalize oversized niche baseplates/cockpits
-            area_s = e.studs_x * e.studs_y
-            if area_s > 16 or e.studs_x > 8 or e.studs_y > 8:
-                bonus -= 0.85
-            elif area_s == 1:
-                bonus += 0.16
-            elif area_s == 2:
-                bonus += 0.19
-            elif area_s <= 4:
-                bonus += 0.16
-            elif area_s <= 8:
-                bonus += 0.10
-            elif area_s <= 12:
-                bonus += 0.02
-            else:
-                bonus -= 0.25
-            mold_scores[idx] += bonus
+                        if _alias_rank(pid_s) < _alias_rank(prev_alias):
+                            owned_alias_map[can_m] = pid_s
+
+        cls_dyn = np.zeros(len(MOLD_TAXONOMY_CLASSES) + 1, dtype=np.float32)
+        cls_map_idx = {c: i for i, c in enumerate(MOLD_TAXONOMY_CLASSES)}
+        cls_dyn[cls_map_idx["CURVED_SLOPE"]] = 0.36 * w_top_taper
+        cls_dyn[cls_map_idx["PLANAR_SLOPE"]] = 0.36 * w_top_taper
+        cls_dyn[cls_map_idx["STEEP_SLOPE"]] = 0.30 * (w_top_taper + 0.5 * w_thin)
+        cls_dyn[cls_map_idx["INVERTED_SLOPE"]] = 0.45 * w_inv_overhang
+        cls_dyn[cls_map_idx["ARCH"]] = 0.42 * w_inv_overhang
+        cls_dyn[cls_map_idx["XY_WEDGE_ROUND"]] = 0.40 * w_xy_diag
+        cls_dyn[cls_map_idx["THIN_PANEL"]] = 0.44 * w_thin
+        cls_dyn[cls_map_idx["JUMPER_HALF_STUD"]] = 0.58 * max(w_jumper, 0.5 * w_thin)
+        cls_dyn[cls_map_idx["SNOT_ANCHOR"]] = 0.34 * max(w_thin, w_xy_diag, w_top_taper)
+
+        mold_scores += self._buildable_static_bonus + cls_dyn[self._buildable_cls_idx]
+        invalid_mask = ~self._valid_sculpt_mask
+        if cc4_only:
+            invalid_mask = invalid_mask | (~self._buildable_is_cc4)
+        mold_scores[invalid_mask] = -1e9
+        if inv_mold_set is not None:
+            keep_inv = np.zeros(n_build, dtype=bool)
+            for mid_k in inv_mold_set:
+                b_i = self._mold_id_to_buildable_idx.get(mid_k)
+                if b_i is not None:
+                    keep_inv[b_i] = True
+            mold_scores[~keep_inv] = -1e9
 
         # 1. Build a strictly nested prefix ranking (`Top-16 ⊂ Top-32 ⊂ Top-64`) for monotonic K-ablation:
         #    Positions 0..9: minimal 10-part brick+plate structural backbone (`1x1..2x6` bricks & `1x1..2x4` plates)
@@ -1101,7 +1209,8 @@ class CatalogShapeRetrievalIndex:
                 w
                 for w in workhorses
                 if w in self._by_mold_id
-                and (w in score_by_mid or w == "36841")
+                and (inv_mold_set is None or w in inv_mold_set)
+                and (w in score_by_mid or (w == "36841" and inv_mold_set is None))
                 and (not cc4_only or self._by_mold_id[w].license_tier == "cc_by_4_0")
             ]
             n_head = head_anchor_counts.get(cls_k, 2)
@@ -1112,16 +1221,9 @@ class CatalogShapeRetrievalIndex:
                     key=lambda w: (-score_by_mid.get(w, 0.0), wh_index[w]),
                 )
                 promoted = head_w + tail_w
-            compact_cur = [
-                m_id
-                for m_id in cur_l
-                if (
-                    self._by_mold_id[m_id].studs_x <= 8
-                    and self._by_mold_id[m_id].studs_y <= 8
-                    and self._by_mold_id[m_id].studs_x * self._by_mold_id[m_id].studs_y <= 16
-                )
-            ]
-            large_cur = [m_id for m_id in cur_l if m_id not in set(compact_cur)]
+            compact_cur = [m_id for m_id in cur_l if m_id in self._compact_mold_ids]
+            compact_cur_set = set(compact_cur)
+            large_cur = [m_id for m_id in cur_l if m_id not in compact_cur_set]
             merged_c: List[str] = []
             seen_m: Set[str] = set()
             for seq_m in (promoted, compact_cur, large_cur):
@@ -1137,10 +1239,31 @@ class CatalogShapeRetrievalIndex:
 
         for bpid in essential_backbone:
             ent = self._by_mold_id.get(bpid)
-            if ent is not None and (not cc4_only or ent.license_tier == "cc_by_4_0"):
+            if (
+                ent is not None
+                and (inv_mold_set is None or bpid in inv_mold_set)
+                and (not cc4_only or ent.license_tier == "cc_by_4_0")
+            ):
                 ordered_full.append(bpid)
                 chosen_set.add(bpid)
                 backbone_list.append(bpid)
+
+        # Under sparse finite inventories (`inv_mold_set is not None`), ensure owned `extended_backbone`
+        # or `CORE_BRICK`/`CORE_PLATE` molds enter the structural backbone if `essential_backbone` is sparse!
+        if inv_mold_set is not None and len(backbone_list) < 8:
+            for b_alt in extended_backbone:
+                if len(backbone_list) >= 10:
+                    break
+                ent_alt = self._by_mold_id.get(b_alt)
+                if (
+                    ent_alt is not None
+                    and b_alt in inv_mold_set
+                    and b_alt not in chosen_set
+                    and (not cc4_only or ent_alt.license_tier == "cc_by_4_0")
+                ):
+                    ordered_full.append(b_alt)
+                    chosen_set.add(b_alt)
+                    backbone_list.append(b_alt)
 
         # Order sculptural classes dynamically by this mesh's boundary motif weights (independent of `top_k`
         # so `Top-16 ⊂ Top-32 ⊂ Top-48 ⊂ Top-64` is an exact prefix identity!)
@@ -1166,7 +1289,9 @@ class CatalogShapeRetrievalIndex:
         ext_bb_stream = [
             b
             for b in extended_backbone
-            if b in self._by_mold_id and (not cc4_only or self._by_mold_id[b].license_tier == "cc_by_4_0")
+            if b in self._by_mold_id
+            and (inv_mold_set is None or b in inv_mold_set)
+            and (not cc4_only or self._by_mold_id[b].license_tier == "cc_by_4_0")
         ]
         stream_names: List[str] = [c_n for _, c_n in cls_priority]
         round_streams: List[List[str]] = [list(by_cls_ranked[c_n]) for c_n in stream_names]
@@ -1266,21 +1391,43 @@ class CatalogShapeRetrievalIndex:
                 ordered_full.append(mid)
                 chosen_set.add(mid)
 
-        chosen = ordered_full[:eff_k]
-        backbone_ids = tuple(m for m in chosen if m in backbone_list)
-
+        chosen_canonical = ordered_full[:eff_k]
         cls_counts: Dict[str, int] = {}
         sculptural_ids: List[str] = []
-        for mid in chosen:
+        for mid in chosen_canonical:
             ent_c = self._by_mold_id.get(mid)
             if ent_c is not None:
                 cls_counts[ent_c.taxonomy_class] = cls_counts.get(ent_c.taxonomy_class, 0) + 1
                 if ent_c.taxonomy_class in SCULPTURAL_TAXONOMY_CLASSES:
-                    sculptural_ids.append(mid)
+                    sculptural_ids.append(owned_alias_map.get(mid, mid))
+
+        chosen_owned = [owned_alias_map.get(m, m) for m in chosen_canonical]
+        # Also include any directly owned un-indexed rectangular bricks/plates when `< eff_k` slots used
+        if allowed_part_ids is not None and len(chosen_owned) < eff_k:
+            seen_owned = set(chosen_owned)
+            for raw_pid in allowed_part_ids:
+                pid_s = str(raw_pid).strip()
+                if pid_s in seen_owned:
+                    continue
+                if cc4_only and pid_s not in EXTENDED_BRICK_CATALOG:
+                    ent_chk = self._by_mold_id.get(self.resolve_canonical_mold_id(pid_s) or "")
+                    if ent_chk is None or ent_chk.license_tier != "cc_by_4_0":
+                        continue
+                try:
+                    pr = get_brick_primitive(pid_s)
+                except KeyError:
+                    continue
+                if len(pr.hull_boxes) == 1 and not pr.is_snot and (pr.hull_boxes[0].zmax - pr.hull_boxes[0].zmin) in (8, 24):
+                    chosen_owned.append(pid_s)
+                    seen_owned.add(pid_s)
+                    if len(chosen_owned) >= eff_k:
+                        break
+
+        backbone_ids = tuple(owned_alias_map.get(m, m) for m in backbone_list)
 
         dt_ms = (time.perf_counter() - t0) * 1000.0
         return CatalogRetrievalResult(
-            retrieved_part_ids=tuple(chosen),
+            retrieved_part_ids=tuple(chosen_owned),
             sculptural_part_ids=tuple(sculptural_ids),
             backbone_part_ids=backbone_ids,
             class_counts=cls_counts,

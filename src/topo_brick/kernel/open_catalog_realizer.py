@@ -13,10 +13,11 @@ Integrates cleanly into `TopoBrickKernel.realize(...)`:
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import heapq
 import math
+import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
@@ -752,6 +753,7 @@ def _tile_boolean_layer_with_rects(
     parity_shift: int,
     rem_inv: Optional[Dict[str, int]],
     supported_below_xy: Optional[np.ndarray] = None,
+    shell_running_bond: bool = False,
 ) -> List[Tuple[str, LDUFrame]]:
     """
     Tile a 2D `(nx, ny)` boolean mask at height `z0` and sub-stud shift `(ox, oy)` using
@@ -760,6 +762,17 @@ def _tile_boolean_layer_with_rects(
         preferring double-ended pier-to-pier lintel bridges so zero bricks float in midair.
       - Pass B: Tile remaining supported cells with seam-staggered orientation preference.
     """
+    # Check `1x1` scarcity (`Phase 11 Ext 2.2`): snap odd-length 1D runs to even parity when `1x1` stock is zero/scarce
+    if rem_inv is not None:
+        s_1x1 = int(rem_inv.get("3005", 0)) + int(rem_inv.get("3024", 0)) // 3
+        has_any_1x1_tmpl = any(t[1] == 1 and t[2] == 1 and rem_inv.get(t[0], 0) > 0 for t in templates)
+        if not has_any_1x1_tmpl or s_1x1 <= 2:
+            from topo_brick.kernel.colored_inventory_allocator import (
+                apply_even_parity_morphological_snap,
+            )
+
+            occ_xy = apply_even_parity_morphological_snap(occ_xy, supported_below_xy)
+
     nx, ny = occ_xy.shape
     covered = np.zeros((nx, ny), dtype=bool)
     placements: List[Tuple[str, LDUFrame]] = []
@@ -843,6 +856,10 @@ def _tile_boolean_layer_with_rects(
                 rem_inv[pid_c] = rem_inv.get(pid_c, 0) - 1
 
     # Pass B: Seam-staggered English/Flemish tiling of all remaining supported cells
+    pass_b_start_idx = len(placements)
+    covered_before_b = covered.copy()
+    rem_inv_before_b = dict(rem_inv) if rem_inv is not None else None
+
     xs_order = list(range(parity_shift, nx)) + list(range(0, parity_shift))
     ys_order = list(range(parity_shift, ny)) + list(range(0, parity_shift))
     stretcher_first_orients = sorted(
@@ -860,14 +877,24 @@ def _tile_boolean_layer_with_rects(
     cov_l = covered.tolist()
     sup_l = supported_below_xy.tolist() if supported_below_xy is not None else None
 
-    for ix in xs_order:
-        occ_ix = occ_l[ix]
-        cov_ix = cov_l[ix]
-        for iy in ys_order:
-            if not occ_ix[iy] or cov_ix[iy]:
-                continue
+    if shell_running_bond:
+        # Safeguard #3 (`Phase 11 Ext 3`): On hollow-shell courses, alternate scan axis & orientation
+        # parity with zero corner wrap shift so X-tangent spans cross all corners/Y-ribs on even courses
+        # and Y-tangent spans cross all corners/X-ribs on odd courses (zero vertical chimney seams!).
+        scan_pairs = (
+            [(ix_s, iy_s) for iy_s in range(ny) for ix_s in range(nx)]
+            if prefer_x_major
+            else [(ix_s, iy_s) for ix_s in range(nx) for iy_s in range(ny)]
+        )
+    else:
+        scan_pairs = [(ix_s, iy_s) for ix_s in xs_order for iy_s in ys_order]
+
+    for ix, iy in scan_pairs:
+        if not occ_l[ix][iy] or cov_l[ix][iy]:
+            continue
+        if True:
             placed_here = False
-            if used_med_lead < 3 and ((z0 > 0 and (nx * ny) >= 4) or (z0 == 0 and (nx * ny) >= 12)):
+            if (not shell_running_bond) and used_med_lead < 3 and ((z0 > 0 and (nx * ny) >= 4) or (z0 == 0 and (nx * ny) >= 12)):
                 cur_t = med_targets[(nx * 3 + ny * 5 + z_step_idx + used_med_lead) % len(med_targets)]
                 use_list = sorted(
                     tmpl_orients,
@@ -882,6 +909,8 @@ def _tile_boolean_layer_with_rects(
                     ),
                 )
                 used_med_lead += 1
+            elif shell_running_bond:
+                use_list = tmpl_orients
             elif parity_shift == 1 and (ix == 0 or iy == 0 or ix == nx - 1 or iy == ny - 1):
                 use_list = stretcher_first_orients
             else:
@@ -922,6 +951,41 @@ def _tile_boolean_layer_with_rects(
                     break
                 if placed_here:
                     break
+
+    # Extension 2.2: If finite `rem_inv` left supported cells uncovered under greedy slicing,
+    # rewind Pass B on this course and solve exact bounded-inventory set-packing MILP (`< 3 ms`)!
+    if rem_inv is not None and rem_inv_before_b is not None:
+        cov_after_b = np.asarray(cov_l, dtype=bool)
+        sup_mask_chk = supported_below_xy if supported_below_xy is not None else np.ones_like(occ_xy)
+        uncov_sup = int(np.count_nonzero(occ_xy & (~cov_after_b) & sup_mask_chk))
+        if uncov_sup > 0:
+            from topo_brick.kernel.colored_inventory_allocator import (
+                solve_sparse_kit_course_set_packing,
+            )
+
+            cov_milp = covered_before_b.copy()
+            inv_milp = dict(rem_inv_before_b)
+            milp_pls = solve_sparse_kit_course_set_packing(
+                occ_xy=occ_xy,
+                covered_xy=cov_milp,
+                z0=z0,
+                ox=ox,
+                oy=oy,
+                templates=templates,
+                prefer_x_major=prefer_x_major,
+                parity_shift=parity_shift,
+                rem_inv=inv_milp,
+                supported_below_xy=supported_below_xy,
+            )
+            uncov_milp = int(np.count_nonzero(occ_xy & (~cov_milp) & sup_mask_chk))
+            if uncov_milp <= uncov_sup and len(milp_pls) > 0:
+                placements = placements[:pass_b_start_idx] + milp_pls
+                rem_inv.clear()
+                rem_inv.update(inv_milp)
+
+    if shell_running_bond and pass_b_start_idx > 0:
+        # Place 100%-supported wall/rib counterweight bricks on this course BEFORE overhanging corbel/ceiling spans!
+        return placements[pass_b_start_idx:] + placements[:pass_b_start_idx]
     return placements
 
 
@@ -937,6 +1001,12 @@ class OpenCatalogRealizeDiagnostics:
     smooth_tiles_placed_count: int
     exposed_upward_studs_count: int
     mean_color_delta_e00: float
+    chromatic_allocation: Optional[Any] = None
+    exterior_crust_iou_5x5x6: float = 0.0
+    volume_savings_ratio: float = 0.0
+    camera_reprojection: Optional[Any] = None
+    landmarks_attached_count: int = 0
+    stage_timings_ms: Dict[str, float] = field(default_factory=dict)
 
 
 def _build_fine_target_field_from_occ6(occ6: np.ndarray) -> SparseTiledTargetField:
@@ -1009,6 +1079,11 @@ def realize_open_catalog_sculpted(
     support_policy: str = "minimal_permanent_pillars",
     foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
     forbidden_support_boxes: Sequence[LDUBox] = (),
+    colored_inventory: Optional[Any] = None,
+    hollow_shell_policy: Optional[Any] = None,
+    view_priority: Optional[Any] = None,
+    suppress_studless_capping_boxes: Sequence[LDUBox] = (),
+    landmark_requests: Sequence[Any] = (),
     _forced_plan: Optional[Tuple[List[Tuple[int, int]], Dict[int, Tuple[Tuple[int, int], Tuple[int, int]]], int]] = None,
     _pre_ret: Optional[CatalogRetrievalResult] = None,
     _eval_only: bool = False,
@@ -1019,85 +1094,59 @@ def realize_open_catalog_sculpted(
     `adaptive_target` (`5x5x2` & `5x5x6 LDU` continuous mesh grids) + `CATALOG_RETRIEVAL_INDEX`.
     """
     from topo_brick.kernel.construction_kernel import check_monotone_insertion_corridor
-    # 1. Pad `occ6` and `occ2` by +1 cell (`+4` sub-voxels in XY, `+4`/`+12` in Z) so boundary
-    #    jumpers, wings, and SNOT skins never clip at `20*nx_studs`!
-    nx_s = adaptive_target.nx_studs + 1
-    ny_s = adaptive_target.ny_studs + 1
-    nz_c = adaptive_target.nz_courses + 1
-    n_plates_z = 3 * nz_c
-
-    occ6 = np.zeros((4 * nx_s, 4 * ny_s, 4 * nz_c), dtype=bool)
-    s6x, s6y, s6z = adaptive_target.occ_5x5x6.shape
-    occ6[:s6x, :s6y, :s6z] = adaptive_target.occ_5x5x6
-
-    occ2 = np.zeros((4 * nx_s, 4 * ny_s, 12 * nz_c), dtype=bool)
-    s2x, s2y, s2z = adaptive_target.occ_5x5x2.shape
-    occ2[:s2x, :s2y, :s2z] = adaptive_target.occ_5x5x2
-
-    # Strictly mask out forbidden architectural openings (`100%` opening clearance invariant)
-    for fb in forbidden_support_boxes:
-        fx0 = max(0, int(math.floor(fb.xmin / 5.0)))
-        fx1 = min(occ6.shape[0], int(math.ceil(fb.xmax / 5.0)))
-        fy0 = max(0, int(math.floor(fb.ymin / 5.0)))
-        fy1 = min(occ6.shape[1], int(math.ceil(fb.ymax / 5.0)))
-        fz6_0 = max(0, int(math.floor(fb.zmin / 6.0)))
-        fz6_1 = min(occ6.shape[2], int(math.ceil(fb.zmax / 6.0)))
-        fz2_0 = max(0, int(math.floor(fb.zmin / 2.0)))
-        fz2_1 = min(occ2.shape[2], int(math.ceil(fb.zmax / 2.0)))
-        if fx1 > fx0 and fy1 > fy0:
-            if fz6_1 > fz6_0:
-                occ6[fx0:fx1, fy0:fy1, fz6_0:fz6_1] = False
-            if fz2_1 > fz2_0:
-                occ2[fx0:fx1, fy0:fy1, fz2_0:fz2_1] = False
-
-    z6_any = np.any(occ6, axis=(0, 1))
-    gz6_nonempty_limit = int(np.max(np.nonzero(z6_any)[0]) + 1) if np.any(z6_any) else occ6.shape[2]
-    occ6_csum = np.zeros((occ6.shape[0] + 1, occ6.shape[1] + 1, occ6.shape[2] + 1), dtype=np.int32)
-    occ6_csum[1:, 1:, 1:] = np.cumsum(np.cumsum(np.cumsum(occ6.astype(np.int32), axis=0), axis=1), axis=2)
-    build_mold_counts: Dict[str, int] = {}
-
-    # 2. Online Top-K Open-Catalog Retrieval (`< 1.5 ms`)
-    ret_res = (
-        _pre_ret
-        if _pre_ret is not None
-        else CATALOG_RETRIEVAL_INDEX.retrieve_top_k(
-            occ6,
-            top_k=retrieval_top_k,
-            license_filter=license_filter,
-            semantic_style_hint=semantic_style_hint,
-        )
+    from topo_brick.kernel.open_catalog_stages import (
+        ChromaticAllocationStage,
+        TargetPrepStage,
+        TraceCertifyStage,
     )
-    if part_retrieval == "open_catalog_top_k":
-        kit_ids = list(ret_res.retrieved_part_ids)
-    elif allowed_part_ids is not None:
-        kit_ids = list(allowed_part_ids)
-    else:
-        kit_ids = list(ret_res.retrieved_part_ids)
 
-    if license_filter == "cc_by_4_0_only":
-        kit_ids = [
-            pid
-            for pid in kit_ids
-            if (
-                pid in EXTENDED_BRICK_CATALOG
-                or (
-                    CATALOG_RETRIEVAL_INDEX.get_entry(pid) is not None
-                    and CATALOG_RETRIEVAL_INDEX.get_entry(pid).license_tier == "cc_by_4_0"  # type: ignore[union-attr]
-                )
-            )
-        ]
-
-    kit_set = set(kit_ids)
-    rem_inv: Optional[Dict[str, int]] = dict(inventory_counts) if inventory_counts is not None else None
-    smooth_mode = semantic_style_hint == "smooth_studless"
-    ad_occ6 = occ6[:s6x, :s6y, :s6z]
+    prep = TargetPrepStage.prepare(
+        adaptive_target=adaptive_target,
+        allowed_part_ids=allowed_part_ids,
+        part_retrieval=part_retrieval,
+        retrieval_top_k=retrieval_top_k,
+        license_filter=license_filter,
+        semantic_style_hint=semantic_style_hint,
+        inventory_counts=inventory_counts,
+        forbidden_support_boxes=forbidden_support_boxes,
+        colored_inventory=colored_inventory,
+        hollow_shell_policy=hollow_shell_policy,
+        view_priority=view_priority,
+        pre_ret=_pre_ret,
+    )
+    eff_shell_policy = hollow_shell_policy or adaptive_target.hollow_shell_policy
+    nx_s = prep.nx_s
+    ny_s = prep.ny_s
+    n_plates_z = prep.n_plates_z
+    occ6 = prep.occ6
+    occ2 = prep.occ2
+    ad_occ6 = prep.ad_occ6
+    solid_occ6_ref = prep.solid_occ6_ref
+    solid_occ6_padded = prep.solid_occ6_padded
+    gz6_nonempty_limit = prep.gz6_nonempty_limit
+    occ6_csum = prep.occ6_csum
+    eff_inv_map = prep.eff_inv_map
+    inv_allowed_for_ret = prep.inv_allowed_for_ret
+    ret_res = prep.ret_res
+    kit_ids = prep.kit_ids
+    kit_set = prep.kit_set
+    rem_inv = prep.rem_inv
+    max_inv_snapshot = prep.max_inv_snapshot
+    smooth_mode = prep.smooth_mode
+    view_weight_grid_6 = prep.view_weight_grid_6
+    is_hollow_shell_active = prep.is_hollow_shell_active
+    build_mold_counts: Dict[str, int] = {}
+    t_sculpt0 = time.perf_counter()
 
     # 2b. Upfront `< 8 ms` Blind Sub-Plate Portal-Bridge & Stepped-Frustum Fast-Path
+    #     (`Phase 11 Ext 2.2`: enabled under finite `max_inv_snapshot` whenever inventory covers the template!)
     if (
         _forced_plan is None
         and not _eval_only
-        and rem_inv is None
         and foundation_policy == FoundationPolicy.CLUTCHED_BASEPLATE
+        and view_priority is None
+        and not landmark_requests
+        and not is_hollow_shell_active
     ):
         st_fast = try_upfront_blind_sculpted_fastpath(
             kernel=kernel,
@@ -1105,44 +1154,50 @@ def realize_open_catalog_sculpted(
             kit_ids=kit_ids,
             forbidden_support_boxes=forbidden_support_boxes,
             foundation_policy=foundation_policy,
+            max_inventory_counts=max_inv_snapshot,
         )
         if st_fast is not None:
+            rem_fast = dict(max_inv_snapshot) if max_inv_snapshot is not None else None
+            if rem_fast is not None:
+                for pf_u in st_fast.placed_parts.values():
+                    rem_fast[pf_u.part_id] = max(0, rem_fast.get(pf_u.part_id, 0) - 1)
             if smooth_mode:
-                _apply_terminal_tile_swap(st_fast, kit_set)
-            mean_de00_f = 0.0
-            if vertex_colors_rgb is not None:
-                v_pts_f = verts_ldu if verts_ldu is not None else adaptive_target.mesh_surf_pts
-                mean_de00_f = assign_perceptual_ldraw_colors(st_fast, v_pts_f, vertex_colors_rgb)
-            fine_tf_f = _build_fine_target_field_from_occ6(occ6)
-            distinct_f = tuple(sorted({p.part_id for p in st_fast.placed_parts.values()}))
-            sculpt_f = 0
-            jump_f = 0
-            snot_f = 0
-            tile_f = 0
-            for p_f in st_fast.placed_parts.values():
-                ent_f = CATALOG_RETRIEVAL_INDEX.get_entry(p_f.part_id)
-                cls_f = ent_f.taxonomy_class if ent_f is not None else ""
-                if cls_f in SCULPTURAL_TAXONOMY_CLASSES:
-                    sculpt_f += 1
-                if cls_f == "JUMPER_HALF_STUD":
-                    jump_f += 1
-                if cls_f == "SNOT_ANCHOR" or LDUFrame(p_f.pose.rot_id, (0, 0, 0)).z_axis[2] == 0:
-                    snot_f += 1
-                if cls_f == "SMOOTH_TILE" or p_f.part_id in PLATE_TO_SMOOTH_TILE_MAP.values():
-                    tile_f += 1
-            return (
-                st_fast,
-                fine_tf_f,
-                OpenCatalogRealizeDiagnostics(
-                    retrieval_result=ret_res,
-                    distinct_parts_placed=distinct_f,
-                    sculptural_parts_placed_count=sculpt_f,
-                    jumper_parts_placed_count=jump_f,
-                    snot_parts_placed_count=snot_f,
-                    smooth_tiles_placed_count=tile_f,
-                    exposed_upward_studs_count=count_exposed_upward_studs(st_fast),
-                    mean_color_delta_e00=round(mean_de00_f, 4),
-                ),
+                _apply_terminal_tile_swap(
+                    st_fast, kit_set, suppress_boxes=suppress_studless_capping_boxes, rem_inv=rem_fast
+                )
+            sculpt_fast_ms = (time.perf_counter() - t_sculpt0) * 1000.0
+            mean_de00_f, chrom_f, color_f_ms = ChromaticAllocationStage.run(
+                state=st_fast,
+                adaptive_target=adaptive_target,
+                verts_ldu=verts_ldu,
+                vertex_colors_rgb=vertex_colors_rgb,
+                colored_inventory=colored_inventory,
+                validator=kernel.validator,
+                foundation_policy=foundation_policy,
+                view_weight_grid_6=view_weight_grid_6,
+                view_priority=view_priority,
+                perceptual_color_fn=assign_perceptual_ldraw_colors,
+            )
+            return TraceCertifyStage.finalize(
+                state=st_fast,
+                occ6=occ6,
+                solid_occ6_ref=solid_occ6_ref,
+                adaptive_target=adaptive_target,
+                verts_ldu=verts_ldu,
+                vertex_colors_rgb=vertex_colors_rgb,
+                view_priority=None,
+                ret_res=ret_res,
+                mean_de00=mean_de00_f,
+                chrom_res=chrom_f,
+                landmarks_attached_count=0,
+                plate_to_tile_values=set(PLATE_TO_SMOOTH_TILE_MAP.values()),
+                build_fine_tf_fn=_build_fine_target_field_from_occ6,
+                count_exposed_studs_fn=count_exposed_upward_studs,
+                diagnostics_cls=OpenCatalogRealizeDiagnostics,
+                target_prep_ms=prep.target_prep_ms,
+                retrieval_ms=prep.retrieval_ms,
+                sculpt_synthesis_ms=sculpt_fast_ms,
+                color_allocation_ms=color_f_ms,
             )
 
     # 3. Phase-Aware `8 LDU` Plate-Layer + `+10 LDU` Jumper Eroded Core Synthesis
@@ -1274,7 +1329,22 @@ def realize_open_catalog_sculpted(
                 for iy in range(w_y):
                     val_c = int(cg_p[ix, iy])
                     take_cell = False
-                    if val_c >= thr_use:
+                    if view_weight_grid_6 is not None and val_c >= 12:
+                        x6_vw = (ix * 20 + ph_use[0]) // 5
+                        y6_vw = (iy * 20 + ph_use[1]) // 5
+                        z6_vw0 = max(0, (8 * p) // 6)
+                        z6_vw1 = min(occ6.shape[2], int(math.ceil((8 * (p + 1)) / 6.0)))
+                        if z6_vw1 > z6_vw0:
+                            t_vw = occ6[x6_vw : x6_vw + 4, y6_vw : y6_vw + 4, z6_vw0:z6_vw1]
+                            w_vw = view_weight_grid_6[x6_vw : x6_vw + 4, y6_vw : y6_vw + 4, z6_vw0:z6_vw1]
+                            in_vw = float(np.sum(w_vw[t_vw]))
+                            ov_vw = float(np.sum(w_vw[~t_vw]))
+                            has_vis_fg = bool(np.any(t_vw) and float(np.max(w_vw[t_vw])) >= 1.5)
+                            if has_vis_fg and in_vw >= 0.95 * ov_vw:
+                                take_cell = True
+                            elif val_c >= thr_use and ov_vw <= 1.45 * in_vw:
+                                take_cell = True
+                    elif val_c >= thr_use:
                         take_cell = True
                     elif (
                         p > 0
@@ -1632,6 +1702,10 @@ def realize_open_catalog_sculpted(
                                 ms_e = occ6[mx0:mx1, my0:my1, z6_f0:z6_f1]
                                 if ms_e.size > 0 and int(np.count_nonzero(ms_e)) >= int(0.40 * ms_e.size):
                                     m6_e[mx0:mx1, my0:my1, z6_f0:z6_f1] = True
+        if view_weight_grid_6 is not None:
+            inter_we = float(np.sum(view_weight_grid_6[m6_e & occ6]))
+            union_we = float(np.sum(view_weight_grid_6[m6_e | occ6]))
+            return inter_we / max(1.0, union_we)
         inter_e = int(np.count_nonzero(m6_e & occ6))
         union_e = int(np.count_nonzero(m6_e | occ6))
         return float(inter_e) / float(max(1, union_e))
@@ -1643,8 +1717,10 @@ def realize_open_catalog_sculpted(
     else:
         best_sel_iou = -1.0
         core_cell_thresh = default_thr
-        for ph_try in cand_phases_sel:
-            for thr_try in cand_threshs_sel:
+        eff_phases_sel = ((0, 0), (10, 0), (0, 10), (10, 10)) if view_priority is not None else cand_phases_sel
+        eff_threshs_sel = (18, 24, 30, 36, 42) if view_priority is not None else cand_threshs_sel
+        for ph_try in eff_phases_sel:
+            for thr_try in eff_threshs_sel:
                 est_iou = _fast_est_plan_occ6_iou([ph_try] * n_plates_z, {}, thr_try)
                 if ph_try == best_ground_phase:
                     est_iou += 2.0e-4
@@ -1880,6 +1956,10 @@ def realize_open_catalog_sculpted(
                                     + (3.8 if not used_inv_already else 0.0)
                                     + 0.85 * float(rx1_i - rx0_i) * float(ry1_i - ry0_i)
                                 )
+                                if view_weight_grid_6 is not None:
+                                    vw_ia = view_weight_grid_6[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                                    if vw_ia.size > 0:
+                                        sc_ia = sc_ia * max(0.05, float(np.mean(vw_ia)))
                                 inv_cands_course.append((sc_ia, pid_ia, pose_ia, res_cells, top_stud_cells))
 
             inv_cands_course.sort(key=lambda x: (-x[0], x[1], x[2].rot_id, x[2].pos))
@@ -1901,6 +1981,11 @@ def realize_open_catalog_sculpted(
 
     # Ensure every elevated component (`e.g. thin tabletops & canopies`) has minimal vertical pier support
     pier_cover_radius = 4 if is_legged_frame else (3 if is_thin_regime else 2)
+    if is_hollow_shell_active:
+        pier_cover_radius = max(
+            pier_cover_radius,
+            max(3, (int(getattr(eff_shell_policy, "diaphragm_pitch_studs", 6)) + 1) // 2),
+        )
     if support_policy == "minimal_permanent_pillars":
         for p in range(n_plates_z - 1, 0, -1):
             if p in jumper_bridge_layers or not np.any(core_occ[:, :, p]):
@@ -2235,7 +2320,13 @@ def realize_open_catalog_sculpted(
                     if blk_m.size == 0:
                         continue
                     in_m_cnt = int(np.count_nonzero(blk_m))
-                    if float(in_m_cnt) < marg_ratio * float(blk_m.size):
+                    if view_weight_grid_6 is not None:
+                        w_blk_m = view_weight_grid_6[x6_p : x6_p + 4, y6_p : y6_p + 4, z6_prev:z6_cur]
+                        in_w_m = float(np.sum(w_blk_m[blk_m]))
+                        ov_w_m = float(np.sum(w_blk_m[~blk_m]))
+                        if ov_w_m > 1.15 * in_w_m:
+                            core_occ[ix, iy, p_pr] = False
+                    elif float(in_m_cnt) < marg_ratio * float(blk_m.size):
                         core_occ[ix, iy, p_pr] = False
 
     snot_spine_protected = np.zeros((w_x, w_y, n_plates_z), dtype=bool)
@@ -2288,7 +2379,7 @@ def realize_open_catalog_sculpted(
                         not (0 <= ix + dx_p < w_x and 0 <= iy + dy_p < w_y and core_occ[ix + dx_p, iy + dy_p, p0])
                         for dx_p, dy_p in ((1, 0), (-1, 0), (0, 1), (0, -1))
                     )
-                    if is_perim and v0 <= 22 and v1 <= 14 and v2 <= 8:
+                    if is_perim and v0 <= 22 and v1 <= 14 and v2 <= 8 and view_weight_grid_6 is None:
                         core_occ[ix, iy, p0 : p_top + 1] = False
 
         # Lateral half-stud stepped-terrace carving (top-down across phase-aligned courses):
@@ -2377,11 +2468,14 @@ def realize_open_catalog_sculpted(
     brick_templates = _rect_templates(kit_ids, 24)
     plate_templates = _rect_templates(kit_ids, 8)
     tile_templates = _rect_templates(kit_ids, 8, studless_tiles=True)
-    if not plate_templates:
+    if not plate_templates and (eff_inv_map is None or eff_inv_map.get("3024", 0) > 0):
         plate_templates = [("3024", 1, 1)]
-    if not brick_templates:
+    if not brick_templates and (eff_inv_map is None or eff_inv_map.get("3005", 0) > 0):
         brick_templates = [("3005", 1, 1)]
-    if not tile_templates and inventory_counts is None:
+    if not plate_templates and brick_templates:
+        # When an inventory contains bricks only (zero 8-LDU plates), reuse brick_templates on 24-LDU bands
+        plate_templates = []
+    if not tile_templates and eff_inv_map is None:
         tile_templates = [
             ("87079", 2, 4),
             ("26603", 2, 3),
@@ -2981,7 +3075,11 @@ def realize_open_catalog_sculpted(
                         sy1_q = (ry1_s * 20 + ph_s[1]) // 5
                         sz0_q = z0_s // 6
                         sz1_q = int(math.ceil((p_top_next * 8) / 6.0))
-                        tgt_blk = occ6[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                        tgt_blk = (
+                            solid_occ6_padded[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                            if solid_occ6_padded is not None
+                            else occ6[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                        )
                         cached_co_full: Optional[Tuple[int, int]] = None
 
                         for pid_sm, is_thin_panel_mold, cls_sm, t_sm in grp_items_s3:
@@ -3287,6 +3385,18 @@ def realize_open_catalog_sculpted(
                                     if is_curved_step_tie
                                     else ((vd_norm_s / (ev_norm_s ** 0.55)) + 0.42 * vd_norm_s + m_rot_tie)
                                 )
+                                if view_weight_grid_6 is not None:
+                                    vw_blk = view_weight_grid_6[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                                    if vw_blk.shape == sm_blk.shape and vw_blk.size > 0:
+                                        co_w_sl = core_occ6_est[sx0_q:sx1_q, sy0_q:sy1_q, sz0_q:sz1_q]
+                                        carved_sp = (~sm_blk) & co_w_sl & (~tgt_blk)
+                                        if np.any(carved_sp):
+                                            vw_mult = float(np.mean(vw_blk[carved_sp]))
+                                        elif np.any(sm_blk):
+                                            vw_mult = float(np.mean(vw_blk[sm_blk]))
+                                        else:
+                                            vw_mult = float(np.mean(vw_blk))
+                                        sc_sm = sc_sm * max(0.05, vw_mult)
                                 all_sl_cands.append(
                                     (
                                         sc_sm,
@@ -3531,6 +3641,49 @@ def realize_open_catalog_sculpted(
                 planned_by_z.setdefault(z0_jb, []).extend(t_pls)
 
     rem_core = core_occ & (~inv_reserved_occ) & (~slope_reserved_occ)
+
+    # Phase 11 Ext 5: When `view_weight_grid_6` is active, prune un-sloped topmost `rem_core` cells
+    # whose weighted 2D silhouette background spill exceeds their weighted mesh intersection (`ov_w > 1.25 * in_w`),
+    # operating at `1`-plate granularity when `plate_templates` are available and `3`-plate (`24 LDU`) course
+    # granularity when the finite kit contains only `24 LDU` bricks!
+    if view_weight_grid_6 is not None:
+        has_avail_plates = bool(plate_templates) and (
+            rem_inv is None or any(rem_inv.get(tp[0], 0) > 0 for tp in plate_templates)
+        )
+        step_z_vp = 1 if has_avail_plates else 3
+        start_p_vp = (n_plates_z - 1) if step_z_vp == 1 else (3 * ((n_plates_z // 3) - 1))
+        for p_vp in range(start_p_vp, 0, -step_z_vp):
+            p_vp_end = min(n_plates_z, p_vp + step_z_vp)
+            if any((p_vp + q_v) in jumper_bridge_layers for q_v in range(p_vp_end - p_vp)):
+                continue
+            ph_vp = layer_phase[p_vp]
+            if any(layer_phase[p_vp + q_v] != ph_vp for q_v in range(p_vp_end - p_vp)):
+                continue
+            z6_v0 = max(0, (p_vp * 8) // 6)
+            z6_v1 = min(occ6.shape[2], int(math.ceil((p_vp_end * 8) / 6.0)))
+            if z6_v1 <= z6_v0:
+                continue
+            j_need_up = jumper_used_low.get(p_vp_end)
+            for ix_v in range(w_x):
+                for iy_v in range(w_y):
+                    if not np.any(rem_core[ix_v, iy_v, p_vp:p_vp_end]) or np.any(pier_protected[ix_v, iy_v, p_vp:p_vp_end]):
+                        continue
+                    if j_need_up is not None and bool(j_need_up[ix_v, iy_v]):
+                        continue
+                    if p_vp_end < n_plates_z and (
+                        rem_core[ix_v, iy_v, p_vp_end:].any()
+                        or slope_reserved_occ[ix_v, iy_v, p_vp_end:].any()
+                        or inv_reserved_occ[ix_v, iy_v, p_vp_end:].any()
+                    ):
+                        continue
+                    x6_v = (ix_v * 20 + ph_vp[0]) // 5
+                    y6_v = (iy_v * 20 + ph_vp[1]) // 5
+                    t_sl_v = occ6[x6_v : x6_v + 4, y6_v : y6_v + 4, z6_v0:z6_v1]
+                    w_sl_v = view_weight_grid_6[x6_v : x6_v + 4, y6_v : y6_v + 4, z6_v0:z6_v1]
+                    in_w_v = float(np.sum(w_sl_v[t_sl_v]))
+                    ov_w_v = float(np.sum(w_sl_v[~t_sl_v]))
+                    if ov_w_v > 1.25 * in_w_v:
+                        rem_core[ix_v, iy_v, p_vp:p_vp_end] = False
 
     # Place flush `4 LDU`-thin vertical perimeter brackets (`44728`, `99780`, `99207` — all `CC-BY-4.0`)
     # on `1x2` perimeter plate runs whenever a `4 LDU` (`1` sub-voxel) outer wall/taper slice strictly improves `occ6` IoU!
@@ -3829,6 +3982,7 @@ def realize_open_catalog_sculpted(
                     parity_shift=par_sh,
                     rem_inv=rem_inv,
                     supported_below_xy=sup_f,
+                    shell_running_bond=is_hollow_shell_active,
                 )
                 if b_pls:
                     planned_by_z.setdefault(z0_f, []).extend(b_pls)
@@ -3996,6 +4150,7 @@ def realize_open_catalog_sculpted(
                     parity_shift=par_p,
                     rem_inv=rem_inv,
                     supported_below_xy=sup_p,
+                    shell_running_bond=is_hollow_shell_active,
                 )
                 if p_pls:
                     planned_by_z.setdefault(z0, []).extend(p_pls)
@@ -4003,8 +4158,8 @@ def realize_open_catalog_sculpted(
     # Commit planned core bottom-up while maintaining live `occ6_live`, incremental 6-DoF witness,
     # monotone insertion corridors, and `2 LDU` CSG sets!
     state = AssemblyState()
-    if inventory_counts is not None:
-        rem_inv = dict(inventory_counts)
+    if eff_inv_map is not None:
+        rem_inv = dict(eff_inv_map)
 
     occ6_live = np.zeros_like(occ6)
     inter_live = 0
@@ -4253,6 +4408,15 @@ def realize_open_catalog_sculpted(
             return -1.0, d_in, d_ov
 
         u_cur = float(max(1, mesh_sub_total + over_live))
+        if view_weight_grid_6 is not None:
+            w_sl = view_weight_grid_6[x0:x1, y0:y1, z0:z1]
+            d_in_w = float(np.sum(w_sl[new_m & tgt_sl]))
+            d_ov_w = float(np.sum(w_sl[new_m & (~tgt_sl)]))
+            if enforce_min_precision and d_in_w * 1.65 < d_ov_w:
+                return -1.0, d_in, d_ov
+            iou_cur_w = float(inter_live) / u_cur
+            iou_new_w = (float(inter_live) + d_in_w) / float(max(1.0, u_cur + d_ov_w))
+            return (iou_new_w - iou_cur_w), d_in, d_ov
         iou_cur = float(inter_live) / u_cur
         iou_new = float(inter_live + d_in) / float(max(1, mesh_sub_total + over_live + d_ov))
         return (iou_new - iou_cur), d_in, d_ov
@@ -4306,22 +4470,56 @@ def realize_open_catalog_sculpted(
             stable_ok = False
             if (
                 grounded_c
-                and foundation_policy == FoundationPolicy.CLUTCHED_BASEPLATE
                 and base_lp_eta <= 1.0 - 1e-5
+                and (
+                    foundation_policy == FoundationPolicy.CLUTCHED_BASEPLATE
+                    or (
+                        foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY
+                        and wbs
+                        and any(
+                            b.zmin <= 0
+                            and (b.xmin + 0.5)
+                            <= (
+                                sum(float(bx.volume_ldu3) * 0.5 * (bx.xmin + bx.xmax) for bx in wbs)
+                                / max(1.0, sum(float(bx.volume_ldu3) for bx in wbs))
+                            )
+                            <= (b.xmax - 0.5)
+                            and (b.ymin + 0.5)
+                            <= (
+                                sum(float(bx.volume_ldu3) * 0.5 * (bx.ymin + bx.ymax) for bx in wbs)
+                                / max(1.0, sum(float(bx.volume_ldu3) for bx in wbs))
+                            )
+                            <= (b.ymax - 0.5)
+                            for b in wbs
+                        )
+                    )
+                )
             ):
                 stable_ok = True
-            elif foundation_policy == FoundationPolicy.CLUTCHED_BASEPLATE and base_lp_eta <= 1.0 - 1e-5:
+            elif (
+                foundation_policy in (FoundationPolicy.CLUTCHED_BASEPLATE, FoundationPolicy.TABLE_FRICTION_ONLY)
+                and base_lp_eta <= 1.0 - 1e-5
+            ):
                 can_ext, peak_d = kernel.validator.can_extend_plumb_primal_witness(
-                    state, trial_iid, plumb_deltas, base_witness=base_witness, hop_cache=plumb_hop_cache
+                    state,
+                    trial_iid,
+                    plumb_deltas,
+                    base_witness=base_witness,
+                    hop_cache=plumb_hop_cache,
+                    foundation_policy=foundation_policy,
                 )
+                if not can_ext and state.num_parts >= 40:
+                    can_ext, peak_d = kernel.validator.verify_two_pier_bearing_compression(
+                        state, foundation_policy=foundation_policy
+                    )
                 if can_ext and max(base_lp_eta, peak_d) <= 1.0 - 1e-5:
                     stable_ok = True
-            if (
+            elif (
                 not stable_ok
                 and defer_lp
-                and foundation_policy == FoundationPolicy.CLUTCHED_BASEPLATE
-                and base_lp_eta <= 0.82
-                and prim_c.mass_grams <= 8.0
+                and foundation_policy in (FoundationPolicy.CLUTCHED_BASEPLATE, FoundationPolicy.TABLE_FRICTION_ONLY)
+                and (base_lp_eta <= 0.82 or is_megastructure_footprint)
+                and (prim_c.mass_grams <= 8.0 or is_megastructure_footprint)
             ):
                 stable_ok = True
                 deferred_lp_in_batch = True
@@ -4366,25 +4564,74 @@ def realize_open_catalog_sculpted(
                 state.pop_trial_part(tok)
             return False
 
+    is_megastructure_footprint = (w_x * w_y) >= 169
+
     # Execute planned bottom-up core & jumper layers; queue cantilevered spans that need neighbor
     # bridging within the same Z layer for a second pass right after pier anchors commit!
     for z0 in sorted(planned_by_z.keys()):
         layer_items = planned_by_z[z0]
         is_gr = z0 == 0
         pending = list(layer_items)
+        use_course_defer = is_megastructure_footprint and not is_gr and not is_hollow_shell_active
+        if use_course_defer:
+            snap_course_parts = [(pl_s.part_id, pl_s.pose, pl_s.is_grounded) for _, pl_s in sorted(state.placed_parts.items())]
+            snap_course_occ6 = occ6_live.copy()
+            snap_course_inter = inter_live
+            snap_course_over = over_live
+            snap_course_counts = dict(build_mold_counts)
+            snap_course_rem = dict(rem_inv) if rem_inv is not None else None
+            deferred_lp_in_batch = False
+            batch_new_commits = []
         for _pass in range(4):
             if not pending:
                 break
             still_pending: List[Tuple[str, LDUFrame]] = []
             progressed = False
             for pid_l, pose_l in pending:
-                if _try_commit_part(pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False):
+                if _try_commit_part(
+                    pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False, defer_lp=use_course_defer
+                ):
                     progressed = True
                 else:
                     still_pending.append((pid_l, pose_l))
             pending = still_pending
             if not progressed:
                 break
+        if use_course_defer and deferred_lp_in_batch:
+            eq_course = kernel.validator.evaluate(state, foundation_policy=foundation_policy)
+            if eq_course.is_stable:
+                base_witness = eq_course.primal_witness
+                base_lp_eta = float(eq_course.peak_utilization)
+                plumb_deltas.clear()
+            else:
+                # Re-run course per-part if batch LP rejected an overhanging piece
+                state = AssemblyState()
+                for p_rb, f_rb, g_rb in snap_course_parts:
+                    state.place_root_part(p_rb, f_rb, is_grounded=g_rb)
+                occ6_live[:] = snap_course_occ6
+                inter_live = snap_course_inter
+                over_live = snap_course_over
+                build_mold_counts = snap_course_counts
+                if snap_course_rem is not None:
+                    rem_inv = snap_course_rem
+                base_witness = None
+                base_lp_eta = 0.0
+                plumb_deltas.clear()
+                plumb_hop_cache.clear()
+                pending = list(layer_items)
+                for _pass_fb in range(4):
+                    if not pending:
+                        break
+                    still_fb: List[Tuple[str, LDUFrame]] = []
+                    prog_fb = False
+                    for pid_l, pose_l in pending:
+                        if _try_commit_part(pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False, defer_lp=False):
+                            prog_fb = True
+                        else:
+                            still_fb.append((pid_l, pose_l))
+                    pending = still_fb
+                    if not prog_fb:
+                        break
         # Fallback: if any reserved multi-box slope/inverted-slope failed insertion/LP, fill its `core_occ` cells
         # with `1x1` bricks/plates so zero structural holes propagate to upper courses!
         if pending:
@@ -4671,7 +4918,7 @@ def realize_open_catalog_sculpted(
     ]
 
     # Multi-wave frontier sculptural + jumper + SNOT skinning (`up to eff_max_waves fast waves; early-exits when 0 committed`)
-    eff_max_waves = min(_max_waves, 2)
+    eff_max_waves = 0 if is_megastructure_footprint else min(_max_waves, 2)
     for _wave in range(eff_max_waves):
         snap_parts_w = [(pl_s.part_id, pl_s.pose, pl_s.is_grounded) for _, pl_s in sorted(state.placed_parts.items())]
         snap_occ6_w = occ6_live.copy()
@@ -5716,7 +5963,13 @@ def realize_open_catalog_sculpted(
                             plumb_hop_cache.clear()
                             won_single_leg_slab = True
 
-        for f_plan_try in (() if won_single_leg_slab else cand_forced_plans):
+        if view_priority is not None:
+            from topo_brick.kernel.view_priority import evaluate_camera_reprojection_fidelity
+
+            best_view_sil = evaluate_camera_reprojection_fidelity(state, ad_occ6, view_priority).silhouette_iou_2d
+        else:
+            best_view_sil = -1.0
+        for f_plan_try in (() if (won_single_leg_slab or is_hollow_shell_active or is_megastructure_footprint) else cand_forced_plans):
             st_try, _, _ = realize_open_catalog_sculpted(
                 kernel=kernel,
                 coarse_target_field=coarse_target_field,
@@ -5728,25 +5981,38 @@ def realize_open_catalog_sculpted(
                 semantic_style_hint=semantic_style_hint,
                 vertex_colors_rgb=None,
                 verts_ldu=verts_ldu,
-                inventory_counts=None,
+                inventory_counts=max_inv_snapshot,
                 support_policy=support_policy,
                 foundation_policy=foundation_policy,
                 forbidden_support_boxes=forbidden_support_boxes,
+                hollow_shell_policy=hollow_shell_policy,
+                view_priority=view_priority,
                 _forced_plan=f_plan_try,
                 _pre_ret=ret_res,
                 _eval_only=True,
                 _max_waves=(2 if mesh_sub_total < 2200 else 1),
             )
             iou_try, in_try, ov_try, mask_try = _exact_certified_occ6_iou(st_try)
-            if iou_try > best_plan_iou + 1.0e-4:
+            if view_priority is not None:
+                sil_try = evaluate_camera_reprojection_fidelity(st_try, ad_occ6, view_priority).silhouette_iou_2d
+                better_try = (sil_try + 0.15 * iou_try) > (best_view_sil + 0.15 * best_plan_iou + 1.0e-4)
+            else:
+                sil_try = -1.0
+                better_try = iou_try > best_plan_iou + 1.0e-4
+            if better_try:
                 best_plan_iou = iou_try
+                best_view_sil = sil_try
                 state, inter_live, over_live, occ6_live = st_try, in_try, ov_try, mask_try
+                if max_inv_snapshot is not None:
+                    rem_inv = dict(max_inv_snapshot)
+                    for pf_u in state.placed_parts.values():
+                        rem_inv[pf_u.part_id] = max(0, rem_inv.get(pf_u.part_id, 0) - 1)
                 base_witness = None
                 base_lp_eta = 0.0
                 plumb_deltas.clear()
                 plumb_hop_cache.clear()
 
-    if not _eval_only and rem_inv is None:
+    if not _eval_only and (rem_inv is None or max_inv_snapshot is not None) and not is_hollow_shell_active and not is_megastructure_footprint:
         st_port = refine_open_catalog_blind_portfolio(
             kernel=kernel,
             state=state,
@@ -5754,19 +6020,34 @@ def realize_open_catalog_sculpted(
             kit_ids=tuple(kit_ids),
             forbidden_support_boxes=forbidden_support_boxes,
             foundation_policy=foundation_policy,
+            max_inventory_counts=max_inv_snapshot,
         )
         if st_port is not state:
-            iou_pf, in_pf, ov_pf, mask_pf = _exact_certified_occ6_iou(st_port)
-            if iou_pf >= 0.0:
-                state, inter_live, over_live, occ6_live = st_port, in_pf, ov_pf, mask_pf
-                base_witness = None
-                base_lp_eta = 0.0
-                plumb_deltas.clear()
-                plumb_hop_cache.clear()
+            accept_port = True
+            if view_priority is not None:
+                from topo_brick.kernel.view_priority import evaluate_camera_reprojection_fidelity
+
+                s_cur_2d = evaluate_camera_reprojection_fidelity(state, ad_occ6, view_priority).silhouette_iou_2d
+                s_pf_2d = evaluate_camera_reprojection_fidelity(st_port, ad_occ6, view_priority).silhouette_iou_2d
+                accept_port = s_pf_2d > s_cur_2d + 1.0e-4
+            if accept_port:
+                iou_pf, in_pf, ov_pf, mask_pf = _exact_certified_occ6_iou(st_port)
+                if iou_pf >= 0.0:
+                    state, inter_live, over_live, occ6_live = st_port, in_pf, ov_pf, mask_pf
+                    if max_inv_snapshot is not None:
+                        rem_inv = dict(max_inv_snapshot)
+                        for pf_u in state.placed_parts.values():
+                            rem_inv[pf_u.part_id] = max(0, rem_inv.get(pf_u.part_id, 0) - 1)
+                    base_witness = None
+                    base_lp_eta = 0.0
+                    plumb_deltas.clear()
+                    plumb_hop_cache.clear()
         if smooth_mode:
-            _apply_terminal_tile_swap(state, kit_set)
+            _apply_terminal_tile_swap(
+                state, kit_set, suppress_boxes=suppress_studless_capping_boxes, rem_inv=rem_inv
+            )
             plumb_hop_cache.clear()
-        else:
+        elif rem_inv is None:
             present_molds = {p.part_id for p in state.placed_parts.values()}
             matched_now_t = state.matched_port_pairs
             for iid_t in sorted(state.placed_parts.keys()):
@@ -5777,7 +6058,9 @@ def realize_open_catalog_sculpted(
                 prim_pt = get_brick_primitive(pl_t.part_id)
                 if any((iid_t, pt.port_id) in matched_now_t for pt in prim_pt.ports if pt.polarity == PortPolarity.STUD):
                     continue
-                _apply_terminal_tile_swap(state, {tl_cand}, target_iids=(iid_t,))
+                _apply_terminal_tile_swap(
+                    state, {tl_cand}, target_iids=(iid_t,), suppress_boxes=suppress_studless_capping_boxes
+                )
                 if state.placed_parts[iid_t].part_id == tl_cand:
                     present_molds.add(tl_cand)
 
@@ -5797,6 +6080,8 @@ def realize_open_catalog_sculpted(
                 continue
             wb_b = pl_b.world_boxes[0]
             if (wb_b.zmax - wb_b.zmin) != 24:
+                continue
+            if suppress_studless_capping_boxes and any(wb_b.intersects(sb) for sb in suppress_studless_capping_boxes):
                 continue
             pl_pid, tl_pid = pt_pair
             if not smooth_mode:
@@ -5929,7 +6214,7 @@ def realize_open_catalog_sculpted(
                 plumb_hop_cache.clear()
 
     if smooth_mode:
-        tile_cap_ids = [t for t in ("87079", "3068b", "2431", "63864", "3069b", "3070b") if (t in kit_set or inventory_counts is None)]
+        tile_cap_ids = [t for t in ("87079", "3068b", "2431", "63864", "3069b", "3070b") if (t in kit_set or eff_inv_map is None)]
         fr_sm = state.get_active_frontier()
         exp_up = [
             ep
@@ -5942,6 +6227,11 @@ def realize_open_catalog_sculpted(
         iou_before_cap = float(inter_live) / float(max(1, mesh_sub_total + over_live))
         for ep in exp_up:
             ux, uy, uz = ep.world_frame.pos
+            if suppress_studless_capping_boxes and any(
+                sb.xmin <= ux <= sb.xmax and sb.ymin <= uy <= sb.ymax and sb.zmin <= uz <= sb.zmax
+                for sb in suppress_studless_capping_boxes
+            ):
+                continue
             # Skip if already matched in an earlier multi-stud tile placement
             if ep.global_port_id in state.matched_port_pairs:
                 continue
@@ -5954,6 +6244,8 @@ def realize_open_catalog_sculpted(
                         LDUBox(b[0] + ux, b[1] + uy, b[2] + uz, b[3] + ux, b[4] + uy, b[5] + uz)
                         for b in rboxes_t
                     )
+                    if suppress_studless_capping_boxes and any(wb_c.intersects(sb) for wb_c in wbs_t for sb in suppress_studless_capping_boxes):
+                        continue
                     if state.check_boxes_collision(wbs_t):
                         continue
                     # Ensure ALL anti-studs of `t_pid` mate with exposed upward studs (so it doesn't overhang in midair!)
@@ -5978,39 +6270,53 @@ def realize_open_catalog_sculpted(
                 if placed_t:
                     break
 
-    # 6. Optional Perceptual CIE Lab (`CIEDE2000`) Chromatic Mapping
-    mean_de00 = 0.0
-    if vertex_colors_rgb is not None:
-        v_pts_color = verts_ldu if verts_ldu is not None else adaptive_target.mesh_surf_pts
-        mean_de00 = assign_perceptual_ldraw_colors(state, v_pts_color, vertex_colors_rgb)
+    # 5c. Optional Semantic Landmark Attachment (`Phase 11 Ext 4B`)
+    lm_attached_cnt = 0
+    if landmark_requests:
+        from topo_brick.kernel.subassembly_realizer import attach_semantic_landmarks
 
-    # Compute diagnostics & exact `5x5x6 LDU` target field
-    fine_tf = _build_fine_target_field_from_occ6(occ6)
-    distinct_placed = tuple(sorted({p.part_id for p in state.placed_parts.values()}))
-    sculpt_cnt = 0
-    jump_cnt = 0
-    snot_cnt = 0
-    tile_cnt = 0
-    for p in state.placed_parts.values():
-        ent = CATALOG_RETRIEVAL_INDEX.get_entry(p.part_id)
-        cls_p = ent.taxonomy_class if ent is not None else ""
-        if cls_p in SCULPTURAL_TAXONOMY_CLASSES:
-            sculpt_cnt += 1
-        if cls_p == "JUMPER_HALF_STUD":
-            jump_cnt += 1
-        if cls_p == "SNOT_ANCHOR" or LDUFrame(p.pose.rot_id, (0, 0, 0)).z_axis[2] == 0:
-            snot_cnt += 1
-        if cls_p == "SMOOTH_TILE" or p.part_id in PLATE_TO_SMOOTH_TILE_MAP.values():
-            tile_cnt += 1
+        lm_res = attach_semantic_landmarks(
+            kernel=kernel,
+            state=state,
+            requests=landmark_requests,
+            default_license_filter=license_filter,
+            allowed_part_ids=inv_allowed_for_ret,
+            rem_inv=rem_inv,
+            foundation_policy=foundation_policy,
+        )
+        lm_attached_cnt = len(lm_res)
 
-    diag = OpenCatalogRealizeDiagnostics(
-        retrieval_result=ret_res,
-        distinct_parts_placed=distinct_placed,
-        sculptural_parts_placed_count=sculpt_cnt,
-        jumper_parts_placed_count=jump_cnt,
-        snot_parts_placed_count=snot_cnt,
-        smooth_tiles_placed_count=tile_cnt,
-        exposed_upward_studs_count=count_exposed_upward_studs(state),
-        mean_color_delta_e00=round(mean_de00, 4),
+    sculpt_elapsed_ms = (time.perf_counter() - t_sculpt0) * 1000.0
+    mean_de00, chrom_res, color_elapsed_ms = ChromaticAllocationStage.run(
+        state=state,
+        adaptive_target=adaptive_target,
+        verts_ldu=verts_ldu,
+        vertex_colors_rgb=vertex_colors_rgb,
+        colored_inventory=colored_inventory,
+        validator=kernel.validator,
+        foundation_policy=foundation_policy,
+        view_weight_grid_6=view_weight_grid_6,
+        view_priority=view_priority,
+        perceptual_color_fn=assign_perceptual_ldraw_colors,
     )
-    return state, fine_tf, diag
+    return TraceCertifyStage.finalize(
+        state=state,
+        occ6=occ6,
+        solid_occ6_ref=solid_occ6_ref,
+        adaptive_target=adaptive_target,
+        verts_ldu=verts_ldu,
+        vertex_colors_rgb=vertex_colors_rgb,
+        view_priority=view_priority,
+        ret_res=ret_res,
+        mean_de00=mean_de00,
+        chrom_res=chrom_res,
+        landmarks_attached_count=lm_attached_cnt,
+        plate_to_tile_values=set(PLATE_TO_SMOOTH_TILE_MAP.values()),
+        build_fine_tf_fn=_build_fine_target_field_from_occ6,
+        count_exposed_studs_fn=count_exposed_upward_studs,
+        diagnostics_cls=OpenCatalogRealizeDiagnostics,
+        target_prep_ms=prep.target_prep_ms,
+        retrieval_ms=prep.retrieval_ms,
+        sculpt_synthesis_ms=sculpt_elapsed_ms,
+        color_allocation_ms=color_elapsed_ms,
+    )

@@ -4,10 +4,10 @@
 [![Data License: CC BY 4.0 / CC BY-SA 4.0](https://img.shields.io/badge/Catalog_Data-CC_BY_4.0_%2F_CC_BY--SA_4.0-teal.svg)](DATA_LICENSE.md)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-Official PyTorch and optimization companion repository for **`topographical-tensors`** (`v5.1.0`), uniting two geometric discrete-planning domains under explicit local-frame invariants, sparse interaction graphs, discrete diffusion, and exact physical/algebraic certification:
+Official PyTorch and optimization companion repository for **`topographical-tensors`** (`v5.2.0`), uniting two geometric discrete-planning domains under explicit local-frame invariants, sparse interaction graphs, discrete diffusion, and exact physical/algebraic certification:
 
 1. **`topo_chess` (`src/topo_chess/`):** *Geometric Move-Potential Representations, $\mathbb{Z}_2$-Canonical Local-Frame Invariant Point Attention, and Single-Root Action-Only Discrete Diffusion (`D3PM`) for Searchless Chess* (`v5.0.0`).
-2. **`topo_brick` (`src/topo_brick/`):** *Certified 3D Digital Brick Assembly via Exact Lattice/SE(3) Port Manifolds, Open-Catalog Sculptural Retrieval (`16,085` Parts), Hierarchical Macro-Blocks, and Contact-Wrench Equilibrium Certification* (`Gates 1–8B`).
+2. **`topo_brick` (`src/topo_brick/`):** *Certified 3D Digital Brick Assembly via Exact Lattice/SE(3) Port Manifolds, Open-Catalog Sculptural Retrieval (`16,085` Parts), Finite Colored Inventories, Ribbed Hollow Shells, Compositional `.mpd` Subassemblies, and Contact-Wrench Equilibrium Certification* (`Gates 1–9D`).
 
 ---
 
@@ -17,13 +17,14 @@ Official PyTorch and optimization companion repository for **`topographical-tens
 
 `topo_brick` separates deterministic geometric and mechanical invariants from learned spatial/combinatorial search via a four-operation **`TopoBrickKernel`** (`realize()`, `repair()`, `constrain()`, `certify()`):
 
-* **Compiled `16,085`-Part Open Catalog & `6` Connector Families:** Combines `213` curated `TIER_A` parts with `16,072` compiled LDraw `2610` + LDCad Shadow parts (`99.52%` instance coverage across `26` human OMR `.mpd` sets), bore-carved compound `LDUBox` colliders (`0.0 LDU` wall-overlap tolerance), `3,273` `CoACD` convex polytope decompositions, and `6` connector families (`STUD_TUBE`, `TECHNIC_PIN_HOLE`, `TECHNIC_AXLE_HOLE`, `BAR_CLIP`, `BALL_SOCKET`, `HINGE_DETENT`). Supports strict `license_filter="cc_by_4_0_only"` (`0` `CC-BY-SA-4.0` parts emitted) for commercial-safe workflows.
+* **Compiled `16,085`-Part Open Catalog & `6` Connector Families:** Combines `213` curated `TIER_A` parts with `16,072` compiled LDraw `2610` + LDCad Shadow parts (`99.52%` instance coverage across `26` human OMR `.mpd` sets; `0 / 16,072` compiled parts with dropped solid voxels via flush `(5, 5, 2) LDU` System grids), bore-carved compound `LDUBox` colliders (`0.0 LDU` wall-overlap tolerance), `6,831` `CoACD` convex polytope decompositions (`320` unique non-convex shells), and `6` connector families (`STUD_TUBE`, `TECHNIC_PIN_HOLE`, `TECHNIC_AXLE_HOLE`, `BAR_CLIP`, `BALL_SOCKET`, `HINGE_DETENT`). Supports strict `license_filter="cc_by_4_0_only"` (`0` `CC-BY-SA-4.0` parts emitted) for commercial-safe workflows.
 * **Online Sculptural Mold Retrieval & Sub-Second Megastructures (`Gates 2, 7A, 7B, 8A, 8B`):**
-  * **Blind Continuous Mesh-to-Brick (`n = 80` Unseen Meshes, Single CPU Core):** Coarse `S2_PairSeededLocalSearch` certifies `80 / 80` (`100%`) meshes with `80 / 80` arch openings clear in `52.9–66.1 ms` `p50` (`0.7531` original-mesh IoU, `4.95x–5.22x` faster than out-of-process `legolization==0.5.0` at `61.25%` cert / `0.5998` IoU). Online 29-D volumetric/surface-normal mold retrieval (`Gate 8A`, `Top-48` over `849` mold signatures) actively places `46–52` distinct sloped, curved, wedge, tile, and arch molds across all `9 / 9` sculptural classes, reaching **`0.9064` overall mean / `0.9295` overall median / `0.9349` `Bands 2–4` mean `5×5×6 LDU` original-mesh IoU** (`80 / 80` certified in `133.8–205.1 ms` `p50`), with perceptual CIELAB `CIEDE2000` palette quantization (`ΔE_00 = 5.54` mean) and `"smooth_studless"` tile finishing (`87.52%` exposed-stud reduction, `569 -> 71`).
-  * **Megastructure Scaling (`Gate 7B`, `n = 36` Meshes of `263–952` Pieces):** `HierarchicalMacroBlockPlanner` certifies `36 / 36` (`100%`) multi-arch/cantilever megastructures in **`223–365 ms` `p50` (`612–943 ms` `p90`)** on 1 CPU core (`24.8x` faster than flat global MILP).
-  * **Constrained Autoregressive LLM Decoding & Agent Tooling (`Gate 5`):** Live `BrickGrammarLogitsProcessor` over `AvaLovelace/BrickGPT`'s `128,256`-token `Llama-3` BPE vocabulary achieves `100%` action validity (`15.2–16.6 ms/step` `p50`), and paired agent A/B evaluation lifts `bricklayer-sdk==0.1.0` from `33.3%` to `100.0%` (`60 / 60`) certified builds.
-* **Planner-Free Independent Certificate Verification (`Gate 3`):** Standalone [`independent_verifier.py`](src/topo_brick/evaluation/independent_verifier.py) replays SHA-256 catalog digests, `2 LDU` (`0.8 mm`) CSG cavity-carved collision grids, monotone insertion corridors, and primal 6-DoF contact-wrench witnesses (`100%` mutant rejection across `32 / 32` falsification cases; `0` planner imports).
-* **Explicit Scope Boundaries:** Physical force/torque calibration (`Gate 1`, `88.5%` overall accuracy across `200` experimental/reference assemblies) applies strictly to `STUD_TUBE` interfaces; non-stud connectors carry kinematic/topological wrench certificates rather than empirical destructive load bounds, and VLM prompt-aesthetic synthesis remains out of scope (Option 3B maps caller-supplied mesh RGB/style hints deterministically).
+  * **Blind Continuous Mesh-to-Brick (`n = 80` Strictly Unique Unseen Meshes, Single CPU Core):** Across `80` SHA-256-unique closed-manifold meshes (`4` external `BrickAnything` `.obj` + `76` fractional-stud procedural architectural meshes; `2` non-manifold `.obj` excluded from `82` candidates), coarse `S2_PairSeededLocalSearch` certifies `80 / 80` (`100%`) meshes with `80 / 80` arch openings clear in `47.8–71.6 ms` `p50` (`0.6994` original-mesh IoU, `86.25%` qualified `@0.60`, `3.85x–5.76x` faster than out-of-process `legolization==0.5.0` at `62.5%–72.5%` cert / `0.6002` IoU). Online 29-D volumetric/surface-normal mold retrieval (`Gate 8A`, `Top-48` over `1,499` deduplicated pose signatures across `426` active buildable System molds; `16,085 -> 16,072 -> 7,178 -> 426 / 1,499` funnel) actively places `44` distinct sloped, curved, wedge, tile, panel, SNOT, and arch molds across all `10 / 10` sculptural classes, reaching **`0.8542` overall mean / `0.8769` overall median / `0.8807` `Bands 2–4` mean (`0.9133` `Band 4`) `5×5×6 LDU` original-mesh IoU** (`80 / 80` certified & independently verified in `~291 ms` `p50`, `3.6 ms` retrieval `p50`), with perceptual CIELAB `CIEDE2000` palette quantization (`ΔE_00 = 5.72` mean) and `"smooth_studless"` tile finishing (`81.94%` exposed-stud reduction, `587 -> 106`).
+  * **Megastructure Scaling & Ribbed Hollow Shells (`Gates 7B & 9B`):** `HierarchicalMacroBlockPlanner` certifies `36 / 36` (`100%`) multi-arch/cantilever megastructures (`263–952` pieces) in **`265.5–324.1 ms` `p50`** on 1 CPU core, while `HollowShellPolicy(enabled=True)` (`Gate 9B`, `n = 30`, `16×16×10` to `24×24×16` studs under `FoundationPolicy.TABLE_FRICTION_ONLY`) cuts brick count by **`50.82%`** (`482.8 -> 235.4`) and plastic volume by **`54.65%`** (`0` temporary supports) with **`0.0001` mean `5×5×6 LDU` exterior-crust IoU difference** vs. solid fill.
+  * **Color-Coupled Finite Inventories, View Priority & Compositional `.mpd` Scenes (`Gates 9A, 9C, 9D`):** Supports exact `(part_id, color_id)` finite bins (`ColoredInventorySpec`, e.g., official Rebrickable Set `10698-1` manifest `SET_10698_COLORED_INVENTORY` across `790` non-spare bricks / `108` molds / `33` LDraw colors) with `O(1)` inventory-masked `uint64` mold retrieval, parity-aware zero-`1×1` sparse-kit MILP tiling + `InventoryShortfallReport`, and two-zone core/skin min-cost chromatic network flow (`60 / 60` certified & verified in `~89.8–127.3 ms` `p50`, cutting visible skin `ΔE_00` by **`60.10%`**, `39.57 -> 15.79`); DDA camera-ray `ViewPrioritySpec` (`+0.0741` 2D silhouette IoU lift and `-11.14 ΔE_00` under `30%` color scarcity); and hierarchical multi-submodel `.mpd` `PLACE_SUBASSEMBLY` synthesis + `8`-role `LANDMARK_DETAIL_INDEX` (`110` mold records; `25 / 25` recursive `subtrace` & exact `SE(3)` round-trip).
+  * **Constrained Autoregressive LLM Decoding & Deterministic SDK Adapter Tooling (`Gate 5`):** Multi-stream `BrickGrammarLogitsProcessor` over `AvaLovelace/BrickGPT`'s `128,256`-token `Llama-3` BPE vocabulary enforces `100%` action mask validity (`~5.0 ms/step`), and a matched-kit paired deterministic SDK adapter study (`EXTENDED_10PART_RECT_KIT`, `0` LLM calls) lifts `bricklayer-sdk==0.1.0` from `0 / 50` standalone to `47 / 50` (`94.0%`) certified builds while cutting emitted brick operations from `13.06` to `5.40`.
+* **Planner-Free Independent Certificate Verification (`Gates 3 & 9A–9D`, Schema `v1.1.0`):** Standalone [`independent_verifier.py`](src/topo_brick/evaluation/independent_verifier.py) (`0` `topo_brick.kernel.*` or `static_equilibrium` imports) enforces caller `VerificationObligations` unconditionally (`verification_scope="assembly_only"` or `"assembly_and_target"`), verifies raw disk-byte SHA-256 digests of all bundled catalog/hull/index/inventory archives, replays `PLACE_PART` and recursive `PLACE_SUBASSEMBLY` `subtrace`s with intermediate collision checks, checks continuous half-ray (`t in (0, +inf)`) 6-axis insertion corridors, and solves standalone `cubic_ldu` and `continuous_se3` 6-DoF `linprog` mechanics (`342 / 342` gate certificates replayed; `100%` mutant/tamper rejection).
+* **Explicit Scope Boundaries:** Physical hardware validation (`Gate 1`, `8 / 8` CMU hardware benchmarks + `93.3%` zero-FP holdout accuracy across `120` unseen motif builds) applies strictly to `STUD_TUBE` interfaces; `PhysicalValidationCert` remains `UNKNOWN` unless an `ExternalPhysicalObservation` is attached (`0 / 120` in synthetic `Gate 4`, with `20 / 120` `Calibrated Sub-Stud Model Agreement`), monotone insertion checks 6-axis single-translation half-rays (`t in (0, +inf)`), and VLM prompt-aesthetic synthesis remains out of scope (caller-supplied mesh RGB/style hints map deterministically).
 
 ### Domain II — `topo_chess`: Geometric Move-Potential & Discrete Diffusion for Searchless Chess (`src/topo_chess/`)
 
@@ -48,15 +49,15 @@ topographical-tensors/
 ├── Dockerfile                                          # Deterministic clean-room reproduction container
 ├── .github/workflows/
 │   ├── ci.yml                                          # Fast PR/push CI (ruff + wheel audit + chess & brick gates)
-│   └── full-repro.yml                                  # Full 64-test Gate 1–8B & Phase E reproduction workflow
+│   └── full-repro.yml                                  # Full 113-test Gate 1–9D & Phase E reproduction workflow
 ├── src/
 │   ├── topo_brick/                                     # Certified 3D Digital Brick Assembly domain package
-│   │   ├── interface/                                  # LDU/SE(3) frames, 16,085-part catalog, CoACD & 29-D retrieval
+│   │   ├── interface/                                  # LDU/SE(3) frames, 16,085-part catalog, colored bins, landmarks & 29-D retrieval
 │   │   ├── representation/                             # 24-ch frontier port tensors & sparse tiled target fields
 │   │   ├── models/                                     # SparsePortIPAEncoder, CandidateGraphDenoiser & outcome heads
-│   │   ├── kernel/                                     # TopoBrickKernel, S1/S2 solvers, sculpted skinning, macro-blocks & LLM mask
+│   │   ├── kernel/                                     # TopoBrickKernel, S1/S2, sculpted/hollow/colored/view/MPD realizers & LLM mask
 │   │   ├── training/                                   # LDraw .ldr/.mpd I/O, course decomposition & value distillation
-│   │   └── evaluation/                                 # 6-DoF HiGHS LP validator, independent verifier & Gates 1–8B
+│   │   └── evaluation/                                 # 6-DoF HiGHS LP validator, Schema v1.1.0 verifier & Gates 1–9D
 │   └── topo_chess/                                     # Searchless Chess domain package (v5.0.0)
 │       ├── domains/                                    # 8x8 chess, rectangular boards & 2D grid routing
 │       ├── encoding/                                   # Bijective 44-ch Move-Potential encoder/decoder
@@ -97,10 +98,10 @@ python scripts/check_env.py
 # Run the <1s topo_brick sculpted mesh realization + independent certificate replay smoke test
 python scripts/run_topo_brick_quickstart.py
 
-# Run fast unit & kernel verification tests
-pytest -v tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_revised_construction_kernel.py
+# Run fast unit, contract, and kernel verification tests
+pytest -v tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_revised_construction_kernel.py tests/test_topo_brick/test_p12_contract_and_falsification_audit.py
 
-# Run the complete 64-test topo_brick Gate 1–8B suite + 9-file topo_chess suite
+# Run the complete 113-test topo_brick Gate 1–9D + Phase 12 suite and topo_chess suite
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest -v tests/
 ```
 
@@ -182,15 +183,16 @@ logits = model(torch.from_numpy(tensor_44).unsqueeze(0)).q_logits  # (1, 1858)
 
 ## 5. Documentation Index
 
-### `topo_brick` Architecture, Data & Verification (`Gates 1–8B`)
-* **Overall Project Plan & Gate Scorecard:** [`docs/lego-project-overall-plan.md`](docs/lego-project-overall-plan.md)
-* **Capability Assessment & Benchmark Review (`Gates 1–8B`):** [`docs/capability-assessment-review.md`](docs/capability-assessment-review.md)
+### `topo_brick` Architecture, Data & Verification (`Gates 1–9D`)
+* **Overall Project Plan & Gate Scorecard (`Gates 1–9D`):** [`docs/lego-project-overall-plan.md`](docs/lego-project-overall-plan.md)
+* **Phase 11 Five Extensions Specification (`v5.2.0`):** [`docs/five-extensions.md`](docs/five-extensions.md)
+* **Capability Assessment & Benchmark Review (`113` Tests, `14` Gates):** [`docs/capability-assessment-review.md`](docs/capability-assessment-review.md)
 * **System Architecture & Kernel Interfaces:** [`docs/system-architecture-and-interfaces.md`](docs/system-architecture-and-interfaces.md)
 * **Model Architecture, Sculptural Retrieval & Solvers:** [`docs/model-architecture-and-component-design.md`](docs/model-architecture-and-component-design.md)
 * **Data Architecture, Provenance Tiers & Collider Contracts:** [`docs/data-architecture-and-pipeline.md`](docs/data-architecture-and-pipeline.md)
 * **Foundational Lattice & Port-Manifold Guide:** [`docs/topo-brick-expert-guide.md`](docs/topo-brick-expert-guide.md)
 * **Literature Review (`2015–2026`):** [`docs/lego-literature-review.md`](docs/lego-literature-review.md)
-* **Dual-Host Gate Ledgers:** [`docs/phase9-gate-verification-ledger.json`](docs/phase9-gate-verification-ledger.json) & [`docs/phase10-gate-verification-ledger.json`](docs/phase10-gate-verification-ledger.json)
+* **Dual-Host Gate Ledgers:** [`docs/phase9-gate-verification-ledger.json`](docs/phase9-gate-verification-ledger.json) · [`docs/phase10-gate-verification-ledger.json`](docs/phase10-gate-verification-ledger.json) · [`docs/phase11-gate-verification-ledger.json`](docs/phase11-gate-verification-ledger.json)
 
 ### `topo_chess` Manuscript & Proofs (`v5.0.0`)
 * **Main-Conference Manuscript:** [`paper/manuscript_iclr_neurips_icml.md`](paper/manuscript_iclr_neurips_icml.md) ([LaTeX](paper/manuscript_iclr_neurips_icml.tex))
@@ -213,7 +215,7 @@ logits = model(torch.from_numpy(tensor_44).unsqueeze(0)).q_logits  # (1, 1858)
 @software{sullivan2026topographical,
   title   = {Topographical Tensors: Geometric Move-Potential Chess and Certified 3D Digital Brick Assembly},
   author  = {Sullivan, Jacob},
-  version = {5.1.0},
+  version = {5.2.0},
   year    = {2026},
   url     = {https://github.com/jacobrsullivan/topographical-tensors}
 }

@@ -372,7 +372,13 @@ def run_eval_b_adversarial_kernel_suite() -> EvalBAdversarialReport:
     b_hang = cs_hang.place_part("3937", ceil_pose, is_grounded=True)
     t_hang = cs_hang.attach_articulated_part(b_hang, 2, "3938", 0, joint_angle_rad=0.0)
     cs_hang.attach_articulated_part(t_hang, 1, "3004", 0, joint_angle_rad=0.0)
-    cert_hang = kernel.certify(cs_hang, verify_prefix=False, verify_insertion=False, verify_perturbation=True)
+    cert_hang = kernel.certify(
+        cs_hang,
+        verify_prefix=False,
+        verify_insertion=False,
+        verify_perturbation=True,
+        foundation_policy="fixed_anchor",
+    )
 
     # Locking 9-tooth detent hinge (`60471` + `92582` + `3004` upright): detent resists perturbation!
     cs_lock = ContinuousAssemblyState()

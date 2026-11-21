@@ -329,14 +329,22 @@ def _classify_shadow_snap(
     return ConnectorType.STANDARD_STUD, PortPolarity.ANTI_STUD, 6.0, eff_len
 
 
+def _norm_vox3(voxel_ldu: int | Tuple[int, int, int]) -> Tuple[int, int, int]:
+    if isinstance(voxel_ldu, tuple):
+        return int(voxel_ldu[0]), int(voxel_ldu[1]), int(voxel_ldu[2])
+    v = int(voxel_ldu)
+    return v, v, v
+
+
 def _exact_run_merged_cuboids(
     occ: np.ndarray,
     origin_ldu: Tuple[int, int, int],
-    voxel_ldu: int,
+    voxel_ldu: int | Tuple[int, int, int],
 ) -> List[LDUBox]:
     """Exact 3-pass (`X -> Y -> Z`) disjoint maximal `LDUBox` run-merger (`0` bore bridging)."""
     nx, ny, nz = occ.shape
     ox, oy, oz = origin_ldu
+    vx, vy, vz = _norm_vox3(voxel_ldu)
     active_3d: Dict[Tuple[int, int, int, int], int] = {}
     out: List[LDUBox] = []
 
@@ -376,12 +384,12 @@ def _exact_run_merged_cuboids(
             if rc not in rects_z:
                 out.append(
                     LDUBox(
-                        ox + rc[0] * voxel_ldu,
-                        oy + rc[2] * voxel_ldu,
-                        oz + iz0 * voxel_ldu,
-                        ox + rc[1] * voxel_ldu,
-                        oy + rc[3] * voxel_ldu,
-                        oz + iz * voxel_ldu,
+                        ox + rc[0] * vx,
+                        oy + rc[2] * vy,
+                        oz + iz0 * vz,
+                        ox + rc[1] * vx,
+                        oy + rc[3] * vy,
+                        oz + iz * vz,
                     )
                 )
         active_3d = next_3d
@@ -389,12 +397,12 @@ def _exact_run_merged_cuboids(
     for rc, iz0 in active_3d.items():
         out.append(
             LDUBox(
-                ox + rc[0] * voxel_ldu,
-                oy + rc[2] * voxel_ldu,
-                oz + iz0 * voxel_ldu,
-                ox + rc[1] * voxel_ldu,
-                oy + rc[3] * voxel_ldu,
-                oz + nz * voxel_ldu,
+                ox + rc[0] * vx,
+                oy + rc[2] * vy,
+                oz + iz0 * vz,
+                ox + rc[1] * vx,
+                oy + rc[3] * vy,
+                oz + nz * vz,
             )
         )
     return out
@@ -403,53 +411,144 @@ def _exact_run_merged_cuboids(
 def _greedy_maximal_cuboid_cover(
     occ: np.ndarray,
     origin_ldu: Tuple[int, int, int],
-    voxel_ldu: int,
+    voxel_ldu: int | Tuple[int, int, int],
     max_boxes: int = 28,
     carved_mask: Optional[np.ndarray] = None,
 ) -> Tuple[LDUBox, ...]:
     """
-    Decompose boolean 3D solid voxel grid `occ` into disjoint integer `LDUBox` cuboids
-    without EVER bridging across carved bores or socket approach pockets (`carved_mask`).
+    Conservative outer cuboid cover of boolean 3D solid voxel grid `occ` (`F8` invariant):
+      1. Guarantees `100%` coverage of every `True` cell in `occ` (`0` dropped occupied voxels).
+      2. Never bridges across carved female bores or socket approach pockets (`carved_mask`).
+      3. Greedily merges bore-free cuboid pairs minimizing added dead-air volume toward `max_boxes`,
+         retaining extra cuboids only when `carved_mask` strictly separates every remaining pair.
     """
-    cuboids = _exact_run_merged_cuboids(occ, origin_ldu, voxel_ldu)
+    if not np.any(occ):
+        return ()
+    vx, vy, vz = _norm_vox3(voxel_ldu)
+    cuboids: List[LDUBox] = list(_exact_run_merged_cuboids(occ, origin_ldu, (vx, vy, vz)))
     if len(cuboids) <= max_boxes:
         return tuple(cuboids)
 
-    # Coarsen by 2x (`2*voxel_ldu`, then `4*voxel_ldu`) while strictly preserving `carved_mask`!
-    cur_occ = occ
-    cur_carved = carved_mask if carved_mask is not None else np.zeros_like(occ)
-    cur_vox = voxel_ldu
-    for _ in range(2):
-        nx, ny, nz = cur_occ.shape
-        px = nx % 2
-        py = ny % 2
-        pz = nz % 2
-        if px or py or pz:
-            cur_occ = np.pad(cur_occ, ((0, px), (0, py), (0, pz)), constant_values=False)
-            cur_carved = np.pad(cur_carved, ((0, px), (0, py), (0, pz)), constant_values=False)
-        nx2, ny2, nz2 = cur_occ.shape[0] // 2, cur_occ.shape[1] // 2, cur_occ.shape[2] // 2
-        occ_blk = cur_occ.reshape(nx2, 2, ny2, 2, nz2, 2).any(axis=(1, 3, 5))
-        carv_blk = cur_carved.reshape(nx2, 2, ny2, 2, nz2, 2).any(axis=(1, 3, 5))
+    carved_boxes: Tuple[LDUBox, ...] = (
+        tuple(_exact_run_merged_cuboids(carved_mask, origin_ldu, (vx, vy, vz)))
+        if carved_mask is not None and np.any(carved_mask)
+        else ()
+    )
+
+    # Hierarchical 2x interior coarsening + exact fine-scale boundary retention (zero dropped cells!)
+    if len(cuboids) > 64:
+        nx, ny, nz = occ.shape
+        px, py, pz = nx % 2, ny % 2, nz % 2
+        occ_p = np.pad(occ, ((0, px), (0, py), (0, pz)), constant_values=False) if (px or py or pz) else occ
+        carv_p = (
+            np.pad(carved_mask, ((0, px), (0, py), (0, pz)), constant_values=False)
+            if carved_mask is not None and (px or py or pz)
+            else (carved_mask if carved_mask is not None else np.zeros_like(occ_p))
+        )
+        nx2, ny2, nz2 = occ_p.shape[0] // 2, occ_p.shape[1] // 2, occ_p.shape[2] // 2
+        occ_blk = occ_p.reshape(nx2, 2, ny2, 2, nz2, 2).any(axis=(1, 3, 5))
+        carv_blk = carv_p.reshape(nx2, 2, ny2, 2, nz2, 2).any(axis=(1, 3, 5))
         safe_blk = occ_blk & (~carv_blk)
         if np.any(safe_blk):
-            cur_occ = safe_blk
-        else:
-            cur_occ = occ_blk
-        cur_carved = carv_blk
-        cur_vox *= 2
-        cuboids = _exact_run_merged_cuboids(cur_occ, origin_ldu, cur_vox)
-        if len(cuboids) <= max_boxes:
-            return tuple(cuboids)
+            coarse_boxes = list(_exact_run_merged_cuboids(safe_blk, origin_ldu, (vx * 2, vy * 2, vz * 2)))
+            covered_fine = np.repeat(np.repeat(np.repeat(safe_blk, 2, axis=0), 2, axis=1), 2, axis=2)[
+                :nx, :ny, :nz
+            ]
+            rem_fine = occ & (~covered_fine)
+            fine_rem_boxes = list(_exact_run_merged_cuboids(rem_fine, origin_ldu, (vx, vy, vz))) if np.any(rem_fine) else []
+            if len(coarse_boxes) + len(fine_rem_boxes) < len(cuboids):
+                cuboids = coarse_boxes + fine_rem_boxes
 
-    # Keep the largest `max_boxes` disjoint cuboids (sorted by volume descending, never bridging bores)
-    cuboids.sort(key=lambda b: b.volume_ldu3, reverse=True)
-    return tuple(cuboids[:max_boxes])
+    def _hits_carved(cand: LDUBox) -> bool:
+        for cb in carved_boxes:
+            if cand.intersects(cb):
+                return True
+        return False
+
+    cell_vol = vx * vy * vz
+    # Fast spatial-neighbor pre-pass if still > 80 cuboids
+    if len(cuboids) > 80:
+        cuboids.sort(key=lambda b: (b.zmin, b.ymin, b.xmin))
+        merged_fast: List[LDUBox] = []
+        for b in cuboids:
+            if merged_fast:
+                prev = merged_fast[-1]
+                u_f = LDUBox(
+                    min(prev.xmin, b.xmin),
+                    min(prev.ymin, b.ymin),
+                    min(prev.zmin, b.zmin),
+                    max(prev.xmax, b.xmax),
+                    max(prev.ymax, b.ymax),
+                    max(prev.zmax, b.zmax),
+                )
+                added = u_f.volume_ldu3 - (prev.volume_ldu3 + b.volume_ldu3)
+                if added <= 32 * cell_vol and not _hits_carved(u_f):
+                    merged_fast[-1] = u_f
+                    continue
+            merged_fast.append(b)
+        cuboids = merged_fast
+
+    # Exact greedy min-dead-volume outer merge down to `max_boxes` without ever bridging `carved_boxes`
+    while len(cuboids) > max_boxes:
+        best_cost: Optional[int] = None
+        best_pair: Optional[Tuple[int, int, LDUBox]] = None
+        n_c = len(cuboids)
+        # Bound pairwise window when `n_c` is large so worst-case stays sub-millisecond
+        win = n_c if n_c <= 56 else 24
+        if n_c > 56:
+            cuboids.sort(key=lambda b: (b.zmin, b.ymin, b.xmin))
+        for i in range(n_c):
+            bi = cuboids[i]
+            vi = bi.volume_ldu3
+            j_end = min(n_c, i + 1 + win)
+            for j in range(i + 1, j_end):
+                bj = cuboids[j]
+                ux0 = bi.xmin if bi.xmin < bj.xmin else bj.xmin
+                uy0 = bi.ymin if bi.ymin < bj.ymin else bj.ymin
+                uz0 = bi.zmin if bi.zmin < bj.zmin else bj.zmin
+                ux1 = bi.xmax if bi.xmax > bj.xmax else bj.xmax
+                uy1 = bi.ymax if bi.ymax > bj.ymax else bj.ymax
+                uz1 = bi.zmax if bi.zmax > bj.zmax else bj.zmax
+                u_vol = (ux1 - ux0) * (uy1 - uy0) * (uz1 - uz0)
+                cost = u_vol - (vi + bj.volume_ldu3)
+                if best_cost is not None and cost >= best_cost:
+                    continue
+                u_box = LDUBox(ux0, uy0, uz0, ux1, uy1, uz1)
+                if _hits_carved(u_box):
+                    continue
+                best_cost = cost
+                best_pair = (i, j, u_box)
+                if cost == 0:
+                    break
+            if best_cost == 0:
+                break
+        if best_pair is None:
+            # Every remaining pair is separated by a carved bore/pocket; retain all to guarantee 0 dropped solid!
+            break
+        ia, ib, u_merged = best_pair
+        cuboids[ia] = u_merged
+        cuboids.pop(ib)
+
+    cuboids.sort(key=lambda b: (-b.volume_ldu3, b.zmin, b.ymin, b.xmin))
+    ox, oy, oz = origin_ldu
+    covered_chk = np.zeros_like(occ, dtype=bool)
+    for b in cuboids:
+        ix0 = max(0, (b.xmin - ox) // vx)
+        ix1 = min(occ.shape[0], (b.xmax - ox) // vx)
+        iy0 = max(0, (b.ymin - oy) // vy)
+        iy1 = min(occ.shape[1], (b.ymax - oy) // vy)
+        iz0 = max(0, (b.zmin - oz) // vz)
+        iz1 = min(occ.shape[2], (b.zmax - oz) // vz)
+        covered_chk[ix0:ix1, iy0:iy1, iz0:iz1] = True
+    if np.any(occ & (~covered_chk)):
+        raise RuntimeError("Outer cuboid cover invariant violated: uncovered solid occupied voxels remain.")
+    return tuple(cuboids)
 
 
 def _voxel_grid_to_watertight_mesh(
     occ: np.ndarray,
     origin_ldu: Tuple[int, int, int],
-    voxel_ldu: int,
+    voxel_ldu: int | Tuple[int, int, int],
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Extract exact 2-manifold outward-oriented boundary triangles of boolean 3D grid `occ`
@@ -457,7 +556,7 @@ def _voxel_grid_to_watertight_mesh(
     """
     padded = np.pad(occ, 1, mode="constant", constant_values=False)
     ox, oy, oz = [float(c) for c in origin_ldu]
-    vs = float(voxel_ldu)
+    vx, vy, vz = [float(c) for c in _norm_vox3(voxel_ldu)]
 
     vert_map: Dict[Tuple[int, int, int], int] = {}
     verts_list: List[Tuple[float, float, float]] = []
@@ -469,7 +568,7 @@ def _voxel_grid_to_watertight_mesh(
         if v is None:
             v = len(verts_list)
             vert_map[k] = v
-            verts_list.append((ox + gx * vs, oy + gy * vs, oz + gz * vs))
+            verts_list.append((ox + gx * vx, oy + gy * vy, oz + gz * vz))
         return v
 
     # 6 face directions with outward CCW quad vertex offsets
@@ -1017,17 +1116,18 @@ class LDrawShadowCatalogCompiler:
         tris_tb: np.ndarray,
         ports: Sequence[PortSpec],
         bores: Sequence[Tuple[np.ndarray, np.ndarray, float, float]],
-    ) -> Tuple[Tuple[LDUBox, ...], float, Optional[Tuple[np.ndarray, np.ndarray]]]:
+    ) -> Tuple[Tuple[LDUBox, ...], float, Optional[Tuple[np.ndarray, np.ndarray]], Tuple[int, int, int]]:
         """
-        Rasterize `tris_tb` onto a local integer LDU voxel grid (`4 LDU`, or `2 LDU` for compact
-        parts), carve external male protrusions and female bore cylinders, and return:
-          `(hull_boxes, solid_mass_grams, optional_watertight_mesh_for_coacd)`.
+        Rasterize `tris_tb` onto a local integer LDU voxel grid (`(5, 5, 2) LDU` for flush `20-LDU`
+        System molds so stud walls stay exact at `20 LDU` pitch; `(2,2,2)/(4,4,4)/(8,8,8)` for
+        Technic/minifig/general molds), carve external male protrusions and female bore cylinders,
+        and return `(hull_boxes, solid_mass_grams, optional_watertight_mesh_for_coacd, vox_xyz)`.
         """
         vmin = tris_tb.reshape(-1, 3).min(axis=0)
         vmax = tris_tb.reshape(-1, 3).max(axis=0)
         span = vmax - vmin
         max_span = float(np.max(span))
-        vox = 2 if max_span <= 48.0 else (4 if max_span <= 240.0 else 8)
+        vox_iso = 2 if max_span <= 48.0 else (4 if max_span <= 240.0 else 8)
 
         # Determine solid body bounds by trimming top/side 4-LDU stud protrusions where applicable
         top_stud_zs = [
@@ -1043,16 +1143,66 @@ class LDrawShadowCatalogCompiler:
             if top_base_z < eff_zmax <= top_base_z + 5.5 and top_base_z > float(vmin[2]) + 2.0:
                 eff_zmax = top_base_z
 
-        ox = int(math.floor(float(vmin[0]) / vox)) * vox
-        oy = int(math.floor(float(vmin[1]) / vox)) * vox
-        oz = int(math.floor(float(vmin[2]) / vox)) * vox
-        x_hi = max(ox + vox, int(math.ceil(float(vmax[0]) / vox)) * vox)
-        y_hi = max(oy + vox, int(math.ceil(float(vmax[1]) / vox)) * vox)
-        z_hi = max(oz + vox, int(math.ceil(eff_zmax / vox)) * vox)
+        # Check if this shell is a flush `20-LDU` LEGO System mold -> rasterize on exact `(5, 5, 2) LDU` grid!
+        srx0 = int(round(float(vmin[0]) / 5.0)) * 5
+        srx1 = int(round(float(vmax[0]) / 5.0)) * 5
+        sry0 = int(round(float(vmin[1]) / 5.0)) * 5
+        sry1 = int(round(float(vmax[1]) / 5.0)) * 5
+        srz0 = int(round(float(vmin[2]) / 2.0)) * 2
+        srz1 = int(round(eff_zmax / 2.0)) * 2
+        has_bottom_anti = any(
+            p.polarity == PortPolarity.ANTI_STUD
+            and p.connector_type in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD)
+            and p.local_frame.z_axis == (0, 0, 1)
+            and abs(p.local_frame.pos[2] - srz0) <= 1
+            for p in ports
+        )
+        has_protruding_aux = any(
+            p.connector_type not in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD)
+            and (
+                p.local_protrusion_box is not None
+                or not (
+                    srx0 <= p.local_frame.pos[0] <= srx1
+                    and sry0 <= p.local_frame.pos[1] <= sry1
+                    and srz0 <= p.local_frame.pos[2] <= srz1 + 4
+                )
+            )
+            for p in ports
+        )
+        is_flush_system = (
+            has_bottom_anti
+            and not has_protruding_aux
+            and abs(float(vmin[0]) - srx0) <= 1.25
+            and abs(float(vmax[0]) - srx1) <= 1.25
+            and abs(float(vmin[1]) - sry0) <= 1.25
+            and abs(float(vmax[1]) - sry1) <= 1.25
+            and abs(float(vmin[2]) - srz0) <= 1.0
+            and abs(eff_zmax - srz1) <= 1.0
+            and 20 <= (srx1 - srx0) <= 160
+            and (srx1 - srx0) % 20 == 0
+            and 20 <= (sry1 - sry0) <= 160
+            and (sry1 - sry0) % 20 == 0
+            and (srz1 - srz0) in (8, 16, 24, 32, 48, 72)
+        )
 
-        nx = max(1, min(64, (x_hi - ox) // vox))
-        ny = max(1, min(64, (y_hi - oy) // vox))
-        nz = max(1, min(64, (z_hi - oz) // vox))
+        if is_flush_system:
+            vx, vy, vz = 5, 5, 2
+            ox, oy, oz = srx0, sry0, srz0
+            nx = max(1, (srx1 - srx0) // vx)
+            ny = max(1, (sry1 - sry0) // vy)
+            nz = max(1, (srz1 - srz0) // vz)
+        else:
+            vx = vy = vz = vox_iso
+            ox = int(math.floor(float(vmin[0]) / vx)) * vx
+            oy = int(math.floor(float(vmin[1]) / vy)) * vy
+            oz = int(math.floor(float(vmin[2]) / vz)) * vz
+            x_hi = max(ox + vx, int(math.ceil(float(vmax[0]) / vx)) * vx)
+            y_hi = max(oy + vy, int(math.ceil(float(vmax[1]) / vy)) * vy)
+            z_hi = max(oz + vz, int(math.ceil(eff_zmax / vz)) * vz)
+            nx = max(1, min(64, (x_hi - ox) // vx))
+            ny = max(1, min(64, (y_hi - oy) // vy))
+            nz = max(1, min(64, (z_hi - oz) // vz))
+        vox_xyz = (vx, vy, vz)
 
         # Sample triangle surface points (barycentric 9-point stencil per triangle)
         t0, t1, t2 = tris_tb[:, 0], tris_tb[:, 1], tris_tb[:, 2]
@@ -1073,9 +1223,9 @@ class LDrawShadowCatalogCompiler:
         pts = pts[pts[:, 2] <= eff_zmax + 0.25]
         occ = np.zeros((nx, ny, nz), dtype=bool)
         if pts.shape[0] > 0:
-            ix = np.clip(((pts[:, 0] - ox) // vox).astype(np.int32), 0, nx - 1)
-            iy = np.clip(((pts[:, 1] - oy) // vox).astype(np.int32), 0, ny - 1)
-            iz = np.clip(((pts[:, 2] - oz) // vox).astype(np.int32), 0, nz - 1)
+            ix = np.clip(((pts[:, 0] - ox) // vx).astype(np.int32), 0, nx - 1)
+            iy = np.clip(((pts[:, 1] - oy) // vy).astype(np.int32), 0, ny - 1)
+            iz = np.clip(((pts[:, 2] - oz) // vz).astype(np.int32), 0, nz - 1)
             occ[ix, iy, iz] = True
 
             # Fill interior between min and max occupied Z per (ix, iy) column for closed brick shells
@@ -1093,9 +1243,9 @@ class LDrawShadowCatalogCompiler:
         # Carve out external male connector protrusions (`PortSpec.local_protrusion_box`) and female bores
         carved_mask = np.zeros_like(occ)
         if np.count_nonzero(occ) > 2:
-            xs = ox + (np.arange(nx, dtype=np.float64) + 0.5) * vox
-            ys = oy + (np.arange(ny, dtype=np.float64) + 0.5) * vox
-            zs = oz + (np.arange(nz, dtype=np.float64) + 0.5) * vox
+            xs = ox + (np.arange(nx, dtype=np.float64) + 0.5) * vx
+            ys = oy + (np.arange(ny, dtype=np.float64) + 0.5) * vy
+            zs = oz + (np.arange(nz, dtype=np.float64) + 0.5) * vz
             gx, gy, gz = np.meshgrid(xs, ys, zs, indexing="ij")
             centers = np.stack([gx, gy, gz], axis=-1)
 
@@ -1118,6 +1268,9 @@ class LDrawShadowCatalogCompiler:
 
             # Carve out female bores (`R=4` bar holes, `R=6` Technic pin/axle holes, and recessed sockets)
             for ap_pos, in_axis, rad, depth in bores:
+                if is_flush_system and in_axis[2] > 0.9 and abs(float(ap_pos[2]) - srz0) <= 1.0 and depth <= 4.5:
+                    # Flush bottom System anti-studs mate against trimmed top stud planes (0 protrusion above zmax)
+                    continue
                 rel = centers - ap_pos
                 proj = rel @ in_axis
                 perp_sq = np.sum(rel * rel, axis=-1) - proj * proj
@@ -1140,18 +1293,19 @@ class LDrawShadowCatalogCompiler:
                         carved_mask |= mask_app
 
         hull_boxes = _greedy_maximal_cuboid_cover(
-            occ, (ox, oy, oz), vox, max_boxes=28, carved_mask=carved_mask
+            occ, (ox, oy, oz), vox_xyz, max_boxes=28, carved_mask=carved_mask
         )
-        vol_ldu3 = float(sum(b.volume_ldu3 for b in hull_boxes))
-        bbox_vol = float(max(1, (nx * vox) * (ny * vox) * (nz * vox)))
-        fill_ratio = vol_ldu3 / bbox_vol
-        # Molded bricks are hollow shells (~45% solid ABS fraction of bounding volume)
-        mass_g = round(max(0.05, 0.45 * vol_ldu3 * _ABS_GRAMS_PER_LDU3), 4)
+        # Compute mass from true voxel occupancy `occ` (not outer-merged dead air) using 0.45 ABS shell factor
+        cell_vol_f = float(vx * vy * vz)
+        occ_vol_ldu3 = float(int(np.count_nonzero(occ)) * cell_vol_f)
+        bbox_vol = float(max(1, (nx * vx) * (ny * vy) * (nz * vz)))
+        fill_ratio = occ_vol_ldu3 / bbox_vol
+        mass_g = round(max(0.05, 0.45 * occ_vol_ldu3 * _ABS_GRAMS_PER_LDU3), 4)
 
         wt_mesh: Optional[Tuple[np.ndarray, np.ndarray]] = None
         if len(hull_boxes) >= 2 or fill_ratio < 0.88:
-            wt_mesh = _voxel_grid_to_watertight_mesh(occ, (ox, oy, oz), vox)
-        return hull_boxes, mass_g, wt_mesh
+            wt_mesh = _voxel_grid_to_watertight_mesh(occ, (ox, oy, oz), vox_xyz)
+        return hull_boxes, mass_g, wt_mesh, vox_xyz
 
     def compile_all(
         self,
@@ -1171,7 +1325,7 @@ class LDrawShadowCatalogCompiler:
 
         # Pass 1: Filter eligible standalone parts & extract ports + shell signatures
         raw_records: Dict[str, Dict[str, Any]] = {}
-        shell_cache: Dict[str, Tuple[Tuple[LDUBox, ...], float, Optional[Tuple[np.ndarray, np.ndarray]]]] = {}
+        shell_cache: Dict[str, Tuple[Tuple[LDUBox, ...], float, Optional[Tuple[np.ndarray, np.ndarray]], int]] = {}
         shell_to_part_ids: Dict[str, List[str]] = {}
         tier_counts: Dict[str, int] = {
             "TIER_B_LDCAD_SHADOW_DAG": 0,
@@ -1299,7 +1453,7 @@ class LDrawShadowCatalogCompiler:
             if shell_id not in shell_cache:
                 shell_cache[shell_id] = self._rasterize_and_carve_shell(tris_tb, ports, bores)
 
-            hull_boxes, mass_g, _ = shell_cache[shell_id]
+            hull_boxes, mass_g, _, vox_res = shell_cache[shell_id]
             shell_to_part_ids.setdefault(shell_id, []).append(part_id)
 
             is_snot = any(abs(int(p.local_frame.z_axis[2])) == 0 for p in ports)
@@ -1310,6 +1464,7 @@ class LDrawShadowCatalogCompiler:
                 "t": prov_tier,
                 "h": part_sha,
                 "sh": shell_id,
+                "vx": list(vox_res),
                 "b": [[b.xmin, b.ymin, b.zmin, b.xmax, b.ymax, b.zmax] for b in hull_boxes],
                 "p": [
                     [int(p.port_id), int(p.local_frame.rot_id), list(p.local_frame.pos), int(p.polarity), int(p.connector_type)]
@@ -1324,7 +1479,7 @@ class LDrawShadowCatalogCompiler:
             if sh_id.startswith("base:") or sh_id in seen_unique_shells:
                 continue
             seen_unique_shells.add(sh_id)
-            _, _, wt = shell_cache[sh_id]
+            _, _, wt, _ = shell_cache[sh_id]
             if wt is not None and wt[0].shape[0] >= 8 and wt[1].shape[0] >= 12:
                 candidate_shells.append((len(p_list), sh_id, wt[0], wt[1]))
 
@@ -1417,11 +1572,14 @@ class LDrawShadowCatalogCompiler:
 
         elapsed_s = time.perf_counter() - t0
         manifest = {
-            "schema_version": "1.0.0",
+            "schema_version": "1.1.0",
             "ldraw_release": self.ldraw_release,
             "shadow_source": "RolandMelkert/LDCadShadowLibrary@9b1131fb1991f8c0bfc072325e4e12f6271aba35",
             "geometry_license": "CC-BY-4.0 (LDraw Official Library CAreadme.txt)",
             "connector_license_shadow": "CC-BY-SA-4.0 (LDCad Shadow Library LICENSE.md)",
+            "collider_approximation_contract": "outer_conservative_bore_carved_cuboid_cover_zero_dropped_voxels",
+            "mass_estimation_model": "0.45_abs_shell_factor_1.04g_cm3_over_carved_voxel_volume",
+            "dropped_solid_voxels_total": 0,
             "catalog_gz_sha256": cat_gz_sha,
             "coacd_npz_sha256": coacd_sha,
             "total_compiled_parts": len(raw_records),
@@ -1459,6 +1617,11 @@ class CompiledLDrawCatalog:
         self._coacd_npz: Any = None
         self._coacd_cache: Dict[str, Tuple[ConvexPolytope, ...]] = {}
         self._manifest_cache: Optional[Dict[str, Any]] = None
+        self._manifest_stat_key: Optional[Tuple[int, int]] = None
+        self._catalog_sha256_cache: Optional[str] = None
+        self._catalog_stat_key: Optional[Tuple[int, int]] = None
+        self._coacd_sha256_cache: Optional[str] = None
+        self._coacd_stat_key: Optional[Tuple[int, int]] = None
 
     @property
     def is_available(self) -> bool:
@@ -1466,24 +1629,73 @@ class CompiledLDrawCatalog:
 
     @property
     def manifest(self) -> Dict[str, Any]:
-        if self._manifest_cache is None:
-            if self._manifest_path.exists():
+        if self._manifest_path.exists():
+            st = self._manifest_path.stat()
+            sk = (int(st.st_mtime_ns), int(st.st_size))
+            if self._manifest_cache is None or self._manifest_stat_key != sk:
                 self._manifest_cache = json.loads(self._manifest_path.read_text(encoding="utf-8"))
-            else:
-                self._manifest_cache = {}
+                self._manifest_stat_key = sk
+        elif self._manifest_cache is None:
+            self._manifest_cache = {}
         return self._manifest_cache
 
     @property
     def archive_sha256(self) -> str:
-        return str(self.manifest.get("catalog_gz_sha256", "not_compiled"))
+        """
+        Compute and return the actual SHA-256 of `compiled_ldraw_catalog.json.gz` bytes on disk
+        (cached by `(mtime_ns, st_size)`), verifying agreement against `manifest['catalog_gz_sha256']`.
+        """
+        if not self._catalog_gz_path.is_file():
+            return "not_compiled"
+        st = self._catalog_gz_path.stat()
+        sk = (int(st.st_mtime_ns), int(st.st_size))
+        if self._catalog_sha256_cache is None or self._catalog_stat_key != sk:
+            actual_sha = hashlib.sha256(self._catalog_gz_path.read_bytes()).hexdigest()
+            exp_sha = self.manifest.get("catalog_gz_sha256")
+            if exp_sha and str(exp_sha) != actual_sha:
+                raise ValueError(
+                    f"Compiled catalog SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
+                )
+            self._catalog_sha256_cache = actual_sha
+            self._catalog_stat_key = sk
+        return self._catalog_sha256_cache
+
+    @property
+    def coacd_sha256(self) -> str:
+        """
+        Compute and return the actual SHA-256 of `compiled_coacd_hulls.npz` bytes on disk
+        (cached by `(mtime_ns, st_size)`), verifying agreement against `manifest['coacd_npz_sha256']`.
+        """
+        if not self._coacd_npz_path.is_file():
+            return "no_coacd"
+        st = self._coacd_npz_path.stat()
+        sk = (int(st.st_mtime_ns), int(st.st_size))
+        if self._coacd_sha256_cache is None or self._coacd_stat_key != sk:
+            actual_sha = hashlib.sha256(self._coacd_npz_path.read_bytes()).hexdigest()
+            exp_sha = self.manifest.get("coacd_npz_sha256")
+            if exp_sha and str(exp_sha) != actual_sha:
+                raise ValueError(
+                    f"Compiled CoACD archive SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
+                )
+            self._coacd_sha256_cache = actual_sha
+            self._coacd_stat_key = sk
+        return self._coacd_sha256_cache
 
     def _ensure_loaded(self) -> None:
-        if self._loaded or not self._catalog_gz_path.exists():
+        if not self._catalog_gz_path.exists():
             return
+        st = self._catalog_gz_path.stat()
+        sk = (int(st.st_mtime_ns), int(st.st_size))
+        if self._loaded and self._catalog_stat_key == sk:
+            return
+        # Always verify archive byte digest against manifest before parsing JSON (`F7`)
+        _ = self.archive_sha256
         with gzip.open(self._catalog_gz_path, "rt", encoding="utf-8") as gz:
             data = json.load(gz)
         self._raw_parts = data.get("parts", {})
         self._moved_aliases = data.get("moved_aliases", {})
+        self._prim_cache.clear()
+        self._spec_cache.clear()
         self._loaded = True
 
     def __len__(self) -> int:
@@ -1518,6 +1730,7 @@ class CompiledLDrawCatalog:
         if cached is not None:
             return cached
         if self._coacd_npz is None:
+            _ = self.coacd_sha256
             self._coacd_npz = np.load(self._coacd_npz_path, allow_pickle=False)
         cnt_key = f"{shell_id}_count"
         if cnt_key not in self._coacd_npz:

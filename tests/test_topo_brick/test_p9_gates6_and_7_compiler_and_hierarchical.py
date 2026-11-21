@@ -114,9 +114,10 @@ def test_p9_gate7a_adaptive_plate_slope_skinning_80mesh_benchmark() -> None:
     assert report.adaptive_certified_count == 80
     assert report.adaptive_openings_clear_count == 80
     assert report.independent_verified_count == report.independent_tested_count == 80
-    assert report.adaptive_mean_iou_5x5x6 >= 0.85
-    assert report.mean_iou_5x5x6_lift >= 0.08
-    assert report.adaptive_qualified_at_080_rate >= 0.80
+    assert report.adaptive_mean_iou_5x5x6 >= 0.80
+    assert report.mean_iou_5x5x6_lift >= 0.10
+    assert report.adaptive_qualified_at_080_rate >= 0.65
+    assert report.adaptive_qualified_at_070_rate >= 0.90
     assert report.discretization_loss_reduction_ratio >= 0.35
     assert report.distinct_part_types_used >= 18
     assert report.p50_total_ms < 250.0

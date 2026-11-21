@@ -66,6 +66,7 @@ from topo_brick.interface.se3_kinematics import (
 )
 from topo_brick.interface.tier_a_catalog import (
     LDRAW_PART_ALIASES,
+    SET_10698_REBRICKABLE_MANIFEST,
     normalize_ldraw_part_id,
 )
 
@@ -92,6 +93,7 @@ __all__ = [
     "TIER_A_CATALOG",
     "TIER_A_CATALOG_IDS",
     "SET_10698_OFFICIAL_INVENTORY",
+    "SET_10698_REBRICKABLE_MANIFEST",
     "SET_10698_KIT_IDS",
     "LDRAW_PART_ALIASES",
     "normalize_ldraw_part_id",

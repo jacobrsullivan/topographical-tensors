@@ -208,12 +208,16 @@ class BrickGrammarLogitsProcessor(LogitsProcessor):
     HuggingFace `transformers.LogitsProcessor` enforcing `TopoBrickKernel.constrain()`
     (3D hull & protrusion collision freedom, frontier connectivity, and 6-DoF static
     equilibrium) over `AvaLovelace/BrickGPT`'s `128,256`-token subword vocabulary.
+
+    Supports both single-stream (`initial_state: AssemblyState`, enforcing `batch_size == 1`)
+    and multi-stream batched decoding (`initial_state: Sequence[AssemblyState]`, enforcing
+    `batch_size == len(initial_state)` with independent per-row assembly states and tries).
     """
 
     def __init__(
         self,
         kernel: TopoBrickKernel,
-        initial_state: AssemblyState,
+        initial_state: AssemblyState | Sequence[AssemblyState],
         target_field: Optional[SparseTiledTargetField] = None,
         allowed_part_ids: Sequence[str] = STABLETEXT2BRICK_8PART_KIT,
         min_z_ldu: int = 0,
@@ -223,7 +227,21 @@ class BrickGrammarLogitsProcessor(LogitsProcessor):
     ) -> None:
         super().__init__()
         self.kernel = kernel
-        self.state = initial_state
+        if isinstance(initial_state, AssemblyState):
+            self._single_mode = True
+            self.states: List[AssemblyState] = [initial_state]
+        elif isinstance(initial_state, Sequence) and len(initial_state) >= 1 and all(
+            isinstance(s, AssemblyState) for s in initial_state
+        ):
+            self._single_mode = False
+            self.states = list(initial_state)
+        else:
+            raise ValueError(
+                "initial_state must be an AssemblyState or non-empty Sequence[AssemblyState]."
+            )
+
+        self.state = self.states[0]
+        self.batch_size: int = len(self.states)
         self.target_field = target_field
         self.allowed_part_ids = tuple(allowed_part_ids)
         self.min_z_ldu = int(min_z_ldu)
@@ -231,109 +249,146 @@ class BrickGrammarLogitsProcessor(LogitsProcessor):
         self.max_actions_per_step = int(max_actions_per_step)
         self.prompt_length = int(prompt_length)
 
-        self.candidate_cache: Optional[IncrementalCandidateCache] = None
-        self.covered_vol_ldu3: int = (
-            int(
-                target_field.intersection_volume(
-                    [b for p in initial_state.placed_parts.values() for b in p.world_boxes]
+        self._row_caches: List[Optional[IncrementalCandidateCache]] = [None] * self.batch_size
+        self._row_covered_vols: List[int] = [
+            (
+                int(
+                    target_field.intersection_volume(
+                        [b for p in st.placed_parts.values() for b in p.world_boxes]
+                    )
                 )
+                if target_field is not None and st.num_parts > 0
+                else 0
             )
-            if target_field is not None and initial_state.num_parts > 0
-            else 0
-        )
+            for st in self.states
+        ]
         self.target_vol_ldu3: int = (
             int(target_field.total_volume_ldu3) if target_field is not None else 0
         )
         self.step_latencies_ms: List[float] = []
         self.bricks_committed_by_lm: int = 0
-        self.terminated_reason: str = "in_progress"
+        self._row_terminated_reasons: List[str] = ["in_progress"] * self.batch_size
 
-        self._committed_token_cursor: int = self.prompt_length
-        self._active_trie: Dict[Tuple[int, ...], Tuple[int, ...]] = {}
-        self._seq_to_action: Dict[Tuple[int, ...], ValidPlacementAction] = {}
-        self._refresh_step_trie()
+        self._row_cursors: List[int] = [self.prompt_length] * self.batch_size
+        self._row_tries: List[Dict[Tuple[int, ...], Tuple[int, ...]]] = [
+            {} for _ in range(self.batch_size)
+        ]
+        self._row_seq_to_actions: List[Dict[Tuple[int, ...], ValidPlacementAction]] = [
+            {} for _ in range(self.batch_size)
+        ]
+        for b_idx in range(self.batch_size):
+            self._refresh_row_trie(b_idx)
 
-    def _refresh_step_trie(self) -> None:
-        self._active_trie.clear()
-        self._seq_to_action.clear()
+    @property
+    def candidate_cache(self) -> Optional[IncrementalCandidateCache]:
+        return self._row_caches[0]
 
-        if self.state.num_parts >= self.max_bricks:
-            self.terminated_reason = "reached_max_bricks"
-            self._active_trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
+    @property
+    def covered_vol_ldu3(self) -> int:
+        return self._row_covered_vols[0]
+
+    @property
+    def terminated_reason(self) -> str:
+        return self._row_terminated_reasons[0]
+
+    def _refresh_row_trie(self, row_idx: int) -> None:
+        trie = self._row_tries[row_idx]
+        seq_map = self._row_seq_to_actions[row_idx]
+        trie.clear()
+        seq_map.clear()
+        st = self.states[row_idx]
+        cov_vol = self._row_covered_vols[row_idx]
+
+        if st.num_parts >= self.max_bricks:
+            self._row_terminated_reasons[row_idx] = "reached_max_bricks"
+            trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
             return
 
         if (
             self.target_field is not None
             and self.target_vol_ldu3 > 0
-            and self.covered_vol_ldu3 >= int(0.98 * self.target_vol_ldu3)
+            and cov_vol >= int(0.98 * self.target_vol_ldu3)
         ):
-            self.terminated_reason = "early_target_complete"
-            self._active_trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
+            self._row_terminated_reasons[row_idx] = "early_target_complete"
+            trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
             return
 
         t0 = time.perf_counter()
         con_res = self.kernel.constrain(
-            self.state,
+            st,
             target_field=self.target_field,
             allowed_part_ids=self.allowed_part_ids,
             max_actions=self.max_actions_per_step,
-            candidate_cache=self.candidate_cache,
+            candidate_cache=self._row_caches[row_idx],
         )
         self.step_latencies_ms.append((time.perf_counter() - t0) * 1000.0)
-        self.candidate_cache = con_res.updated_cache
+        self._row_caches[row_idx] = con_res.updated_cache
 
         if not con_res.valid_actions:
             if (
                 self.target_field is not None
                 and self.target_vol_ldu3 > 0
-                and self.covered_vol_ldu3 >= int(0.92 * self.target_vol_ldu3)
+                and cov_vol >= int(0.92 * self.target_vol_ldu3)
             ):
-                self.terminated_reason = "early_target_complete"
+                self._row_terminated_reasons[row_idx] = "early_target_complete"
             else:
-                self.terminated_reason = "dead_end"
-            self._active_trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
+                self._row_terminated_reasons[row_idx] = "dead_end"
+            trie[()] = (BRICKGPT_EOS_TOKEN_ID,)
             return
 
         trie_sets: Dict[Tuple[int, ...], set[int]] = {}
         for act in con_res.valid_actions:
             tok_seq = action_to_brickgpt_tokens(act, min_z_ldu=self.min_z_ldu)
-            if tok_seq not in self._seq_to_action:
-                self._seq_to_action[tok_seq] = act
+            if tok_seq not in seq_map:
+                seq_map[tok_seq] = act
                 for k in range(len(tok_seq)):
                     prefix = tok_seq[:k]
                     trie_sets.setdefault(prefix, set()).add(tok_seq[k])
 
-        self._active_trie = {pref: tuple(sorted(nxt)) for pref, nxt in trie_sets.items()}
+        trie.update({pref: tuple(sorted(nxt)) for pref, nxt in trie_sets.items()})
 
     def __call__(
         self,
         input_ids: torch.LongTensor,
         scores: torch.FloatTensor,
     ) -> torch.FloatTensor:
-        # Single-sequence stateful decoding (`batch_size == 1`)
-        seq = [int(t) for t in input_ids[0, self._committed_token_cursor :].tolist()]
-
-        # If the previous step just finished emitting a full brick line (`TOKEN_RPAREN_NL`),
-        # commit that brick to `self.state` and build the next brick's certified trie!
-        if seq and seq[-1] == TOKEN_RPAREN_NL:
-            line_key = tuple(seq)
-            chosen_act = self._seq_to_action.get(line_key)
-            if chosen_act is not None:
-                self.state.place_root_part(
-                    chosen_act.part_id, chosen_act.pose, is_grounded=False
+        if scores.ndim != 2 or input_ids.ndim != 2 or scores.shape[0] != input_ids.shape[0]:
+            raise ValueError(
+                f"Expected 2D (batch, vocab/seq) tensors with matching batch_size, got input_ids={tuple(input_ids.shape)}, scores={tuple(scores.shape)}."
+            )
+        actual_bsz = int(scores.shape[0])
+        if actual_bsz != self.batch_size:
+            if self._single_mode:
+                raise ValueError(
+                    f"BrickGrammarLogitsProcessor initialized with a single AssemblyState requires batch_size == 1, "
+                    f"got batch_size == {actual_bsz}. Pass Sequence[AssemblyState] of length {actual_bsz} for batched decoding."
                 )
-                self.covered_vol_ldu3 += int(chosen_act.target_intersection_ldu3)
-                self.bricks_committed_by_lm += 1
-            self._committed_token_cursor = int(input_ids.shape[1])
-            seq = []
-            self._refresh_step_trie()
-
-        prefix_key = tuple(seq)
-        allowed_next = self._active_trie.get(prefix_key, (BRICKGPT_EOS_TOKEN_ID,))
+            raise ValueError(
+                f"BrickGrammarLogitsProcessor initialized for batch_size == {self.batch_size}, got batch_size == {actual_bsz}."
+            )
 
         masked = torch.full_like(scores, -float("inf"))
-        idx_tensor = torch.tensor(allowed_next, dtype=torch.long, device=scores.device)
-        masked[0, idx_tensor] = scores[0, idx_tensor]
+        for b_idx in range(actual_bsz):
+            cursor = self._row_cursors[b_idx]
+            seq = [int(t) for t in input_ids[b_idx, cursor:].tolist()]
+
+            if seq and seq[-1] == TOKEN_RPAREN_NL:
+                line_key = tuple(seq)
+                chosen_act = self._row_seq_to_actions[b_idx].get(line_key)
+                if chosen_act is not None:
+                    self.states[b_idx].place_root_part(
+                        chosen_act.part_id, chosen_act.pose, is_grounded=False
+                    )
+                    self._row_covered_vols[b_idx] += int(chosen_act.target_intersection_ldu3)
+                    self.bricks_committed_by_lm += 1
+                self._row_cursors[b_idx] = int(input_ids.shape[1])
+                seq = []
+                self._refresh_row_trie(b_idx)
+
+            prefix_key = tuple(seq)
+            allowed_next = self._row_tries[b_idx].get(prefix_key, (BRICKGPT_EOS_TOKEN_ID,))
+            idx_tensor = torch.tensor(allowed_next, dtype=torch.long, device=scores.device)
+            masked[b_idx, idx_tensor] = scores[b_idx, idx_tensor]
         return masked
 
 
@@ -366,6 +421,10 @@ class SyntaxOnlyBrickLogitsProcessor(LogitsProcessor):
         input_ids: torch.LongTensor,
         scores: torch.FloatTensor,
     ) -> torch.FloatTensor:
+        if scores.shape[0] != 1:
+            raise ValueError(
+                f"SyntaxOnlyBrickLogitsProcessor requires batch_size == 1, got {scores.shape[0]}."
+            )
         seq = [int(t) for t in input_ids[0, self._cursor :].tolist()]
         if seq and seq[-1] == TOKEN_RPAREN_NL:
             self.lines_emitted += 1
@@ -382,15 +441,17 @@ class SyntaxOnlyBrickLogitsProcessor(LogitsProcessor):
 
 
 # ---------------------------------------------------------------------------
-# 3. Live PyTorch Causal Transformer 100-Step Benchmark (`Claim D`)
+# 3. Live PyTorch Causal Transformer BPE Logits-Mask Integration Test (`Claim D`)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class LiveTransformerGenerationReport:
     """
-    Verified `Claim D` report comparing live causal `LlamaForCausalLM.generate()` over
-    `AvaLovelace/BrickGPT`'s `128,256`-token vocabulary WITH vs. WITHOUT `BrickGrammarLogitsProcessor`.
+    BPE Vocabulary Logits-Mask Integration Report (`F6` scope clarification):
+    compares live `LlamaForCausalLM.generate()` (randomly initialized weights) over
+    `AvaLovelace/BrickGPT`'s exact `128,256`-token BPE vocabulary WITH vs. WITHOUT
+    `BrickGrammarLogitsProcessor` (does NOT evaluate pretrained semantic LM quality).
     """
 
     vocab_size: int
@@ -409,12 +470,14 @@ class LiveTransformerGenerationReport:
     unmasked_valid_rollout_rate: float
     unmasked_accepted_action_validity_rate: float
     unmasked_mean_steps_before_first_violation: float
+    evaluation_scope: str = "bpe_logits_mask_integration_random_weights"
 
 
 def build_compact_brickgpt_causal_lm(seed: int = 42) -> LlamaForCausalLM:
     """
-    Instantiate a compact PyTorch `LlamaForCausalLM` over the exact `128,256`-token
-    `AvaLovelace/BrickGPT` vocabulary for live `.generate()` constrained decoding verification.
+    Instantiate a compact randomly initialized PyTorch `LlamaForCausalLM` over the exact
+    `128,256`-token `AvaLovelace/BrickGPT` BPE vocabulary for live `.generate()` logits-mask
+    integration testing (`F6`: verifies BPE prefix-trie masking, not pretrained LM quality).
     """
     torch.manual_seed(seed)
     cfg = LlamaConfig(

@@ -379,6 +379,7 @@ class ContinuousPlacedPart:
     continuous_pose: ContinuousSE3Pose
     world_obbs: Tuple[OBB3D, ...]
     is_grounded: bool = False
+    color_id: int = 15
 
 
 def _orthonormal_tangent_basis(normal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -402,13 +403,20 @@ class ContinuousAssemblyState:
       4. Coupled 6-DoF static equilibrium LP with joint-DoF projections.
     """
 
-    def __init__(self, pos_mate_tol_ldu: float = 1.5, normal_cos_tol: float = 0.96) -> None:
+    def __init__(
+        self,
+        pos_mate_tol_ldu: float = 1.5,
+        normal_cos_tol: float = 0.96,
+        has_execution_trace: bool = True,
+    ) -> None:
         self.placed_parts: Dict[int, ContinuousPlacedPart] = {}
         self.matched_port_pairs: Dict[Tuple[int, int], Tuple[int, int]] = {}
         self.articulated_joints: Dict[
             Tuple[int, int],
             Tuple[int, int, float, Tuple[float, float], float, Tuple[float, float]],
         ] = {}
+        self.placement_order: List[int] = []
+        self.has_execution_trace: bool = bool(has_execution_trace)
         self._next_id: int = 0
         self.pos_mate_tol_ldu = float(pos_mate_tol_ldu)
         self.normal_cos_tol = float(normal_cos_tol)
@@ -423,6 +431,7 @@ class ContinuousAssemblyState:
         is_grounded: bool = False,
         allowed_penetration_ldu: float = 0.05,
         check_collision: bool = True,
+        color_id: int = 15,
     ) -> int:
         prim = get_brick_primitive(part_id)
         new_obbs = tuple(box_to_obb(b, pose) for b in prim.hull_boxes)
@@ -618,7 +627,9 @@ class ContinuousAssemblyState:
             continuous_pose=pose,
             world_obbs=new_obbs,
             is_grounded=bool(is_grounded),
+            color_id=int(color_id),
         )
+        self.placement_order.append(new_id)
         for lp, gp_ex in candidate_matches:
             gp_new = (new_id, lp)
             self.matched_port_pairs[gp_new] = gp_ex
@@ -731,35 +742,48 @@ class ContinuousAssemblyState:
 
     def evaluate_static_equilibrium(
         self,
-        clutch_force_capacity_grams: float = 45.0,
-        moment_arm_capacity_ldu: float = 16.0,
+        clutch_force_capacity_grams: float = 99.9,
+        moment_arm_capacity_ldu: float = 8.0,
         locking_hinge_detent_moment_ldu_g: float = 380.0,
         ball_joint_friction_moment_ldu_g: float = 220.0,
-        coulomb_friction_coeff: float = 0.45,
+        coulomb_friction_coeff: float = 0.60,
         normal_crush_ratio: float = 25.0,
         lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
+        foundation_policy: Any = "clutched_baseplate",
+        gravity_unit: Tuple[float, float, float] = (0.0, 0.0, -1.0),
     ) -> EquilibriumResult:
         """
         Solve the coupled 6-DoF static equilibrium LP in continuous SE(3) coordinates with
-        explicit joint-DoF wrench projections:
-          - `HINGE_PIN`/`HINGE_SOCKET`, `SMOOTH_PIN`, `TURNTABLE_*`, `WHEEL_*`: axial torque τ_z = 0
-          - `LOCKING_HINGE_PIN`/`LOCKING_HINGE_SOCKET`: axial torque bounded by `locking_hinge_detent_moment_ldu_g`
-          - `BALL_JOINT`/`BALL_SOCKET`: all 3 torque axes bounded by `ball_joint_friction_moment_ldu_g`
-          - `TECHNIC_AXLE`: axial tension = 0, cross-shaped torsion resisted (`2.5 * M_max`).
+        explicit joint-DoF wrench projections and `foundation_policy` enforcement (`F2`):
+          - `TABLE_FRICTION_ONLY`: every `is_grounded` part must touch `z = 0` (`|min_z| <= 0.25 LDU`)
+            and remains an active 6-DoF body supported only by unilateral (`f_tens = 0`), pure
+            Coulomb-friction (`|f_t1| + |f_t2| <= mu * f_comp`) OBB contact vertices at `z = 0`.
+          - `CLUTCHED_BASEPLATE`: `is_grounded` parts are clamped to a horizontal baseplate.
+          - `FIXED_ANCHOR`: `is_grounded` parts are rigidly clamped to an immovable frame.
         """
         from topo_brick.evaluation.static_equilibrium import (
             EquilibriumResult,
+            FoundationPolicy,
             _solve_lp_highspy_or_scipy,
         )
 
+        fp_enum = (
+            foundation_policy
+            if isinstance(foundation_policy, FoundationPolicy)
+            else FoundationPolicy(str(foundation_policy))
+        )
+        fp_str = fp_enum.value
+
         parts = self.placed_parts
         if not parts:
-            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "Empty")
+            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "Empty", foundation_policy=fp_str)
 
         # BFS ground connectivity
         grounded_ids = [i for i, p in parts.items() if p.is_grounded]
         if not grounded_ids:
-            return EquilibriumResult(False, float("inf"), -float("inf"), {}, None, 0.0, "No grounded parts")
+            return EquilibriumResult(
+                False, float("inf"), -float("inf"), {}, None, 0.0, "No grounded parts", foundation_policy=fp_str
+            )
         visited = set(grounded_ids)
         adj: Dict[int, Set[int]] = {i: set() for i in parts}
         for (ia, _), (ib, _) in self.matched_port_pairs.items():
@@ -774,17 +798,87 @@ class ContinuousAssemblyState:
                     queue.append(nb)
         if len(visited) < len(parts):
             return EquilibriumResult(
-                False, float("inf"), -float("inf"), {}, None, 0.0, "Disconnected floating part"
+                False,
+                float("inf"),
+                -float("inf"),
+                {},
+                None,
+                0.0,
+                "Disconnected floating part",
+                foundation_policy=fp_str,
             )
 
-        free_insts = sorted(i for i, p in parts.items() if not p.is_grounded)
+        is_table = fp_enum == FoundationPolicy.TABLE_FRICTION_ONLY
+        table_contacts_per_gid: Dict[int, List[np.ndarray]] = {}
+        if is_table:
+            signs = np.array(
+                [
+                    [-1.0, -1.0, -1.0],
+                    [-1.0, -1.0, 1.0],
+                    [-1.0, 1.0, -1.0],
+                    [-1.0, 1.0, 1.0],
+                    [1.0, -1.0, -1.0],
+                    [1.0, -1.0, 1.0],
+                    [1.0, 1.0, -1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+            for gid in grounded_ids:
+                gp = parts[gid]
+                all_z: List[float] = []
+                low_pts: List[np.ndarray] = []
+                for ob in gp.world_obbs:
+                    ax_m = np.asarray(ob.axes_rows, dtype=np.float64)
+                    he_v = np.asarray(ob.half_extents, dtype=np.float64)
+                    ct_v = np.asarray(ob.center, dtype=np.float64)
+                    crn = ct_v + (signs * he_v) @ ax_m
+                    for pt in crn:
+                        z_v = float(pt[2])
+                        all_z.append(z_v)
+                        if z_v <= 0.25:
+                            low_pts.append(np.array([float(pt[0]), float(pt[1]), 0.0], dtype=np.float64))
+                min_z_g = min(all_z) if all_z else float("inf")
+                if abs(min_z_g) > 0.25 or not low_pts:
+                    return EquilibriumResult(
+                        False,
+                        float("inf"),
+                        -float("inf"),
+                        {},
+                        None,
+                        0.0,
+                        f"Grounded part {gid} (min_z={min_z_g:.2f}) does not contact z=0 table under TABLE_FRICTION_ONLY",
+                        foundation_policy=fp_str,
+                    )
+                # Deduplicate XY table vertices
+                uniq_xy: Dict[Tuple[int, int], np.ndarray] = {}
+                for pt in low_pts:
+                    uniq_xy[(int(round(pt[0] * 100.0)), int(round(pt[1] * 100.0)))] = pt
+                table_contacts_per_gid[gid] = list(uniq_xy.values())
+
+        free_insts = sorted(parts.keys()) if is_table else sorted(i for i, p in parts.items() if not p.is_grounded)
         if not free_insts:
-            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "All grounded")
+            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "All grounded", foundation_policy=fp_str)
         free_idx_map = {iid: idx for idx, iid in enumerate(free_insts)}
 
         # Collect unique active contacts
         seen_edges: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
         contacts: List[Tuple[Tuple[int, int], Tuple[int, int], np.ndarray, np.ndarray, np.ndarray, np.ndarray, str]] = []
+        if is_table:
+            for gid, t_pts in table_contacts_per_gid.items():
+                for t_k, pt_t in enumerate(t_pts):
+                    # (-1, gid) with n_c = (0, 0, +1): on endpoint gb=gid (+1.0), f_n+ pushes +Z (upward compression)!
+                    contacts.append(
+                        (
+                            (-1, -100 - t_k),
+                            (gid, -100 - t_k),
+                            pt_t,
+                            np.array([0.0, 0.0, 1.0], dtype=np.float64),
+                            np.array([1.0, 0.0, 0.0], dtype=np.float64),
+                            np.array([0.0, 1.0, 0.0], dtype=np.float64),
+                            "table_vertex",
+                        )
+                    )
         for gpid_a, gpid_b in self.matched_port_pairs.items():
             ekey = (gpid_a, gpid_b) if gpid_a < gpid_b else (gpid_b, gpid_a)
             if ekey in seen_edges:
@@ -841,15 +935,22 @@ class ContinuousAssemblyState:
         eq_vals: List[float] = []
         b_eq = np.zeros(6 * n_free, dtype=np.float64)
 
+        g_norm = math.sqrt(sum(float(c) * float(c) for c in gravity_unit))
+        gx_u, gy_u, gz_u = (
+            (float(gravity_unit[0]) / g_norm, float(gravity_unit[1]) / g_norm, float(gravity_unit[2]) / g_norm)
+            if g_norm > 1e-12
+            else (0.0, 0.0, -1.0)
+        )
+
         coms: Dict[int, np.ndarray] = {}
         for iid in free_insts:
             part = parts[iid]
             prim = get_brick_primitive(part.part_id)
             b_idx = free_idx_map[iid]
             m_g = float(prim.mass_grams)
-            b_eq[6 * b_idx + 0] = float(lateral_accel_xy[0]) * m_g
-            b_eq[6 * b_idx + 1] = float(lateral_accel_xy[1]) * m_g
-            b_eq[6 * b_idx + 2] = m_g
+            b_eq[6 * b_idx + 0] = (-gx_u + float(lateral_accel_xy[0])) * m_g
+            b_eq[6 * b_idx + 1] = (-gy_u + float(lateral_accel_xy[1])) * m_g
+            b_eq[6 * b_idx + 2] = -gz_u * m_g
             vol_sum = 0.0
             lc = np.zeros(3, dtype=np.float64)
             for bx in prim.hull_boxes:
@@ -900,6 +1001,23 @@ class ContinuousAssemblyState:
                             eq_rows.extend((b_row + 3 + ax, b_row + 3 + ax))
                             eq_cols.extend((mcol_p, mcol_m))
                             eq_vals.extend((sgn * float(d_vec[ax]), -sgn * float(d_vec[ax])))
+
+            if jmode == "table_vertex":
+                # Unilateral compression-only point contact on flat table (f_tens = 0, tau = 0, pure Coulomb shear)
+                var_ub[base + 5] = 0.0
+                var_ub[base + 6 : base + 12] = 0.0
+                r0 = len(b_ub_list)
+                ub_rows.extend((r0, r0))
+                ub_cols.extend((base + 4, eta_col))
+                ub_vals.extend((1.0, -f_comp_max))
+                b_ub_list.append(0.0)
+
+                r2 = len(b_ub_list)
+                ub_rows.extend([r2] * 5)
+                ub_cols.extend((base, base + 1, base + 2, base + 3, base + 4))
+                ub_vals.extend((1.0, 1.0, 1.0, 1.0, -mu))
+                b_ub_list.append(0.0)
+                continue
 
             # Joint-DoF bounds
             if jmode == "smooth_hinge":
@@ -969,7 +1087,7 @@ class ContinuousAssemblyState:
             c_obj, a_eq_csc, b_eq, a_ub_csc, b_ub, var_lb, var_ub
         )
         if not ok or sol is None:
-            return EquilibriumResult(False, float("inf"), -float("inf"), {}, None, 0.0, msg)
+            return EquilibriumResult(False, float("inf"), -float("inf"), {}, None, 0.0, msg, foundation_policy=fp_str)
         eta = float(sol[eta_col])
         return EquilibriumResult(
             is_stable=(eta <= 1.0 + 1e-6),
@@ -979,6 +1097,7 @@ class ContinuousAssemblyState:
             weakest_contact=None,
             solve_time_ms=0.0,
             status_message=msg,
+            foundation_policy=fp_str,
         )
 
     def evaluate_perturbation_stability(
@@ -987,10 +1106,11 @@ class ContinuousAssemblyState:
         lateral_disturbance_ratio: float = 0.05,
         allow_stable_pendulums: bool = True,
         allow_neutral_mechanisms: bool = False,
-        clutch_force_capacity_grams: float = 45.0,
-        moment_arm_capacity_ldu: float = 16.0,
+        clutch_force_capacity_grams: float = 99.9,
+        moment_arm_capacity_ldu: float = 8.0,
         locking_hinge_detent_moment_ldu_g: float = 380.0,
         ball_joint_friction_moment_ldu_g: float = 220.0,
+        foundation_policy: Any = "clutched_baseplate",
     ) -> "PerturbationStabilityResult":
         """
         Round 8 R8-WS1 (§7 & §9B Case #5):
@@ -1011,6 +1131,7 @@ class ContinuousAssemblyState:
             moment_arm_capacity_ldu=moment_arm_capacity_ldu,
             locking_hinge_detent_moment_ldu_g=locking_hinge_detent_moment_ldu_g,
             ball_joint_friction_moment_ldu_g=ball_joint_friction_moment_ldu_g,
+            foundation_policy=foundation_policy,
         )
         if not eq0.is_stable:
             return PerturbationStabilityResult(
@@ -1256,6 +1377,7 @@ class ContinuousAssemblyState:
                     locking_hinge_detent_moment_ldu_g=locking_hinge_detent_moment_ldu_g,
                     ball_joint_friction_moment_ldu_g=ball_joint_friction_moment_ldu_g,
                     lateral_accel_xy=(lx, ly),
+                    foundation_policy=foundation_policy,
                 )
                 if not eq_lat.is_stable:
                     return PerturbationStabilityResult(

@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import time
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 from topo_brick.evaluation.static_equilibrium import FoundationPolicy
@@ -68,10 +68,285 @@ ADAPTIVE_SURFACE_KIT: Tuple[str, ...] = (
 
 
 @dataclass(frozen=True, slots=True)
+class HollowShellPolicy:
+    """
+    Ribbed hollow-shell target voxelization specification (`Phase 11 Extension 3`).
+
+    Carves unobservable solid interior volume while preserving 100% of exterior surface sub-voxels,
+    a `wall_thickness_studs` structural backing shell, grounded base tipping collar, plumb internal
+    shear diaphragms every `diaphragm_pitch_studs`, and symmetric 45° inward roof corbels (so roofs
+    close cleanly with zero trapped interior temporary scaffolding).
+    """
+
+    enabled: bool = False
+    wall_thickness_studs: int = 1
+    roof_thickness_plates: int = 3
+    diaphragm_pitch_studs: int = 6
+    corbel_overhang_support: bool = True
+    preserve_grounded_collar: bool = True
+
+
+def _dilate_xy_chebyshev(mask_2d: np.ndarray, radius: int) -> np.ndarray:
+    """Fast pure-NumPy 2D Chebyshev (`L_inf`) dilation by `radius` stud cells."""
+    cur = mask_2d.copy()
+    for _ in range(max(0, int(radius))):
+        p = np.pad(cur, 1, mode="constant", constant_values=False)
+        cur = (
+            p[1:-1, 1:-1] | p[2:, 1:-1] | p[:-2, 1:-1] | p[1:-1, 2:] | p[1:-1, :-2]
+            | p[2:, 2:] | p[2:, :-2] | p[:-2, 2:] | p[:-2, :-2]
+        )
+    return cur
+
+
+def _erode_xy_chebyshev(mask_2d: np.ndarray, radius: int) -> np.ndarray:
+    """Fast pure-NumPy 2D Chebyshev (`L_inf`) erosion by `radius` stud cells (outside = False)."""
+    cur = mask_2d.copy()
+    for _ in range(max(0, int(radius))):
+        p = np.pad(cur, 1, mode="constant", constant_values=False)
+        cur = (
+            p[1:-1, 1:-1] & p[2:, 1:-1] & p[:-2, 1:-1] & p[1:-1, 2:] & p[1:-1, :-2]
+            & p[2:, 2:] & p[2:, :-2] & p[:-2, 2:] & p[:-2, :-2]
+        )
+    return cur
+
+
+def apply_hollow_shell_policy(
+    occ_5x5x2: np.ndarray,
+    occ_5x5x6: np.ndarray,
+    policy: HollowShellPolicy,
+    forbidden_support_boxes: Sequence[LDUBox] = (),
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Apply `HollowShellPolicy` to `(occ_5x5x2, occ_5x5x6)` in `< 6 ms` (`Phase 11 Extension 3`):
+      1. Preserves 100% of partial exterior surface cells AND `wall_thickness_studs` of full-cell
+         structural backing laterally around all exterior faces and `forbidden_support_boxes`.
+      2. Retains `roof_thickness_plates` beneath upward-exposed ceilings/terraces and a `2`-stud
+         grounded collar on Course 0 (`preserve_grounded_collar=True`).
+      3. Inserts `1`-stud plumb internal shear diaphragms every `diaphragm_pitch_studs` directly
+         underneath overhead roof mass.
+      4. Steps walls and internal ribs inward by `1` stud/course (`corbel_overhang_support=True`)
+         below horizontal ceiling spans so roofs bridge with zero interior temporary supports.
+    """
+    if not policy.enabled:
+        return occ_5x5x2, occ_5x5x6
+
+    gx, gy, gz2 = occ_5x5x2.shape
+    _, _, gz6 = occ_5x5x6.shape
+    nx_s = gx // 4
+    ny_s = gy // 4
+    n_plates = gz2 // 4
+    nz_c = gz6 // 4
+    if nx_s < 5 or ny_s < 5 or n_plates < 6:
+        return occ_5x5x2, occ_5x5x6
+
+    out2 = occ_5x5x2.copy()
+    out6 = occ_5x5x6.copy()
+
+    # Mask out forbidden openings first so walls wrap around arches/portals cleanly
+    for fb in forbidden_support_boxes:
+        fx0, fx1 = max(0, int(math.floor(fb.xmin / 5.0))), min(gx, int(math.ceil(fb.xmax / 5.0)))
+        fy0, fy1 = max(0, int(math.floor(fb.ymin / 5.0))), min(gy, int(math.ceil(fb.ymax / 5.0)))
+        fz2_0, fz2_1 = max(0, int(math.floor(fb.zmin / 2.0))), min(gz2, int(math.ceil(fb.zmax / 2.0)))
+        fz6_0, fz6_1 = max(0, int(math.floor(fb.zmin / 6.0))), min(gz6, int(math.ceil(fb.zmax / 6.0)))
+        if fx1 > fx0 and fy1 > fy0:
+            if fz2_1 > fz2_0:
+                out2[fx0:fx1, fy0:fy1, fz2_0:fz2_1] = False
+            if fz6_1 > fz6_0:
+                out6[fx0:fx1, fy0:fy1, fz6_0:fz6_1] = False
+
+    # Identify 100%-filled `20x20x8 LDU` stud-plate cells (`4x4x4 = 64` sub-voxels in `out2`)
+    counts_p = np.sum(out2.reshape(nx_s, 4, ny_s, 4, n_plates, 4), axis=(1, 3, 5), dtype=np.int16)
+    full_p = counts_p == 64
+    any_p = counts_p > 0
+
+    wall_w = max(1, int(policy.wall_thickness_studs))
+    roof_p = max(3, int(policy.roof_thickness_plates))
+
+    keep_full = np.zeros_like(full_p)
+
+    # 1. Lateral exterior wall crust (`wall_w` studs thick inside `full_p`, `2` studs on Course 0 collar)
+    wall_crust_p = np.zeros_like(full_p)
+    for p in range(n_plates):
+        fp_slice = full_p[:, :, p]
+        if not np.any(fp_slice):
+            continue
+        eff_w = max(wall_w, 2) if (policy.preserve_grounded_collar and p < 3) else wall_w
+        deep_interior = _erode_xy_chebyshev(fp_slice, eff_w)
+        wc_slice = fp_slice & (~deep_interior)
+        wall_crust_p[:, :, p] = wc_slice
+        keep_full[:, :, p] |= wc_slice
+
+    # 2. Top roof / stepped terrace cap (`roof_p` plates beneath any air/partial cell above)
+    #    PLUS stepped-tier wall load-transfer collar (so inset upper walls land on a solid transfer ledge
+    #    tied into the lower outer wall via Step 4 corbels, or drop plumb piers when inset > 2 studs!)
+    ceiling_mask_p = np.zeros_like(full_p)
+    deep_setback_pier_p = np.zeros_like(full_p)
+    for p in range(n_plates):
+        above_not_full = (
+            np.ones((nx_s, ny_s), dtype=bool)
+            if (p + 1 >= n_plates)
+            else (~full_p[:, :, p + 1])
+        )
+        step_landing = (
+            (wall_crust_p[:, :, p + 1] & full_p[:, :, p] & (~wall_crust_p[:, :, p]))
+            if (p + 1 < n_plates)
+            else np.zeros((nx_s, ny_s), dtype=bool)
+        )
+        near_outer_wall = _dilate_xy_chebyshev(wall_crust_p[:, :, p], 2)
+        near_step_landing = step_landing & near_outer_wall
+        far_step_landing = step_landing & (~near_outer_wall)
+        if np.any(far_step_landing):
+            deep_setback_pier_p[:, :, : p + 1] |= far_step_landing[:, :, None]
+
+        is_ceiling_top = (full_p[:, :, p] & above_not_full) | near_step_landing
+        if np.any(is_ceiling_top):
+            for q in range(max(0, p - roof_p + 1), p + 1):
+                cap_q = full_p[:, :, q] & is_ceiling_top
+                keep_full[:, :, q] |= cap_q
+                ceiling_mask_p[:, :, q] |= cap_q
+
+    if np.any(deep_setback_pier_p):
+        keep_full |= full_p & deep_setback_pier_p
+
+    # 3. Plumb 1-stud internal shear diaphragms (`diaphragm_pitch_studs`) dividing interior spans into
+    #    even structural bays (`max clear bay <= pitch + 3` studs) directly beneath overhead roof mass!
+    pitch = int(policy.diaphragm_pitch_studs)
+    if pitch > 0:
+        max_clear_bay = max(4, pitch + 3)
+        n_bays_x = max(1, int(math.ceil(max(1, nx_s - 2 * wall_w) / float(max_clear_bay))))
+        n_bays_y = max(1, int(math.ceil(max(1, ny_s - 2 * wall_w) / float(max_clear_bay))))
+        rib_xy = np.zeros((nx_s, ny_s), dtype=bool)
+        for kx in range(1, n_bays_x):
+            ix_r = int(round(kx * (nx_s - 1) / float(n_bays_x)))
+            if wall_w + 2 <= ix_r <= nx_s - wall_w - 3:
+                rib_xy[ix_r, :] = True
+        for ky in range(1, n_bays_y):
+            iy_r = int(round(ky * (ny_s - 1) / float(n_bays_y)))
+            if wall_w + 2 <= iy_r <= ny_s - wall_w - 3:
+                rib_xy[:, iy_r] = True
+
+        # Propagate overhead kept/surface mass downward (`top-down cumulative OR`) so ribs stand plumb to z=0!
+        overhead_mass = np.zeros((nx_s, ny_s), dtype=bool)
+        for p in range(n_plates - 1, -1, -1):
+            overhead_mass |= keep_full[:, :, p] | (any_p[:, :, p] & (~full_p[:, :, p]))
+            keep_full[:, :, p] |= full_p[:, :, p] & rib_xy & overhead_mass
+
+    # Snapshot plumb walls + ribs (`excluding ceiling caps`) BEFORE corbel stepping so corbels ONLY
+    # step inward 1-2 courses directly beneath true horizontal ceiling spans (never inverting-pyramid to z=0!).
+    walls_and_ribs_p = keep_full & (~ceiling_mask_p)
+
+    # 4. Symmetric 45° inward corbel stepping (`1` stud/course for 1-2 courses directly beneath ceiling spans)
+    if policy.corbel_overhang_support:
+        for c_roof in range(1, nz_c):
+            p_r0, p_r1 = 3 * c_roof, min(n_plates, 3 * (c_roof + 1))
+            ceil_c = np.any(ceiling_mask_p[:, :, p_r0:p_r1], axis=2)
+            if not np.any(ceil_c):
+                continue
+            p_b1_0, p_b1_1 = 3 * (c_roof - 1), 3 * c_roof
+            wr_b1 = np.any(walls_and_ribs_p[:, :, p_b1_0:p_b1_1], axis=2)
+            unsup_ceil = ceil_c & (~wr_b1)
+            if not np.any(unsup_ceil):
+                continue
+            # Check if any unsupported ceiling cell is > 4 studs away from `wr_b1` (`so clear bay > 8 studs`)
+            need_two_step = bool(np.any(unsup_ceil & (~_dilate_xy_chebyshev(wr_b1, 4)))) and c_roof >= 2
+            if need_two_step:
+                p_b2_0, p_b2_1 = 3 * (c_roof - 2), 3 * (c_roof - 1)
+                wr_b2 = np.any(walls_and_ribs_p[:, :, p_b2_0:p_b2_1], axis=2)
+                step_b2 = _dilate_xy_chebyshev(wr_b2, 1) & _dilate_xy_chebyshev(unsup_ceil, 2) & np.all(full_p[:, :, p_b2_0:p_b2_1], axis=2)
+                keep_full[:, :, p_b2_0:p_b2_1] |= step_b2[:, :, None]
+                base_for_b1 = wr_b1 | step_b2
+            else:
+                base_for_b1 = wr_b1
+            step_b1 = _dilate_xy_chebyshev(base_for_b1, 1) & _dilate_xy_chebyshev(unsup_ceil, 1) & np.all(full_p[:, :, p_b1_0:p_b1_1], axis=2)
+            keep_full[:, :, p_b1_0:p_b1_1] |= step_b1[:, :, None]
+
+    # Carve `full_p & (~keep_full)` out of `out2` and `out6`!
+    carve_p = full_p & (~keep_full)
+    if np.any(carve_p):
+        carve_2 = np.repeat(np.repeat(np.repeat(carve_p, 4, axis=0), 4, axis=1), 4, axis=2)
+        out2[carve_2] = False
+
+        # In `out6` (`4` sub-voxels per `24 LDU` course): carve course `c` wherever all 3 plates `3c..3c+2` are carved!
+        for c_idx in range(nz_c):
+            p0 = 3 * c_idx
+            p1 = min(n_plates, p0 + 3)
+            if p1 == p0 + 3:
+                carve_c = carve_p[:, :, p0] & carve_p[:, :, p0 + 1] & carve_p[:, :, p0 + 2]
+                if np.any(carve_c):
+                    c6_xy = np.repeat(np.repeat(carve_c, 4, axis=0), 4, axis=1)
+                    out6[:, :, 4 * c_idx : 4 * (c_idx + 1)][c6_xy] = False
+
+    return out2, out6
+
+
+def evaluate_exterior_crust_fidelity(
+    first_arg: Any,
+    second_arg: Any,
+    crust_depth_ldu: int = 20,
+) -> Tuple[float, float]:
+    """
+    Evaluate `exterior_crust_iou_5x5x6` on the outer `crust_depth_ldu` (`default 20 LDU = 1 stud`)
+    shell + all exterior air outside `solid_occ_5x5x6` (penalizing any exterior spill identically
+    to `Gate 8A` while ignoring deliberately hollowed interior voids), returning:
+      `(exterior_crust_iou_5x5x6, built_volume_vs_solid_savings_ratio)`.
+    Accepts either `(assembly, solid_occ_5x5x6)` or `(solid_occ_5x5x6, assembly)`.
+    """
+    if isinstance(first_arg, AssemblyState):
+        assembly = first_arg
+        solid_occ_5x5x6 = second_arg
+    else:
+        solid_occ_5x5x6 = first_arg
+        assembly = second_arg
+    sol = np.asarray(solid_occ_5x5x6, dtype=bool)
+    gx, gy, gz = sol.shape
+    if not np.any(sol):
+        return 1.0, 0.0
+
+    r_vox = max(1, int(round(float(crust_depth_ldu) / 5.0)))
+    r_z = max(1, int(round(float(crust_depth_ldu) / 6.0)))
+
+    # Erode `sol` in 3D by `(r_vox, r_vox, r_z)` to isolate deep interior void `deep_void`
+    deep_void = sol.copy()
+    for _ in range(r_vox):
+        p = np.pad(deep_void, ((1, 1), (1, 1), (0, 0)), mode="constant", constant_values=False)
+        deep_void = p[1:-1, 1:-1, :] & p[2:, 1:-1, :] & p[:-2, 1:-1, :] & p[1:-1, 2:, :] & p[1:-1, :-2, :]
+    for _ in range(r_z):
+        pz = np.pad(deep_void, ((0, 0), (0, 0), (1, 1)), mode="constant", constant_values=True)
+        # Keep Z=0 base open to hollowing (`constant_values=True` at z=0 bottom pad), top `+Z` exposed (`False`)
+        pz[:, :, -1] = False
+        deep_void = pz[:, :, 1:-1] & pz[:, :, 2:] & pz[:, :, :-2]
+
+    crust_target = sol & (~deep_void)
+
+    built = np.zeros((gx, gy, gz), dtype=bool)
+    for pl in assembly.placed_parts.values():
+        for b in pl.world_boxes:
+            x0 = max(0, int(math.floor(b.xmin / 5.0)))
+            x1 = min(gx, int(math.ceil(b.xmax / 5.0)))
+            y0 = max(0, int(math.floor(b.ymin / 5.0)))
+            y1 = min(gy, int(math.ceil(b.ymax / 5.0)))
+            z0 = max(0, int(math.floor(b.zmin / 6.0)))
+            z1 = min(gz, int(math.ceil(b.zmax / 6.0)))
+            if x1 > x0 and y1 > y0 and z1 > z0:
+                built[x0:x1, y0:y1, z0:z1] = True
+
+    # Evaluate IoU strictly on `~deep_void` (i.e. outer crust + ALL exterior air outside `sol`!)
+    eval_mask = ~deep_void
+    inter = int(np.count_nonzero(crust_target & built & eval_mask))
+    union = int(np.count_nonzero((crust_target | built) & eval_mask))
+    crust_iou = float(inter) / float(max(1, union))
+
+    sol_vox = int(np.count_nonzero(sol))
+    blt_vox = int(np.count_nonzero(built))
+    vol_savings = float(max(0.0, 1.0 - (float(blt_vox) / float(max(1, sol_vox)))))
+    return round(crust_iou, 6), round(vol_savings, 6)
+
+
+@dataclass(frozen=True, slots=True)
 class AdaptiveSurfaceTarget:
     """
     Multi-resolution sub-voxel target representation derived directly from a continuous 3D
-    triangle mesh `(verts, faces)` for `TopoBrickKernel.realize(..., surface_refinement="adaptive_plate_slope")`.
+    triangle mesh `(verts, faces)` for `TopoBrickKernel.realize(...)`.
     """
 
     nx_studs: int
@@ -81,6 +356,8 @@ class AdaptiveSurfaceTarget:
     occ_5x5x6: np.ndarray  # (4*nx_studs, 4*ny_studs, 4*nz_courses) bool — matches Gate 2 5x5x6 grid
     mesh_surf_pts: np.ndarray  # (S, 3) float64 surface samples in world LDU
     rasterize_ms: float
+    solid_occ_5x5x6: Optional[np.ndarray] = None  # Pre-hollowed solid reference mask when HollowShellPolicy active
+    hollow_shell_policy: Optional[HollowShellPolicy] = None
 
     @classmethod
     def from_triangle_mesh(
@@ -89,6 +366,8 @@ class AdaptiveSurfaceTarget:
         faces: np.ndarray,
         max_xy_studs: int = 10,
         max_z_courses: int = 8,
+        hollow_shell_policy: Optional[HollowShellPolicy] = None,
+        forbidden_support_boxes: Sequence[LDUBox] = (),
     ) -> "AdaptiveSurfaceTarget":
         """
         Rasterize continuous triangle mesh `(verts, faces)` onto aligned `5x5x2 LDU` (`192`
@@ -226,6 +505,12 @@ class AdaptiveSurfaceTarget:
 
         if pts_surf.shape[0] > 600:
             pts_surf = pts_surf[:: max(1, pts_surf.shape[0] // 600)]
+        solid_ref: Optional[np.ndarray] = None
+        if hollow_shell_policy is not None and hollow_shell_policy.enabled:
+            solid_ref = occ6.copy()
+            occ2, occ6 = apply_hollow_shell_policy(
+                occ2, occ6, hollow_shell_policy, forbidden_support_boxes=forbidden_support_boxes
+            )
         elapsed = (time.perf_counter() - t0) * 1000.0
         return cls(
             nx_studs=nx_s,
@@ -235,6 +520,8 @@ class AdaptiveSurfaceTarget:
             occ_5x5x6=occ6,
             mesh_surf_pts=pts_surf,
             rasterize_ms=elapsed,
+            solid_occ_5x5x6=solid_ref,
+            hollow_shell_policy=hollow_shell_policy,
         )
 
     def to_fine_target_field(self) -> SparseTiledTargetField:

@@ -912,7 +912,10 @@ def get_brick_primitive(part_id: str) -> BrickPrimitive:
 # into `EXTENDED_BRICK_CATALOG` while preserving `BRICK_CATALOG` frozen at 20 parts.
 from topo_brick.interface.tier_a_catalog import (  # noqa: E402
     LDRAW_PART_ALIASES,
+    SET_10698_33_LDRAW_COLORS,
+    SET_10698_COLORED_COUNTS,
     SET_10698_OFFICIAL_INVENTORY,
+    SET_10698_REBRICKABLE_MANIFEST,
     build_tier_a_catalog,
     normalize_ldraw_part_id,
 )
@@ -922,3 +925,91 @@ EXTENDED_BRICK_CATALOG.update(TIER_A_CATALOG)
 TIER_A_CATALOG_IDS: Tuple[str, ...] = tuple(TIER_A_CATALOG.keys())
 SET_10698_KIT_IDS: Tuple[str, ...] = tuple(SET_10698_OFFICIAL_INVENTORY.keys())
 _ = (LDRAW_PART_ALIASES, normalize_ldraw_part_id)
+
+ColoredPartKey = Tuple[str, int]  # (canonical_or_owned_part_id, ldraw_color_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ColoredInventorySpec:
+    """
+    Joint `(part_id, ldraw_color_id)` finite inventory specification (`Phase 11 Extension 1`).
+
+    Tracks exact color-coupled brick stock while providing marginal mold totals for geometric
+    realization and policy controls for interior core color hiding and chromatic footprint splits.
+    """
+
+    counts: Dict[ColoredPartKey, int]
+    allow_hidden_color_substitution: bool = True
+    allow_same_footprint_split: bool = True
+    seam_coherence_weight: float = 0.75
+
+    def marginal_mold_counts(self) -> Dict[str, int]:
+        """Aggregate `sum_c counts[(part_id, c)]` per part ID for geometric solvers."""
+        out: Dict[str, int] = {}
+        for (pid, _cid), qty in self.counts.items():
+            q = int(qty)
+            if q > 0:
+                p_norm = str(pid).strip().lower()
+                p_key = pid if pid in EXTENDED_BRICK_CATALOG else p_norm
+                out[p_key] = out.get(p_key, 0) + q
+        return out
+
+    def get_count(self, part_id: str, color_id: int) -> int:
+        p_s = str(part_id).strip()
+        p_l = p_s.lower()
+        cid = int(color_id)
+        if (p_s, cid) in self.counts:
+            return max(0, int(self.counts[(p_s, cid)]))
+        if (p_l, cid) in self.counts:
+            return max(0, int(self.counts[(p_l, cid)]))
+        return 0
+
+    def total_pieces(self) -> int:
+        return sum(max(0, int(q)) for q in self.counts.values())
+
+    def distinct_colors(self) -> Tuple[int, ...]:
+        return tuple(sorted({int(cid) for (_pid, cid), q in self.counts.items() if int(q) > 0}))
+
+    def to_flat_json_dict(self) -> Dict[str, int]:
+        """Serialize `(part_id, color_id) -> qty` as deterministic `'part_id:color_id': qty` JSON map."""
+        out: Dict[str, int] = {}
+        for (pid, cid), qty in sorted(self.counts.items(), key=lambda kv: (str(kv[0][0]), int(kv[0][1]))):
+            if int(qty) > 0:
+                p_norm = str(pid).strip().lower()
+                p_key = pid if pid in EXTENDED_BRICK_CATALOG else p_norm
+                key = f"{p_key}:{int(cid)}"
+                out[key] = out.get(key, 0) + int(qty)
+        return out
+
+    @classmethod
+    def from_flat_json_dict(cls, raw: Dict[str, int]) -> "ColoredInventorySpec":
+        parsed: Dict[ColoredPartKey, int] = {}
+        for k, v in raw.items():
+            pid_s, cid_s = str(k).rsplit(":", 1)
+            parsed[(pid_s, int(cid_s))] = int(v)
+        return cls(counts=parsed)
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryShortfallReport:
+    """Structured diagnostic emitted when a finite kit cannot span a target volume (`Phase 11 Ext 2`)."""
+
+    available_volume_ldu3: int
+    required_target_volume_ldu3: int
+    realized_volume_ldu3: int
+    unfilled_volume_ratio: float
+    exhausted_critical_molds: Tuple[str, ...]
+    suggested_minimum_additions: Tuple[Tuple[str, int, int], ...]  # (part_id, color_id, qty)
+
+    @property
+    def is_volume_sufficient(self) -> bool:
+        return self.available_volume_ldu3 >= int(0.85 * max(1, self.required_target_volume_ldu3))
+
+
+SET_10698_COLORED_INVENTORY: ColoredInventorySpec = ColoredInventorySpec(
+    counts=dict(SET_10698_COLORED_COUNTS),
+    allow_hidden_color_substitution=True,
+    allow_same_footprint_split=True,
+    seam_coherence_weight=0.75,
+)
+_ = (SET_10698_33_LDRAW_COLORS, SET_10698_REBRICKABLE_MANIFEST)

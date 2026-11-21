@@ -390,7 +390,11 @@ def sanitize_oob_state(
 
 
 def _apply_terminal_tile_swap(
-    st: AssemblyState, kit_set: Set[str], target_iids: Optional[Sequence[int]] = None
+    st: AssemblyState,
+    kit_set: Set[str],
+    target_iids: Optional[Sequence[int]] = None,
+    suppress_boxes: Sequence[LDUBox] = (),
+    rem_inv: Optional[Dict[str, int]] = None,
 ) -> None:
     matched_now = st.matched_port_pairs
     iids_iter = sorted(st.placed_parts.keys()) if target_iids is None else [i for i in target_iids if i in st.placed_parts]
@@ -398,6 +402,10 @@ def _apply_terminal_tile_swap(
         pl = st.placed_parts[iid]
         tile_pid = PLATE_TO_TILE.get(pl.part_id)
         if tile_pid is None or tile_pid not in kit_set:
+            continue
+        if rem_inv is not None and rem_inv.get(tile_pid, 0) <= 0:
+            continue
+        if suppress_boxes and any(b.intersects(sb) for b in pl.world_boxes for sb in suppress_boxes):
             continue
         prim_p = get_brick_primitive(pl.part_id)
         if (max(b.zmax for b in pl.world_boxes) - min(b.zmin for b in pl.world_boxes)) != 8:
@@ -415,6 +423,9 @@ def _apply_terminal_tile_swap(
                 if all(c % 2 == 0 for c in cand_tp.pos) and tuple(b.transform(cand_tp) for b in prim_t.hull_boxes) == pl.world_boxes:
                     try:
                         st.reorient_part(iid, cand_tp, new_part_id=tile_pid)
+                        if rem_inv is not None:
+                            rem_inv[pl.part_id] = rem_inv.get(pl.part_id, 0) + 1
+                            rem_inv[tile_pid] = max(0, rem_inv.get(tile_pid, 0) - 1)
                     except ValueError:
                         pass
                     break
@@ -2111,16 +2122,29 @@ def _build_thin_structure_candidates(
     return out
 
 
+def _respects_max_inventory(st: AssemblyState, max_inv: Optional[Dict[str, int]]) -> bool:
+    if max_inv is None:
+        return True
+    used: Dict[str, int] = {}
+    for pl in st.placed_parts.values():
+        used[pl.part_id] = used.get(pl.part_id, 0) + 1
+        if used[pl.part_id] > int(max_inv.get(pl.part_id, 0)):
+            return False
+    return True
+
+
 def try_upfront_blind_sculpted_fastpath(
     kernel: Any,
     occ6: np.ndarray,
     kit_ids: Sequence[str],
     forbidden_support_boxes: Sequence[LDUBox],
     foundation_policy: FoundationPolicy,
+    max_inventory_counts: Optional[Dict[str, int]] = None,
 ) -> Optional[AssemblyState]:
     """
     Fast `< 8 ms` upfront blind portal-bridge & stepped-frustum synthesis on unpadded `occ6`.
-    Returns a prefix- and insertion-certified `AssemblyState` whenever exact `occ6` IoU `>= 0.885`.
+    Returns a prefix- and insertion-certified `AssemblyState` whenever exact `occ6` IoU `>= 0.885`
+    and optional `max_inventory_counts` bounds are strictly respected.
     """
     msub = int(np.count_nonzero(occ6))
     if msub == 0:
@@ -2130,20 +2154,24 @@ def try_upfront_blind_sculpted_fastpath(
     best_iou = 0.885
 
     for cand_up in _try_blind_portal_bridge_candidates(occ6, kit_set, forbidden_support_boxes):
+        if not _respects_max_inventory(cand_up, max_inventory_counts):
+            continue
         iou_c, st_c = _verify_and_score_strict(
             kernel, cand_up, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=False
         )
-        if st_c is not None and iou_c > best_iou:
+        if st_c is not None and _respects_max_inventory(st_c, max_inventory_counts) and iou_c > best_iou:
             best_cand, best_iou = st_c, iou_c
             if best_iou >= 0.900:
                 break
 
     if best_cand is None:
         for cand_fr in _try_blind_stepped_frustum_candidates(occ6, kit_set, forbidden_support_boxes):
+            if not _respects_max_inventory(cand_fr, max_inventory_counts):
+                continue
             iou_f, st_f = _verify_and_score_strict(
                 kernel, cand_fr, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=False
             )
-            if st_f is not None and iou_f > best_iou:
+            if st_f is not None and _respects_max_inventory(st_f, max_inventory_counts) and iou_f > best_iou:
                 best_cand, best_iou = st_f, iou_f
                 if best_iou >= 0.900:
                     break
@@ -2152,7 +2180,7 @@ def try_upfront_blind_sculpted_fastpath(
         iou_ok, st_ok = _verify_and_score_strict(
             kernel, best_cand, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=True
         )
-        if st_ok is not None and iou_ok >= 0.885:
+        if st_ok is not None and _respects_max_inventory(st_ok, max_inventory_counts) and iou_ok >= 0.885:
             return st_ok
     return None
 
@@ -2164,6 +2192,7 @@ def refine_open_catalog_blind_portfolio(
     kit_ids: Sequence[str],
     forbidden_support_boxes: Sequence[LDUBox],
     foundation_policy: FoundationPolicy,
+    max_inventory_counts: Optional[Dict[str, int]] = None,
 ) -> AssemblyState:
     """
     Fast, 100% blind sub-stud, stepped-frustum, portal-bridge, and multi-stud sculpting
@@ -2173,13 +2202,18 @@ def refine_open_catalog_blind_portfolio(
     msub = int(np.count_nonzero(occ6))
     if msub == 0 or msub >= 4500:
         return state
+    if max_inventory_counts is not None:
+        # Under finite inventory budgets, only accept portfolio candidates that strictly obey `max_inventory_counts`
+        if not _respects_max_inventory(state, max_inventory_counts):
+            return state
     kit_set = set(kit_ids)
 
-    best_st = sanitize_oob_state(kernel, state, occ6, kit_set, forbidden_support_boxes, foundation_policy)
+    cand_san = sanitize_oob_state(kernel, state, occ6, kit_set, forbidden_support_boxes, foundation_policy)
+    best_st = cand_san if _respects_max_inventory(cand_san, max_inventory_counts) else state
     best_iou, st_verified = _verify_and_score_strict(
         kernel, best_st, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=False
     )
-    if st_verified is not None:
+    if st_verified is not None and _respects_max_inventory(st_verified, max_inventory_counts):
         best_st = st_verified
     else:
         best_iou = -1.0
@@ -2192,27 +2226,27 @@ def refine_open_catalog_blind_portfolio(
     st_1, iou_1 = _single_pass_top_sculptor(
         kernel, best_st, occ6, kit_ids, forbidden_support_boxes, foundation_policy
     )
-    if iou_1 > best_iou + 1.0e-5:
+    if iou_1 > best_iou + 1.0e-5 and _respects_max_inventory(st_1, max_inventory_counts):
         best_st, best_iou = st_1, iou_1
         if msub < 1800 and best_iou < 0.915:
             st_2, iou_2 = _single_pass_top_sculptor(
                 kernel, best_st, occ6, kit_ids, forbidden_support_boxes, foundation_policy
             )
-            if iou_2 > best_iou + 1.0e-5:
+            if iou_2 > best_iou + 1.0e-5 and _respects_max_inventory(st_2, max_inventory_counts):
                 best_st, best_iou = st_2, iou_2
 
     if 0.0 < best_iou < 0.915 and msub < 3600:
         st_g, iou_g = _unlock_fn_pocket_tiles_and_grow(
             kernel, best_st, occ6, msub, kit_ids, forbidden_support_boxes, foundation_policy, best_iou
         )
-        if iou_g > best_iou + 1.0e-5:
+        if iou_g > best_iou + 1.0e-5 and _respects_max_inventory(st_g, max_inventory_counts):
             best_st, best_iou = st_g, iou_g
 
     if len(kit_ids) > 32 and msub < 4500 and best_iou < 0.880:
         st_p32, iou_p32 = _single_pass_top_sculptor(
             kernel, best_st, occ6, kit_ids[:32], forbidden_support_boxes, foundation_policy
         )
-        if iou_p32 > best_iou + 1.0e-5:
+        if iou_p32 > best_iou + 1.0e-5 and _respects_max_inventory(st_p32, max_inventory_counts):
             best_st, best_iou = st_p32, iou_p32
 
     # Thin-wall & chair/panel blind candidates (`msub < 1000` only)
@@ -2220,16 +2254,18 @@ def refine_open_catalog_blind_portfolio(
         best_th_cand: Optional[AssemblyState] = None
         best_th_iou = best_iou + 1.0e-4
         for cand_th in _build_thin_structure_candidates(best_st, occ6, kit_ids, forbidden_support_boxes):
+            if not _respects_max_inventory(cand_th, max_inventory_counts):
+                continue
             iou_th, st_th = _verify_and_score_strict(
                 kernel, cand_th, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=False
             )
-            if st_th is not None and iou_th > best_th_iou:
+            if st_th is not None and _respects_max_inventory(st_th, max_inventory_counts) and iou_th > best_th_iou:
                 best_th_cand, best_th_iou = st_th, iou_th
         if best_th_cand is not None:
             iou_th_ok, st_th_ok = _verify_and_score_strict(
                 kernel, best_th_cand, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=True
             )
-            if st_th_ok is not None and iou_th_ok > best_iou + 1.0e-4:
+            if st_th_ok is not None and _respects_max_inventory(st_th_ok, max_inventory_counts) and iou_th_ok > best_iou + 1.0e-4:
                 best_st, best_iou = st_th_ok, iou_th_ok
 
     return best_st

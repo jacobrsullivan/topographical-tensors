@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
@@ -100,32 +101,33 @@ class EquilibriumResult:
     primal_witness: Optional[PrimalEquilibriumWitness] = None
 
 
-_SHARED_HIGHS_LP: Any = None
-_SHARED_HIGHS_IPM: Any = None
+_HIGHS_THREAD_LOCAL = threading.local()
 
 
 def _get_shared_highs_lp(use_ipm: bool = False) -> Any:
-    global _SHARED_HIGHS_LP, _SHARED_HIGHS_IPM
+    """Return a thread-local single-core `highspy.Highs` solver instance (`F12` concurrency safety)."""
     if use_ipm:
-        if _SHARED_HIGHS_IPM is None:
+        h_ipm = getattr(_HIGHS_THREAD_LOCAL, "ipm", None)
+        if h_ipm is None:
             h = highspy.Highs()
             h.silent()
             h.setOptionValue("threads", 1)
             h.setOptionValue("solver", "ipm")
             h.setOptionValue("run_crossover", "off")
-            h.setOptionValue("ipm_optimality_tolerance", 1e-6)
-            _SHARED_HIGHS_IPM = h
-        else:
-            _SHARED_HIGHS_IPM.clearSolver()
-        return _SHARED_HIGHS_IPM
-    if _SHARED_HIGHS_LP is None:
+            h.setOptionValue("ipm_optimality_tolerance", 1e-8)
+            _HIGHS_THREAD_LOCAL.ipm = h
+            return h
+        h_ipm.clearSolver()
+        return h_ipm
+    h_lp = getattr(_HIGHS_THREAD_LOCAL, "lp", None)
+    if h_lp is None:
         h = highspy.Highs()
         h.silent()
         h.setOptionValue("threads", 1)
-        _SHARED_HIGHS_LP = h
-    else:
-        _SHARED_HIGHS_LP.clearSolver()
-    return _SHARED_HIGHS_LP
+        _HIGHS_THREAD_LOCAL.lp = h
+        return h
+    h_lp.clearSolver()
+    return h_lp
 
 
 def _solve_lp_highspy_or_scipy(
@@ -177,17 +179,28 @@ def _solve_lp_highspy_or_scipy(
         lp.a_matrix_.index_ = a_comb.indices.astype(np.int32)
         lp.a_matrix_.value_ = a_comb.data.astype(np.float64)
 
-        solver_order = (True, False) if n_vars > 2500 else (False, True)
+        solver_order = (True, False) if n_vars > 1200 else (False, True)
         for idx_s, try_ipm in enumerate(solver_order):
             h = _get_shared_highs_lp(use_ipm=try_ipm)
             if not try_ipm:
-                h.setOptionValue("simplex_iteration_limit", 1800 if idx_s == 0 else 2147483647)
+                h.setOptionValue("simplex_iteration_limit", 1800 if idx_s == 0 else 50000)
             h.passModel(lp)
             h.run()
             model_status = h.getModelStatus()
             if model_status == highspy.HighsModelStatus.kOptimal:
                 sol_arr = np.asarray(h.getSolution().col_value, dtype=np.float64)
                 if sol_arr.shape[0] == n_vars and np.all(np.isfinite(sol_arr)):
+                    if try_ipm:
+                        eq_r_chk = float(np.max(np.abs(a_eq_csc.dot(sol_arr) - b_eq))) if n_eq > 0 else 0.0
+                        ub_v_chk = (
+                            float(np.max(np.maximum(a_ub_csc.dot(sol_arr) - b_ub, 0.0))) if n_ub > 0 else 0.0
+                        )
+                        lv_chk = float(np.max(np.maximum(var_lb - sol_arr, 0.0)))
+                        uv_chk = float(
+                            np.max(np.where(np.isfinite(var_ub), np.maximum(sol_arr - var_ub, 0.0), 0.0))
+                        )
+                        if max(eq_r_chk, ub_v_chk, lv_chk, uv_chk) > 9e-6:
+                            continue
                     return True, sol_arr, "Optimal (highspy-ipm)" if try_ipm else "Optimal (highspy)"
             if model_status == highspy.HighsModelStatus.kInfeasible:
                 return False, None, "Infeasible (highspy)"
@@ -1266,6 +1279,20 @@ class SparseStaticEquilibriumValidator:
                 ymin = float(min(b.ymin for b in gp.world_boxes))
                 ymax = float(max(b.ymax for b in gp.world_boxes))
                 zmin = float(min(b.zmin for b in gp.world_boxes))
+                if abs(zmin) > 0.25:
+                    return EquilibriumResult(
+                        is_stable=False,
+                        peak_utilization=float("inf"),
+                        safety_margin=-float("inf"),
+                        contact_utilizations={},
+                        weakest_contact=None,
+                        solve_time_ms=(time.perf_counter() - t0) * 1000.0,
+                        status_message=f"Grounded part {gid} (zmin={zmin:.2f}) does not contact z=0 table under TABLE_FRICTION_ONLY.",
+                        patch_utilizations={},
+                        asymmetric_bearing_active=self.asymmetric_bearing_mode,
+                        foundation_policy=fp_str,
+                        interface_model=self.patch_interface_model,
+                    )
                 corners = (
                     (xmin, ymin, zmin),
                     (xmax, ymin, zmin),
@@ -1511,6 +1538,7 @@ class SparseStaticEquilibriumValidator:
         base_witness: Optional[PrimalEquilibriumWitness] = None,
         out_patch_utils: Optional[Dict[Tuple[int, int], float]] = None,
         hop_cache: Optional[Dict[int, Any]] = None,
+        foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
     ) -> Tuple[bool, float]:
         """
         Extend an exact non-negative 6-DoF primal LP solution vector (`R9-WS3` §5.5 residual-checked)
@@ -1531,6 +1559,18 @@ class SparseStaticEquilibriumValidator:
             self.witness_fallback_count += 1
             return False, float("inf")
         if new_p.is_grounded:
+            if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
+                # Under TABLE_FRICTION_ONLY, a grounded brick rests with zero tension iff its CoM lies
+                # strictly inside its own z=0 table contact rectangle!
+                tv_g = sum(float(b.volume_ldu3) for b in new_p.world_boxes)
+                gx_c = sum(float(b.volume_ldu3) * 0.5 * (b.xmin + b.xmax) for b in new_p.world_boxes) / max(tv_g, 1.0)
+                gy_c = sum(float(b.volume_ldu3) * 0.5 * (b.ymin + b.ymax) for b in new_p.world_boxes) / max(tv_g, 1.0)
+                if not any(
+                    b.zmin <= 0 and (b.xmin + 0.5) <= gx_c <= (b.xmax - 0.5) and (b.ymin + 0.5) <= gy_c <= (b.ymax - 0.5)
+                    for b in new_p.world_boxes
+                ):
+                    self.witness_fallback_count += 1
+                    return False, float("inf")
             self.witness_reuse_hits += 1
             return True, (base_witness.eta_value if base_witness is not None else 0.0)
 
@@ -1554,165 +1594,140 @@ class SparseStaticEquilibriumValidator:
         f_shear_max = self.clutch_force_capacity_grams
         m_max = self.clutch_force_capacity_grams * self.moment_arm_capacity_ldu
 
-        chain_updates: List[Tuple[Tuple[int, int], Tuple[float, float, float], float]] = []
-        cur_id = new_inst_id
-        visited = {cur_id}
         matched = state._matched_ports
-        # Track incoming downward force+torque acting on `cur_id` from upper step (`0` for `new_inst_id`,
-        # which carries its own body gravity `(0, 0, -w_g)` at `(cx, cy, cz)`)
-        incoming_fz = -w_g
-        incoming_ref = (cx, cy, cz)
 
-        while not parts[cur_id].is_grounded:
-            cur_p = parts[cur_id]
-            cached_hops = hop_cache.get(cur_id) if hop_cache is not None else None
-            if cached_hops is None:
-                cur_zmin = min(b.zmin for b in cur_p.world_boxes)
-                by_nbr: Dict[int, List[Tuple[float, float, float]]] = {}
-                from topo_brick.interface.port_manifold import _get_placed_world_ports
+        def _get_or_build_hops(cid: int) -> Tuple[Any, ...]:
+            c_hops = hop_cache.get(cid) if hop_cache is not None else None
+            if c_hops is not None:
+                return c_hops
+            cp = parts[cid]
+            cur_zmin = min(b.zmin for b in cp.world_boxes)
+            by_nbr: Dict[int, List[Tuple[float, float, float]]] = {}
+            from topo_brick.interface.port_manifold import _get_placed_world_ports
 
-                for pid_loc, wf, _, ctype_c in _get_placed_world_ports(cur_p.part_id, cur_p.pose):
-                    if ctype_c not in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD):
-                        continue
-                    if abs(wf.z_axis[2]) != 1:
-                        continue
-                    other = matched.get((cur_id, pid_loc))
-                    if other is None:
-                        continue
-                    nbr_id = other[0]
-                    nbr_p = parts[nbr_id]
-                    if max(b.zmax for b in nbr_p.world_boxes) > cur_zmin:
-                        continue
-                    by_nbr.setdefault(nbr_id, []).append(
-                        (float(wf.pos[0]), float(wf.pos[1]), float(wf.pos[2]))
-                    )
-
-                tot_vc = sum(float(b.volume_ldu3) for b in cur_p.world_boxes)
-                ccx_loc = sum(float(b.volume_ldu3) * 0.5 * (b.xmin + b.xmax) for b in cur_p.world_boxes) / max(tot_vc, 1.0)
-                ccy_loc = sum(float(b.volume_ldu3) * 0.5 * (b.ymin + b.ymax) for b in cur_p.world_boxes) / max(tot_vc, 1.0)
-                built_hops: List[Any] = []
-                for nbr_id, pts in by_nbr.items():
-                    xmin_p = min(pt[0] for pt in pts) - 10.0
-                    xmax_p = max(pt[0] for pt in pts) + 10.0
-                    ymin_p = min(pt[1] for pt in pts) - 10.0
-                    ymax_p = max(pt[1] for pt in pts) + 10.0
-                    np_o = parts[nbr_id]
-                    t_key = (np_o.pose.pos, np_o.pose.rot_id, np_o.part_id)
-                    pkey_n = (min(cur_id, nbr_id), max(cur_id, nbr_id))
-                    k_cnt_n = float(len(pts))
-                    rx_n = sum(pt[0] for pt in pts) / k_cnt_n
-                    ry_n = sum(pt[1] for pt in pts) / k_cnt_n
-                    rz_n = sum(pt[2] for pt in pts) / k_cnt_n
-                    dus_n = [pt[0] - rx_n for pt in pts]
-                    dvs_n = [pt[1] - ry_n for pt in pts]
-                    h_u_n = max(abs(du) for du in dus_n)
-                    h_v_n = max(abs(dv) for dv in dvs_n)
-                    hb_u_n, hb_v_n, cap_m1_n, cap_m2_n, cap_mn_n = self._decomposed_patch_moment_caps(
-                        k_cnt_n, h_u_n, h_v_n, dus_n, dvs_n, f_tens_max, f_shear_max, m_max
-                    )
-                    ov_n = self._compute_patch_overlap_half_spans(
-                        parts[pkey_n[0]], parts[pkey_n[1]], rx_n, ry_n, rz_n, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
-                    )
-                    if ov_n is not None:
-                        hb_u_n = min(hb_u_n, ov_n[0])
-                        hb_v_n = min(hb_v_n, ov_n[1])
-                    built_hops.append(
-                        (
-                            nbr_id,
-                            pkey_n,
-                            k_cnt_n,
-                            rx_n,
-                            ry_n,
-                            rz_n,
-                            hb_u_n,
-                            hb_v_n,
-                            cap_m1_n,
-                            cap_m2_n,
-                            cap_mn_n,
-                            ccx_loc,
-                            ccy_loc,
-                            xmin_p,
-                            xmax_p,
-                            ymin_p,
-                            ymax_p,
-                            t_key,
-                        )
-                    )
-                cached_hops = tuple(built_hops)
-                if hop_cache is not None:
-                    hop_cache[cur_id] = cached_hops
-
-            best_hop = None
-            best_score_key: Optional[Tuple[float, float, Tuple[Tuple[int, int, int], int, str]]] = None
-            for hop_entry in cached_hops:
-                nbr_id = hop_entry[0]
-                if nbr_id in visited or nbr_id not in parts:
+            for pid_loc, wf, _, ctype_c in _get_placed_world_ports(cp.part_id, cp.pose):
+                if ctype_c not in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD):
                     continue
-                rx_h, ry_h = hop_entry[3], hop_entry[4]
-                xmin_p, xmax_p, ymin_p, ymax_p, t_key = hop_entry[13:18]
-                dx = max(xmin_p - cx, 0.0, cx - xmax_p)
-                dy = max(ymin_p - cy, 0.0, cy - ymax_p)
-                box_d2 = round(dx * dx + dy * dy, 6)
-                cent_d2 = round((cx - rx_h) ** 2 + (cy - ry_h) ** 2, 6)
-                sc_k = (box_d2, cent_d2, t_key)
-                if best_score_key is None or sc_k < best_score_key:
-                    best_score_key = sc_k
-                    best_hop = hop_entry
+                if abs(wf.z_axis[2]) != 1:
+                    continue
+                other = matched.get((cid, pid_loc))
+                if other is None:
+                    continue
+                nbr_id = other[0]
+                nbr_p = parts[nbr_id]
+                if max(b.zmax for b in nbr_p.world_boxes) > cur_zmin:
+                    continue
+                by_nbr.setdefault(nbr_id, []).append(
+                    (float(wf.pos[0]), float(wf.pos[1]), float(wf.pos[2]))
+                )
 
-            if best_hop is None:
-                self.witness_fallback_count += 1
-                return False, float("inf")
+            tot_vc = sum(float(b.volume_ldu3) for b in cp.world_boxes)
+            ccx_loc = sum(float(b.volume_ldu3) * 0.5 * (b.xmin + b.xmax) for b in cp.world_boxes) / max(tot_vc, 1.0)
+            ccy_loc = sum(float(b.volume_ldu3) * 0.5 * (b.ymin + b.ymax) for b in cp.world_boxes) / max(tot_vc, 1.0)
+            built_hops: List[Any] = []
+            for nbr_id, pts in by_nbr.items():
+                xmin_p = min(pt[0] for pt in pts) - 10.0
+                xmax_p = max(pt[0] for pt in pts) + 10.0
+                ymin_p = min(pt[1] for pt in pts) - 10.0
+                ymax_p = max(pt[1] for pt in pts) + 10.0
+                np_o = parts[nbr_id]
+                t_key = (np_o.pose.pos, np_o.pose.rot_id, np_o.part_id)
+                pkey_n = (min(cid, nbr_id), max(cid, nbr_id))
+                k_cnt_n = float(len(pts))
+                rx_n = sum(pt[0] for pt in pts) / k_cnt_n
+                ry_n = sum(pt[1] for pt in pts) / k_cnt_n
+                rz_n = sum(pt[2] for pt in pts) / k_cnt_n
+                dus_n = [pt[0] - rx_n for pt in pts]
+                dvs_n = [pt[1] - ry_n for pt in pts]
+                h_u_n = max(abs(du) for du in dus_n)
+                h_v_n = max(abs(dv) for dv in dvs_n)
+                hb_u_n, hb_v_n, cap_m1_n, cap_m2_n, cap_mn_n = self._decomposed_patch_moment_caps(
+                    k_cnt_n, h_u_n, h_v_n, dus_n, dvs_n, f_tens_max, f_shear_max, m_max
+                )
+                ov_n = self._compute_patch_overlap_half_spans(
+                    parts[pkey_n[0]], parts[pkey_n[1]], rx_n, ry_n, rz_n, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+                )
+                if ov_n is not None:
+                    hb_u_n = min(hb_u_n, ov_n[0])
+                    hb_v_n = min(hb_v_n, ov_n[1])
+                built_hops.append(
+                    (
+                        nbr_id,
+                        pkey_n,
+                        k_cnt_n,
+                        rx_n,
+                        ry_n,
+                        rz_n,
+                        hb_u_n,
+                        hb_v_n,
+                        cap_m1_n,
+                        cap_m2_n,
+                        cap_mn_n,
+                        ccx_loc,
+                        ccy_loc,
+                        xmin_p,
+                        xmax_p,
+                        ymin_p,
+                        ymax_p,
+                        t_key,
+                    )
+                )
+            c_hops = tuple(built_hops)
+            if hop_cache is not None:
+                hop_cache[cid] = c_hops
+            return c_hops
 
+        def _eval_hop_step(
+            hop_entry: Any,
+            ray_w: float,
+            ray_x: float,
+            ray_y: float,
+            inc_fz: float,
+            inc_ref: Tuple[float, float, float],
+            extra_loads: Optional[Dict[Tuple[int, int], Tuple[float, float, float]]] = None,
+        ) -> Optional[Tuple[Tuple[int, int], Tuple[float, float, float], float, float]]:
             (
-                best_lower,
-                pkey,
-                k_cnt,
-                rx_m,
-                ry_m,
-                rz_m,
-                hb_u,
-                hb_v,
-                cap_m1,
-                cap_m2,
-                cap_mn,
-                ccx,
-                ccy,
-            ) = best_hop[:13]
-
-            # Upward reaction wrench on `cur_id` at `(rx_m, ry_m, rz_m)` needed for 0.0 residual:
-            # F_up = (0, 0, +w_g), M_up = ((cy - ry_m)*w_g, -(cx - rx_m)*w_g, 0)
-            d_comp = w_g
-            d_mx = (cy - ry_m) * w_g
-            d_my = -(cx - rx_m) * w_g
-
-            # Explicit 6-DoF balance residual check on `cur_id` about its CoM:
-            fz_res = abs(incoming_fz + d_comp)
-            tx_res = abs((incoming_ref[1] - ccy) * incoming_fz + (ry_m - ccy) * d_comp + d_mx)
-            ty_res = abs(-(incoming_ref[0] - ccx) * incoming_fz - (rx_m - ccx) * d_comp + d_my)
+                _,
+                pkey_h,
+                k_cnt_h,
+                rx_h,
+                ry_h,
+                rz_h,
+                hb_u_h,
+                hb_v_h,
+                cap_m1_h,
+                cap_m2_h,
+                cap_mn_h,
+                ccx_h,
+                ccy_h,
+            ) = hop_entry[:13]
+            d_comp = ray_w
+            d_mx = (ray_y - ry_h) * ray_w
+            d_my = -(ray_x - rx_h) * ray_w
+            fz_res = abs(inc_fz + d_comp)
+            tx_res = abs((inc_ref[1] - ccy_h) * inc_fz + (ry_h - ccy_h) * d_comp + d_mx)
+            ty_res = abs(-(inc_ref[0] - ccx_h) * inc_fz - (rx_h - ccx_h) * d_comp + d_my)
             if max(fz_res, tx_res, ty_res) > 1e-6:
-                self.witness_fallback_count += 1
-                return False, float("inf")
-
-            # Combine pre-existing LP witness loads (`base_witness`) + accumulated plumb deltas + step delta
+                return None
             base_nl = (
-                base_witness.patch_net_loads.get(pkey, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                base_witness.patch_net_loads.get(pkey_h, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
                 if base_witness is not None
                 else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             )
-            prev_dc, prev_dmx, prev_dmy = patch_comp_loads.get(pkey, (0.0, 0.0, 0.0))
+            if extra_loads is not None and pkey_h in extra_loads:
+                prev_dc, prev_dmx, prev_dmy = extra_loads[pkey_h]
+            else:
+                prev_dc, prev_dmx, prev_dmy = patch_comp_loads.get(pkey_h, (0.0, 0.0, 0.0))
             acc_dc = prev_dc + d_comp
             acc_dmx = prev_dmx + d_mx
             acc_dmy = prev_dmy + d_my
-
             tot_sh = base_nl[0]
             tot_tn = base_nl[1]
             tot_cp = base_nl[2] + acc_dc
-            # Sign orientation may differ by +-1 depending on `(pkey[0], pkey[1])`; bound conservatively by `|base| + |delta|`
             tot_abs_m1 = abs(base_nl[3]) + abs(acc_dmx)
             tot_abs_m2 = abs(base_nl[4]) + abs(acc_dmy)
             tot_abs_mn = abs(base_nl[5])
-
-            if k_cnt == 1.0:
+            if k_cnt_h == 1.0:
                 u_p = (
                     tot_sh / f_shear_max
                     + tot_tn / f_tens_max
@@ -1720,27 +1735,186 @@ class SparseStaticEquilibriumValidator:
                     + (tot_abs_m1 + tot_abs_m2 + tot_abs_mn) / m_max
                 )
             else:
-                k_p_eff = self._effective_patch_shear_factor(k_cnt)
-                u_force = (tot_sh / f_shear_max + tot_tn / f_tens_max + tot_cp / f_comp_max) / k_cnt
+                k_p_eff = self._effective_patch_shear_factor(k_cnt_h)
+                u_force = (tot_sh / f_shear_max + tot_tn / f_tens_max + tot_cp / f_comp_max) / k_cnt_h
                 u_sh = max(
                     0.0,
                     (tot_sh - self.coulomb_friction_coeff * max(0.0, tot_cp - tot_tn))
                     / (k_p_eff * f_shear_max),
                 )
-                u_t1 = max(0.0, (tot_abs_m1 - hb_v * tot_cp) / cap_m1)
-                u_t2 = max(0.0, (tot_abs_m2 - hb_u * tot_cp) / cap_m2)
-                u_tn = tot_abs_mn / cap_mn
+                u_t1 = max(0.0, (tot_abs_m1 - hb_v_h * tot_cp) / cap_m1_h)
+                u_t2 = max(0.0, (tot_abs_m2 - hb_u_h * tot_cp) / cap_m2_h)
+                u_tn = tot_abs_mn / cap_mn_h
                 u_p = max(u_force, u_sh, u_t1, u_t2, u_tn)
-
             if u_p > 1.0 - 1e-5:
-                self.witness_fallback_count += 1
-                return False, float("inf")
+                return None
+            return pkey_h, (acc_dc, acc_dmx, acc_dmy), u_p, rz_h
 
-            chain_updates.append((pkey, (acc_dc, acc_dmx, acc_dmy), u_p))
-            incoming_fz = -w_g
-            incoming_ref = (cx, cy, rz_m)
-            visited.add(best_lower)
-            cur_id = best_lower
+        def _trace_vertical_ray(
+            start_id: int,
+            ray_w: float,
+            ray_x: float,
+            ray_y: float,
+            start_z: float,
+            extra_loads: Optional[Dict[Tuple[int, int], Tuple[float, float, float]]] = None,
+            splits_left: int = 0,
+        ) -> Optional[List[Tuple[Tuple[int, int], Tuple[float, float, float], float]]]:
+            ray_updates: List[Tuple[Tuple[int, int], Tuple[float, float, float], float]] = []
+            local_extra: Dict[Tuple[int, int], Tuple[float, float, float]] = (
+                dict(extra_loads) if extra_loads is not None else {}
+            )
+            cur_r = start_id
+            vis_r = {cur_r}
+            inc_fz_r = -ray_w
+            inc_ref_r = (ray_x, ray_y, start_z)
+            while not parts[cur_r].is_grounded:
+                c_hops_r = _get_or_build_hops(cur_r)
+                best_hop_r = None
+                best_sc_r: Optional[Tuple[float, float, Tuple[Tuple[int, int, int], int, str]]] = None
+                for h_ent in c_hops_r:
+                    nbr_id_r = h_ent[0]
+                    if nbr_id_r in vis_r or nbr_id_r not in parts:
+                        continue
+                    rx_r, ry_r = h_ent[3], h_ent[4]
+                    xmin_p, xmax_p, ymin_p, ymax_p, t_key = h_ent[13:18]
+                    dx = max(xmin_p - ray_x, 0.0, ray_x - xmax_p)
+                    dy = max(ymin_p - ray_y, 0.0, ray_y - ymax_p)
+                    sc_k = (round(dx * dx + dy * dy, 6), round((ray_x - rx_r) ** 2 + (ray_y - ry_r) ** 2, 6), t_key)
+                    if best_sc_r is None or sc_k < best_sc_r:
+                        best_sc_r = sc_k
+                        best_hop_r = h_ent
+                single_ok = False
+                if best_hop_r is not None:
+                    ev = _eval_hop_step(best_hop_r, ray_w, ray_x, ray_y, inc_fz_r, inc_ref_r, local_extra)
+                    if ev is not None:
+                        nxt_id = best_hop_r[0]
+                        table_ok = True
+                        if parts[nxt_id].is_grounded and foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
+                            gr_bxs = [b for b in parts[nxt_id].world_boxes if b.zmin <= 0]
+                            table_ok = any(
+                                (b.xmin + 1.0) <= ray_x <= (b.xmax - 1.0) and (b.ymin + 1.0) <= ray_y <= (b.ymax - 1.0)
+                                for b in gr_bxs
+                            )
+                        if table_ok:
+                            pkey_r, state_r, u_r, rz_r = ev
+                            if not parts[nxt_id].is_grounded and splits_left > 0:
+                                tail_extra = dict(local_extra)
+                                tail_extra[pkey_r] = state_r
+                                tail_single = _trace_vertical_ray(
+                                    nxt_id, ray_w, ray_x, ray_y, rz_r, tail_extra, splits_left=0
+                                )
+                                if tail_single is not None:
+                                    merged_t: Dict[Tuple[int, int], Tuple[Tuple[float, float, float], float]] = {}
+                                    for pk_t, st_t, u_t in ray_updates + [(pkey_r, state_r, u_r)] + tail_single:
+                                        merged_t[pk_t] = (st_t, u_t)
+                                    return [(pk_t, vm[0], vm[1]) for pk_t, vm in merged_t.items()]
+                                if len(c_hops_r) < 2:
+                                    ray_updates.append((pkey_r, state_r, u_r))
+                                    local_extra[pkey_r] = state_r
+                                    inc_fz_r = -ray_w
+                                    inc_ref_r = (ray_x, ray_y, rz_r)
+                                    vis_r.add(nxt_id)
+                                    cur_r = nxt_id
+                                    single_ok = True
+                            else:
+                                ray_updates.append((pkey_r, state_r, u_r))
+                                local_extra[pkey_r] = state_r
+                                inc_fz_r = -ray_w
+                                inc_ref_r = (ray_x, ray_y, rz_r)
+                                vis_r.add(nxt_id)
+                                cur_r = nxt_id
+                                single_ok = True
+                if single_ok:
+                    continue
+                if splits_left > 0 and len(c_hops_r) >= 2:
+                    n_ch = len(c_hops_r)
+                    for ia in range(n_ch):
+                        ha = c_hops_r[ia]
+                        if ha[0] in vis_r or ha[0] not in parts:
+                            continue
+                        ax, ay, az = ha[3], ha[4], ha[5]
+                        for ib in range(ia + 1, n_ch):
+                            hb = c_hops_r[ib]
+                            if hb[0] in vis_r or hb[0] not in parts:
+                                continue
+                            bx, by, bz = hb[3], hb[4], hb[5]
+                            abx, aby = bx - ax, by - ay
+                            denom = abx * abx + aby * aby
+                            if denom < 1e-6:
+                                continue
+                            t_s = max(0.05, min(0.95, ((ray_x - ax) * abx + (ray_y - ay) * aby) / denom))
+                            rx_res = ray_x - (ax + t_s * abx)
+                            ry_res = ray_y - (ay + t_s * aby)
+                            if abs(rx_res) > 7.5 or abs(ry_res) > 7.5:
+                                continue
+                            fa = (1.0 - t_s) * ray_w
+                            fb = t_s * ray_w
+                            qax, qay = ax + rx_res, ay + ry_res
+                            qbx, qby = bx + rx_res, by + ry_res
+                            eva = _eval_hop_step(ha, fa, qax, qay, -fa, (qax, qay, inc_ref_r[2]), local_extra)
+                            if eva is None:
+                                continue
+                            split_extra = dict(local_extra)
+                            split_extra[eva[0]] = eva[1]
+                            evb = _eval_hop_step(hb, fb, qbx, qby, -fb, (qbx, qby, inc_ref_r[2]), split_extra)
+                            if evb is None:
+                                continue
+                            split_extra[evb[0]] = evb[1]
+                            ray_a = _trace_vertical_ray(
+                                ha[0], fa, qax, qay, az, split_extra, splits_left=splits_left - 1
+                            )
+                            if ray_a is None:
+                                continue
+                            for pk_a, st_a, _ in ray_a:
+                                split_extra[pk_a] = st_a
+                            ray_b = _trace_vertical_ray(
+                                hb[0], fb, qbx, qby, bz, split_extra, splits_left=splits_left - 1
+                            )
+                            if ray_b is None:
+                                continue
+                            merged_u_map: Dict[Tuple[int, int], Tuple[Tuple[float, float, float], float]] = {}
+                            for pk_m, st_m, u_m in (
+                                ray_updates
+                                + [(eva[0], eva[1], eva[2]), (evb[0], evb[1], evb[2])]
+                                + ray_a
+                                + ray_b
+                            ):
+                                merged_u_map[pk_m] = (st_m, u_m)
+                            return [(pk_m, v_m[0], v_m[1]) for pk_m, v_m in merged_u_map.items()]
+                    # If direct split at `cur_r` didn't succeed, try advancing one valid hop so a lower girder/pier can split!
+                    if best_hop_r is not None:
+                        ev_f = _eval_hop_step(best_hop_r, ray_w, ray_x, ray_y, inc_fz_r, inc_ref_r, local_extra)
+                        if ev_f is not None and not parts[best_hop_r[0]].is_grounded:
+                            ray_updates.append((ev_f[0], ev_f[1], ev_f[2]))
+                            local_extra[ev_f[0]] = ev_f[1]
+                            inc_fz_r = -ray_w
+                            inc_ref_r = (ray_x, ray_y, ev_f[3])
+                            vis_r.add(best_hop_r[0])
+                            cur_r = best_hop_r[0]
+                            continue
+                return None
+
+            if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
+                gr_boxes = [b for b in parts[cur_r].world_boxes if b.zmin <= 0]
+                if not any(
+                    (b.xmin + 1.0) <= ray_x <= (b.xmax - 1.0) and (b.ymin + 1.0) <= ray_y <= (b.ymax - 1.0)
+                    for b in gr_boxes
+                ):
+                    return None
+            return ray_updates
+
+        chain_updates_opt = _trace_vertical_ray(
+            new_inst_id,
+            w_g,
+            cx,
+            cy,
+            cz,
+            splits_left=(3 if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY else 0),
+        )
+        if chain_updates_opt is None:
+            self.witness_fallback_count += 1
+            return False, float("inf")
+        chain_updates = chain_updates_opt
 
         peak_u = base_witness.eta_value if base_witness is not None else 0.0
         for _, _, u_p in chain_updates:
@@ -1753,5 +1927,155 @@ class SparseStaticEquilibriumValidator:
             patch_comp_loads[pkey] = new_state_t
             if out_patch_utils is not None:
                 out_patch_utils[pkey] = u_p
+        self.witness_reuse_hits += 1
+        return True, peak_u
+
+    def verify_two_pier_bearing_compression(
+        self,
+        state: AssemblyState,
+        foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
+    ) -> Tuple[bool, float]:
+        """
+        Exact O(N) top-down 1-or-2-pier zero-tension bearing compression witness (`0.0` force & torque residual)
+        for multi-course running-bond walls and ribbed hollow shells under `CLUTCHED_BASEPLATE` or `TABLE_FRICTION_ONLY`.
+        """
+        from topo_brick.interface.port_manifold import _get_placed_world_ports
+
+        parts = state._parts
+        if not parts:
+            return True, 0.0
+        matched = state._matched_ports
+        comp_cap_stud = self.clutch_force_capacity_grams * self.normal_crush_ratio
+
+        f_acc: Dict[int, float] = {}
+        wx_acc: Dict[int, float] = {}
+        wy_acc: Dict[int, float] = {}
+        z_bounds: Dict[int, Tuple[int, int]] = {}
+        for iid, pl in parts.items():
+            m_g = (
+                float(self.use_uniform_brick_weight_grams)
+                if self.use_uniform_brick_weight_grams is not None
+                else float(get_brick_primitive(pl.part_id).mass_grams)
+            )
+            tv = sum(float(b.volume_ldu3) for b in pl.world_boxes)
+            cx = sum(float(b.volume_ldu3) * 0.5 * (b.xmin + b.xmax) for b in pl.world_boxes) / max(tv, 1.0)
+            cy = sum(float(b.volume_ldu3) * 0.5 * (b.ymin + b.ymax) for b in pl.world_boxes) / max(tv, 1.0)
+            f_acc[iid] = m_g
+            wx_acc[iid] = m_g * cx
+            wy_acc[iid] = m_g * cy
+            z_bounds[iid] = (
+                min(b.zmin for b in pl.world_boxes),
+                max(b.zmax for b in pl.world_boxes),
+            )
+
+        top_down = sorted(parts.keys(), key=lambda i: (-z_bounds[i][0], -z_bounds[i][1], -i))
+        peak_u = 0.0
+        is_table = foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY
+
+        for uid in top_down:
+            pl_u = parts[uid]
+            ft = f_acc[uid]
+            qx = wx_acc[uid] / max(ft, 1e-12)
+            qy = wy_acc[uid] / max(ft, 1e-12)
+            if pl_u.is_grounded:
+                if is_table:
+                    if not any(
+                        b.zmin <= 0 and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
+                        for b in pl_u.world_boxes
+                    ):
+                        return False, float("inf")
+                else:
+                    ux0 = min(b.xmin for b in pl_u.world_boxes)
+                    ux1 = max(b.xmax for b in pl_u.world_boxes)
+                    uy0 = min(b.ymin for b in pl_u.world_boxes)
+                    uy1 = max(b.ymax for b in pl_u.world_boxes)
+                    if not ((ux0 - 4.0) <= qx <= (ux1 + 4.0) and (uy0 - 4.0) <= qy <= (uy1 + 4.0)):
+                        return False, float("inf")
+                continue
+
+            uz0 = z_bounds[uid][0]
+            by_low: Dict[int, List[Tuple[float, float]]] = {}
+            for pid_loc, wf, _, ctype_c in _get_placed_world_ports(pl_u.part_id, pl_u.pose):
+                if ctype_c not in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD) or abs(wf.z_axis[2]) != 1:
+                    continue
+                other = matched.get((uid, pid_loc))
+                if other is None:
+                    continue
+                lid = other[0]
+                if z_bounds[lid][1] <= uz0:
+                    by_low.setdefault(lid, []).append((float(wf.pos[0]), float(wf.pos[1])))
+
+            cands_l = list(by_low.items())
+            if not cands_l:
+                return False, float("inf")
+
+            m_cap_1 = self.clutch_force_capacity_grams * self.moment_arm_capacity_ldu
+            ok_1 = False
+            for lid, pts in cands_l:
+                k_l = float(len(pts))
+                rx_l = sum(p[0] for p in pts) / k_l
+                ry_l = sum(p[1] for p in pts) / k_l
+                px0, px1 = min(p[0] for p in pts) - 7.5, max(p[0] for p in pts) + 7.5
+                py0, py1 = min(p[1] for p in pts) - 7.5, max(p[1] for p in pts) + 7.5
+                uc = ft / max(1e-9, k_l * comp_cap_stud)
+                if px0 <= qx <= px1 and py0 <= qy <= py1 and uc <= 0.90:
+                    u_eff = uc
+                elif k_l == 1.0:
+                    u_eff = uc + (abs(qx - rx_l) + abs(qy - ry_l)) * ft / max(1e-9, m_cap_1)
+                else:
+                    hbx = max(8.0, 0.5 * (max(p[0] for p in pts) - min(p[0] for p in pts)))
+                    hby = max(8.0, 0.5 * (max(p[1] for p in pts) - min(p[1] for p in pts)))
+                    u_eff = max(
+                        uc,
+                        max(0.0, (abs(qy - ry_l) - hby) * ft) / max(1e-9, k_l * m_cap_1),
+                        max(0.0, (abs(qx - rx_l) - hbx) * ft) / max(1e-9, k_l * m_cap_1),
+                    )
+                if u_eff <= 0.85:
+                    f_acc[lid] += ft
+                    wx_acc[lid] += ft * qx
+                    wy_acc[lid] += ft * qy
+                    peak_u = max(peak_u, u_eff)
+                    ok_1 = True
+                    break
+            if ok_1:
+                continue
+
+            ok_2 = False
+            n_cl = len(cands_l)
+            for ia in range(n_cl):
+                la, pa_pts = cands_l[ia]
+                ax = sum(p[0] for p in pa_pts) / float(len(pa_pts))
+                ay = sum(p[1] for p in pa_pts) / float(len(pa_pts))
+                for ib in range(ia + 1, n_cl):
+                    lb, pb_pts = cands_l[ib]
+                    bx = sum(p[0] for p in pb_pts) / float(len(pb_pts))
+                    by = sum(p[1] for p in pb_pts) / float(len(pb_pts))
+                    abx, aby = bx - ax, by - ay
+                    denom = abx * abx + aby * aby
+                    if denom < 1e-6:
+                        continue
+                    t_s = max(0.0, min(1.0, ((qx - ax) * abx + (qy - ay) * aby) / denom))
+                    rx_r = qx - (ax + t_s * abx)
+                    ry_r = qy - (ay + t_s * aby)
+                    if abs(rx_r) <= 7.5 and abs(ry_r) <= 7.5:
+                        fa = (1.0 - t_s) * ft
+                        fb = t_s * ft
+                        ua = fa / max(1e-9, float(len(pa_pts)) * comp_cap_stud)
+                        ub = fb / max(1e-9, float(len(pb_pts)) * comp_cap_stud)
+                        if max(ua, ub) <= 0.90:
+                            f_acc[la] += fa
+                            wx_acc[la] += fa * (ax + rx_r)
+                            wy_acc[la] += fa * (ay + ry_r)
+                            f_acc[lb] += fb
+                            wx_acc[lb] += fb * (bx + rx_r)
+                            wy_acc[lb] += fb * (by + ry_r)
+                            peak_u = max(peak_u, ua, ub)
+                            ok_2 = True
+                            break
+                if ok_2:
+                    break
+            if not ok_2:
+                return False, float("inf")
+
         self.witness_reuse_hits += 1
         return True, peak_u

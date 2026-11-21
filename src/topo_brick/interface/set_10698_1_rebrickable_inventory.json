@@ -1,0 +1,2784 @@
+{
+  "schema": "topo_brick.retail_set_inventory.v1",
+  "set_num": "10698-1",
+  "set_name": "LEGO Classic Large Creative Brick Box",
+  "source": "Rebrickable Official Bulk Downloads (https://rebrickable.com/downloads/)",
+  "license": "CC-BY-4.0",
+  "rebrickable_inventory_id": 102864,
+  "rebrickable_inventory_version": 2,
+  "retrieved_date": "2026-11-21",
+  "source_csv_gz_sha256": {
+    "colors.csv.gz": "9e3db661fbba8e5364e8e7c7f94f2dfdcec46236400a366baa174bddb9edb03f",
+    "inventories.csv.gz": "80850b9d0556742b75848e8ce1c34364ce86845b3f4e9d0e74140fb457d014c6",
+    "inventory_parts.csv.gz": "e8b4146cb6bbf91d698c50792c3a53c9f4ff8ff35082e5407c7881310c53c26c"
+  },
+  "color_id_mapping_notes": "Rebrickable color_id 158 (Yellowish Green, #DFEEA5) mapped to official LDraw LDConfig.ldr color_id 326; all other 32 color IDs match LDraw LDConfig.ldr 1-to-1.",
+  "spare_piece_policy": "Excluded from SET_10698_COLORED_INVENTORY (790 non-spare pieces); 14 spare pieces recorded separately in spare_items.",
+  "summary": {
+    "non_spare_rows": 225,
+    "non_spare_total_pieces": 790,
+    "non_spare_unique_parts": 108,
+    "non_spare_unique_ldraw_colors": 33,
+    "spare_rows": 14,
+    "spare_total_pieces": 14
+  },
+  "ldraw_color_palette": {
+    "0": {
+      "ldraw_color_id": 0,
+      "rebrickable_color_id": 0,
+      "name": "Black",
+      "rgb_u8": [
+        5,
+        19,
+        29
+      ],
+      "is_trans": false
+    },
+    "1": {
+      "ldraw_color_id": 1,
+      "rebrickable_color_id": 1,
+      "name": "Blue",
+      "rgb_u8": [
+        0,
+        85,
+        191
+      ],
+      "is_trans": false
+    },
+    "2": {
+      "ldraw_color_id": 2,
+      "rebrickable_color_id": 2,
+      "name": "Green",
+      "rgb_u8": [
+        35,
+        120,
+        65
+      ],
+      "is_trans": false
+    },
+    "4": {
+      "ldraw_color_id": 4,
+      "rebrickable_color_id": 4,
+      "name": "Red",
+      "rgb_u8": [
+        201,
+        26,
+        9
+      ],
+      "is_trans": false
+    },
+    "5": {
+      "ldraw_color_id": 5,
+      "rebrickable_color_id": 5,
+      "name": "Dark Pink",
+      "rgb_u8": [
+        200,
+        112,
+        160
+      ],
+      "is_trans": false
+    },
+    "10": {
+      "ldraw_color_id": 10,
+      "rebrickable_color_id": 10,
+      "name": "Bright Green",
+      "rgb_u8": [
+        75,
+        159,
+        74
+      ],
+      "is_trans": false
+    },
+    "14": {
+      "ldraw_color_id": 14,
+      "rebrickable_color_id": 14,
+      "name": "Yellow",
+      "rgb_u8": [
+        242,
+        205,
+        55
+      ],
+      "is_trans": false
+    },
+    "15": {
+      "ldraw_color_id": 15,
+      "rebrickable_color_id": 15,
+      "name": "White",
+      "rgb_u8": [
+        255,
+        255,
+        255
+      ],
+      "is_trans": false
+    },
+    "19": {
+      "ldraw_color_id": 19,
+      "rebrickable_color_id": 19,
+      "name": "Tan",
+      "rgb_u8": [
+        228,
+        205,
+        158
+      ],
+      "is_trans": false
+    },
+    "25": {
+      "ldraw_color_id": 25,
+      "rebrickable_color_id": 25,
+      "name": "Orange",
+      "rgb_u8": [
+        254,
+        138,
+        24
+      ],
+      "is_trans": false
+    },
+    "26": {
+      "ldraw_color_id": 26,
+      "rebrickable_color_id": 26,
+      "name": "Magenta",
+      "rgb_u8": [
+        146,
+        57,
+        120
+      ],
+      "is_trans": false
+    },
+    "27": {
+      "ldraw_color_id": 27,
+      "rebrickable_color_id": 27,
+      "name": "Lime",
+      "rgb_u8": [
+        187,
+        233,
+        11
+      ],
+      "is_trans": false
+    },
+    "28": {
+      "ldraw_color_id": 28,
+      "rebrickable_color_id": 28,
+      "name": "Dark Tan",
+      "rgb_u8": [
+        149,
+        138,
+        115
+      ],
+      "is_trans": false
+    },
+    "29": {
+      "ldraw_color_id": 29,
+      "rebrickable_color_id": 29,
+      "name": "Bright Pink",
+      "rgb_u8": [
+        228,
+        173,
+        200
+      ],
+      "is_trans": false
+    },
+    "30": {
+      "ldraw_color_id": 30,
+      "rebrickable_color_id": 30,
+      "name": "Medium Lavender",
+      "rgb_u8": [
+        172,
+        120,
+        186
+      ],
+      "is_trans": false
+    },
+    "36": {
+      "ldraw_color_id": 36,
+      "rebrickable_color_id": 36,
+      "name": "Trans-Red",
+      "rgb_u8": [
+        201,
+        26,
+        9
+      ],
+      "is_trans": true
+    },
+    "47": {
+      "ldraw_color_id": 47,
+      "rebrickable_color_id": 47,
+      "name": "Trans-Clear",
+      "rgb_u8": [
+        252,
+        252,
+        252
+      ],
+      "is_trans": true
+    },
+    "70": {
+      "ldraw_color_id": 70,
+      "rebrickable_color_id": 70,
+      "name": "Reddish Brown",
+      "rgb_u8": [
+        88,
+        42,
+        18
+      ],
+      "is_trans": false
+    },
+    "71": {
+      "ldraw_color_id": 71,
+      "rebrickable_color_id": 71,
+      "name": "Light Bluish Gray",
+      "rgb_u8": [
+        160,
+        165,
+        169
+      ],
+      "is_trans": false
+    },
+    "72": {
+      "ldraw_color_id": 72,
+      "rebrickable_color_id": 72,
+      "name": "Dark Bluish Gray",
+      "rgb_u8": [
+        108,
+        110,
+        104
+      ],
+      "is_trans": false
+    },
+    "84": {
+      "ldraw_color_id": 84,
+      "rebrickable_color_id": 84,
+      "name": "Medium Nougat",
+      "rgb_u8": [
+        170,
+        125,
+        85
+      ],
+      "is_trans": false
+    },
+    "85": {
+      "ldraw_color_id": 85,
+      "rebrickable_color_id": 85,
+      "name": "Dark Purple",
+      "rgb_u8": [
+        63,
+        54,
+        145
+      ],
+      "is_trans": false
+    },
+    "182": {
+      "ldraw_color_id": 182,
+      "rebrickable_color_id": 182,
+      "name": "Trans-Orange",
+      "rgb_u8": [
+        240,
+        143,
+        28
+      ],
+      "is_trans": true
+    },
+    "191": {
+      "ldraw_color_id": 191,
+      "rebrickable_color_id": 191,
+      "name": "Bright Light Orange",
+      "rgb_u8": [
+        248,
+        187,
+        61
+      ],
+      "is_trans": false
+    },
+    "226": {
+      "ldraw_color_id": 226,
+      "rebrickable_color_id": 226,
+      "name": "Bright Light Yellow",
+      "rgb_u8": [
+        255,
+        240,
+        58
+      ],
+      "is_trans": false
+    },
+    "272": {
+      "ldraw_color_id": 272,
+      "rebrickable_color_id": 272,
+      "name": "Dark Blue",
+      "rgb_u8": [
+        10,
+        52,
+        99
+      ],
+      "is_trans": false
+    },
+    "288": {
+      "ldraw_color_id": 288,
+      "rebrickable_color_id": 288,
+      "name": "Dark Green",
+      "rgb_u8": [
+        24,
+        70,
+        50
+      ],
+      "is_trans": false
+    },
+    "297": {
+      "ldraw_color_id": 297,
+      "rebrickable_color_id": 297,
+      "name": "Pearl Gold",
+      "rgb_u8": [
+        170,
+        127,
+        46
+      ],
+      "is_trans": false
+    },
+    "320": {
+      "ldraw_color_id": 320,
+      "rebrickable_color_id": 320,
+      "name": "Dark Red",
+      "rgb_u8": [
+        114,
+        14,
+        15
+      ],
+      "is_trans": false
+    },
+    "321": {
+      "ldraw_color_id": 321,
+      "rebrickable_color_id": 321,
+      "name": "Dark Azure",
+      "rgb_u8": [
+        7,
+        139,
+        201
+      ],
+      "is_trans": false
+    },
+    "322": {
+      "ldraw_color_id": 322,
+      "rebrickable_color_id": 322,
+      "name": "Medium Azure",
+      "rgb_u8": [
+        54,
+        174,
+        191
+      ],
+      "is_trans": false
+    },
+    "326": {
+      "ldraw_color_id": 326,
+      "rebrickable_color_id": 158,
+      "name": "Yellowish Green",
+      "rgb_u8": [
+        223,
+        238,
+        165
+      ],
+      "is_trans": false
+    },
+    "484": {
+      "ldraw_color_id": 484,
+      "rebrickable_color_id": 484,
+      "name": "Dark Orange",
+      "rgb_u8": [
+        169,
+        85,
+        0
+      ],
+      "is_trans": false
+    }
+  },
+  "non_spare_items": [
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 272,
+      "ldraw_color_id": 272,
+      "color_name": "Dark Blue",
+      "rgb_hex": "0A3463",
+      "is_trans": false,
+      "quantity": 16
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 12
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3002",
+      "canonical_ldraw_part_id": "3002",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 29,
+      "ldraw_color_id": 29,
+      "color_name": "Bright Pink",
+      "rgb_hex": "E4ADC8",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 84,
+      "ldraw_color_id": 84,
+      "color_name": "Medium Nougat",
+      "rgb_hex": "AA7D55",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 29,
+      "ldraw_color_id": 29,
+      "color_name": "Bright Pink",
+      "rgb_hex": "E4ADC8",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 84,
+      "ldraw_color_id": 84,
+      "color_name": "Medium Nougat",
+      "rgb_hex": "AA7D55",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 226,
+      "ldraw_color_id": 226,
+      "color_name": "Bright Light Yellow",
+      "rgb_hex": "FFF03A",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 288,
+      "ldraw_color_id": 288,
+      "color_name": "Dark Green",
+      "rgb_hex": "184632",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 321,
+      "ldraw_color_id": 321,
+      "color_name": "Dark Azure",
+      "rgb_hex": "078BC9",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 84,
+      "ldraw_color_id": 84,
+      "color_name": "Medium Nougat",
+      "rgb_hex": "AA7D55",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 226,
+      "ldraw_color_id": 226,
+      "color_name": "Bright Light Yellow",
+      "rgb_hex": "FFF03A",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "30136",
+      "canonical_ldraw_part_id": "30136",
+      "rebrickable_color_id": 484,
+      "ldraw_color_id": 484,
+      "color_name": "Dark Orange",
+      "rgb_hex": "A95500",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 26,
+      "ldraw_color_id": 26,
+      "color_name": "Magenta",
+      "rgb_hex": "923978",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3245c",
+      "canonical_ldraw_part_id": "3245c",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 8
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 6
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 6
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 29,
+      "ldraw_color_id": 29,
+      "color_name": "Bright Pink",
+      "rgb_hex": "E4ADC8",
+      "is_trans": false,
+      "quantity": 6
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 30,
+      "ldraw_color_id": 30,
+      "color_name": "Medium Lavender",
+      "rgb_hex": "AC78BA",
+      "is_trans": false,
+      "quantity": 6
+    },
+    {
+      "part_num": "60601",
+      "canonical_ldraw_part_id": "60601",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 5
+    },
+    {
+      "part_num": "2458",
+      "canonical_ldraw_part_id": "2458",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "2877",
+      "canonical_ldraw_part_id": "2877",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 28,
+      "ldraw_color_id": 28,
+      "color_name": "Dark Tan",
+      "rgb_hex": "958A73",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 29,
+      "ldraw_color_id": 29,
+      "color_name": "Bright Pink",
+      "rgb_hex": "E4ADC8",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 191,
+      "ldraw_color_id": 191,
+      "color_name": "Bright Light Orange",
+      "rgb_hex": "F8BB3D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 288,
+      "ldraw_color_id": 288,
+      "color_name": "Dark Green",
+      "rgb_hex": "184632",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 321,
+      "ldraw_color_id": 321,
+      "color_name": "Dark Azure",
+      "rgb_hex": "078BC9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3002",
+      "canonical_ldraw_part_id": "3002",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3002",
+      "canonical_ldraw_part_id": "3002",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3002",
+      "canonical_ldraw_part_id": "3002",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 5,
+      "ldraw_color_id": 5,
+      "color_name": "Dark Pink",
+      "rgb_hex": "C870A0",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 28,
+      "ldraw_color_id": 28,
+      "color_name": "Dark Tan",
+      "rgb_hex": "958A73",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 320,
+      "ldraw_color_id": 320,
+      "color_name": "Dark Red",
+      "rgb_hex": "720E0F",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3003",
+      "canonical_ldraw_part_id": "3003",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 320,
+      "ldraw_color_id": 320,
+      "color_name": "Dark Red",
+      "rgb_hex": "720E0F",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3004",
+      "canonical_ldraw_part_id": "3004",
+      "rebrickable_color_id": 158,
+      "ldraw_color_id": 326,
+      "color_name": "Yellowish Green",
+      "rgb_hex": "DFEEA5",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 26,
+      "ldraw_color_id": 26,
+      "color_name": "Magenta",
+      "rgb_hex": "923978",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3005",
+      "canonical_ldraw_part_id": "3005",
+      "rebrickable_color_id": 320,
+      "ldraw_color_id": 320,
+      "color_name": "Dark Red",
+      "rgb_hex": "720E0F",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 29,
+      "ldraw_color_id": 29,
+      "color_name": "Bright Pink",
+      "rgb_hex": "E4ADC8",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3010",
+      "canonical_ldraw_part_id": "3010",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "30136",
+      "canonical_ldraw_part_id": "30136",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3020",
+      "canonical_ldraw_part_id": "3020",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3023",
+      "canonical_ldraw_part_id": "3023",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3023",
+      "canonical_ldraw_part_id": "3023",
+      "rebrickable_color_id": 321,
+      "ldraw_color_id": 321,
+      "color_name": "Dark Azure",
+      "rgb_hex": "078BC9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3037",
+      "canonical_ldraw_part_id": "3037",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3037",
+      "canonical_ldraw_part_id": "3037",
+      "rebrickable_color_id": 26,
+      "ldraw_color_id": 26,
+      "color_name": "Magenta",
+      "rgb_hex": "923978",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 30,
+      "ldraw_color_id": 30,
+      "color_name": "Medium Lavender",
+      "rgb_hex": "AC78BA",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 191,
+      "ldraw_color_id": 191,
+      "color_name": "Bright Light Orange",
+      "rgb_hex": "F8BB3D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 26,
+      "ldraw_color_id": 26,
+      "color_name": "Magenta",
+      "rgb_hex": "923978",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3045",
+      "canonical_ldraw_part_id": "3045",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3062b",
+      "canonical_ldraw_part_id": "3062b",
+      "rebrickable_color_id": 484,
+      "ldraw_color_id": 484,
+      "color_name": "Dark Orange",
+      "rgb_hex": "A95500",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3068b",
+      "canonical_ldraw_part_id": "3068b",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3068b",
+      "canonical_ldraw_part_id": "3068b",
+      "rebrickable_color_id": 28,
+      "ldraw_color_id": 28,
+      "color_name": "Dark Tan",
+      "rgb_hex": "958A73",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3622",
+      "canonical_ldraw_part_id": "3622",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3659",
+      "canonical_ldraw_part_id": "3659",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3660",
+      "canonical_ldraw_part_id": "3660",
+      "rebrickable_color_id": 27,
+      "ldraw_color_id": 27,
+      "color_name": "Lime",
+      "rgb_hex": "BBE90B",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3660",
+      "canonical_ldraw_part_id": "3660",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3660",
+      "canonical_ldraw_part_id": "3660",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3665",
+      "canonical_ldraw_part_id": "3665",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3676",
+      "canonical_ldraw_part_id": "3676",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3710",
+      "canonical_ldraw_part_id": "3710",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3941",
+      "canonical_ldraw_part_id": "3941",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "4070",
+      "canonical_ldraw_part_id": "4070",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "4081b",
+      "canonical_ldraw_part_id": "4081b",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "47905",
+      "canonical_ldraw_part_id": "47905",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "50950",
+      "canonical_ldraw_part_id": "50950",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "6014b",
+      "canonical_ldraw_part_id": "6014b",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "60481",
+      "canonical_ldraw_part_id": "60481",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "60481",
+      "canonical_ldraw_part_id": "60481",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "60481",
+      "canonical_ldraw_part_id": "60481",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "60481",
+      "canonical_ldraw_part_id": "60481",
+      "rebrickable_color_id": 288,
+      "ldraw_color_id": 288,
+      "color_name": "Dark Green",
+      "rgb_hex": "184632",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "60608",
+      "canonical_ldraw_part_id": "60608",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "6081",
+      "canonical_ldraw_part_id": "6081",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "6091",
+      "canonical_ldraw_part_id": "6091",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "6215",
+      "canonical_ldraw_part_id": "6215",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "76959",
+      "canonical_ldraw_part_id": "76959",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "85080",
+      "canonical_ldraw_part_id": "85080",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "85984",
+      "canonical_ldraw_part_id": "85984",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "85984",
+      "canonical_ldraw_part_id": "85984",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "85984",
+      "canonical_ldraw_part_id": "85984",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "87079",
+      "canonical_ldraw_part_id": "87079",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "87697",
+      "canonical_ldraw_part_id": "87697",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "93273",
+      "canonical_ldraw_part_id": "93273",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "98138pr0008",
+      "canonical_ldraw_part_id": "98138pr0008",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 4
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "3031",
+      "canonical_ldraw_part_id": "3031",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "3069b",
+      "canonical_ldraw_part_id": "3069b",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 5,
+      "ldraw_color_id": 5,
+      "color_name": "Dark Pink",
+      "rgb_hex": "C870A0",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 191,
+      "ldraw_color_id": 191,
+      "color_name": "Bright Light Orange",
+      "rgb_hex": "F8BB3D",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "4727",
+      "canonical_ldraw_part_id": "4727",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 5,
+      "ldraw_color_id": 5,
+      "color_name": "Dark Pink",
+      "rgb_hex": "C870A0",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 36,
+      "ldraw_color_id": 36,
+      "color_name": "Trans-Red",
+      "rgb_hex": "C91A09",
+      "is_trans": true,
+      "quantity": 3
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "59900",
+      "canonical_ldraw_part_id": "59900",
+      "rebrickable_color_id": 182,
+      "ldraw_color_id": 182,
+      "color_name": "Trans-Orange",
+      "rgb_hex": "F08F1C",
+      "is_trans": true,
+      "quantity": 3
+    },
+    {
+      "part_num": "60592",
+      "canonical_ldraw_part_id": "60592",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 182,
+      "ldraw_color_id": 182,
+      "color_name": "Trans-Orange",
+      "rgb_hex": "F08F1C",
+      "is_trans": true,
+      "quantity": 3
+    },
+    {
+      "part_num": "98138pr0026",
+      "canonical_ldraw_part_id": "98138pr0026",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 3
+    },
+    {
+      "part_num": "11212",
+      "canonical_ldraw_part_id": "11212",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "14769",
+      "canonical_ldraw_part_id": "14769",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "15207",
+      "canonical_ldraw_part_id": "15207",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "15332",
+      "canonical_ldraw_part_id": "15332",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "15397",
+      "canonical_ldraw_part_id": "15397",
+      "rebrickable_color_id": 30,
+      "ldraw_color_id": 30,
+      "color_name": "Medium Lavender",
+      "rgb_hex": "AC78BA",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2431",
+      "canonical_ldraw_part_id": "2431",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2431",
+      "canonical_ldraw_part_id": "2431",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2456",
+      "canonical_ldraw_part_id": "2456",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2456",
+      "canonical_ldraw_part_id": "2456",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2456",
+      "canonical_ldraw_part_id": "2456",
+      "rebrickable_color_id": 320,
+      "ldraw_color_id": 320,
+      "color_name": "Dark Red",
+      "rgb_hex": "720E0F",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "2926",
+      "canonical_ldraw_part_id": "2926",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3001",
+      "canonical_ldraw_part_id": "3001",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30044",
+      "canonical_ldraw_part_id": "30044",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30046",
+      "canonical_ldraw_part_id": "30046",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3009",
+      "canonical_ldraw_part_id": "3009",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3009",
+      "canonical_ldraw_part_id": "3009",
+      "rebrickable_color_id": 484,
+      "ldraw_color_id": 484,
+      "color_name": "Dark Orange",
+      "rgb_hex": "A95500",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30165",
+      "canonical_ldraw_part_id": "30165",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3020",
+      "canonical_ldraw_part_id": "3020",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3021",
+      "canonical_ldraw_part_id": "3021",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3022",
+      "canonical_ldraw_part_id": "3022",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3023",
+      "canonical_ldraw_part_id": "3023",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3034",
+      "canonical_ldraw_part_id": "3034",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30367c",
+      "canonical_ldraw_part_id": "30367c",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30387",
+      "canonical_ldraw_part_id": "30387",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3039",
+      "canonical_ldraw_part_id": "3039",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3040b",
+      "canonical_ldraw_part_id": "3040b",
+      "rebrickable_color_id": 84,
+      "ldraw_color_id": 84,
+      "color_name": "Medium Nougat",
+      "rgb_hex": "AA7D55",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30414",
+      "canonical_ldraw_part_id": "30414",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "30414",
+      "canonical_ldraw_part_id": "30414",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3062b",
+      "canonical_ldraw_part_id": "3062b",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3065",
+      "canonical_ldraw_part_id": "3065",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "3460",
+      "canonical_ldraw_part_id": "3460",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3660",
+      "canonical_ldraw_part_id": "3660",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3666",
+      "canonical_ldraw_part_id": "3666",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3679",
+      "canonical_ldraw_part_id": "3679",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3680",
+      "canonical_ldraw_part_id": "3680",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3710",
+      "canonical_ldraw_part_id": "3710",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3710",
+      "canonical_ldraw_part_id": "3710",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3710",
+      "canonical_ldraw_part_id": "3710",
+      "rebrickable_color_id": 26,
+      "ldraw_color_id": 26,
+      "color_name": "Magenta",
+      "rgb_hex": "923978",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3795",
+      "canonical_ldraw_part_id": "3795",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "3941",
+      "canonical_ldraw_part_id": "3941",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "3941",
+      "canonical_ldraw_part_id": "3941",
+      "rebrickable_color_id": 182,
+      "ldraw_color_id": 182,
+      "color_name": "Trans-Orange",
+      "rgb_hex": "F08F1C",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "3957b",
+      "canonical_ldraw_part_id": "3957b",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "4287c",
+      "canonical_ldraw_part_id": "4287c",
+      "rebrickable_color_id": 2,
+      "ldraw_color_id": 2,
+      "color_name": "Green",
+      "rgb_hex": "237841",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "44728",
+      "canonical_ldraw_part_id": "44728",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "47905",
+      "canonical_ldraw_part_id": "47905",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "50950",
+      "canonical_ldraw_part_id": "50950",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "55981",
+      "canonical_ldraw_part_id": "55981",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "58090",
+      "canonical_ldraw_part_id": "58090",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60471",
+      "canonical_ldraw_part_id": "60471",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60592",
+      "canonical_ldraw_part_id": "60592",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60593",
+      "canonical_ldraw_part_id": "60593",
+      "rebrickable_color_id": 19,
+      "ldraw_color_id": 19,
+      "color_name": "Tan",
+      "rgb_hex": "E4CD9E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60598",
+      "canonical_ldraw_part_id": "60598",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60598",
+      "canonical_ldraw_part_id": "60598",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60602",
+      "canonical_ldraw_part_id": "60602",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "60607",
+      "canonical_ldraw_part_id": "60607",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "60607",
+      "canonical_ldraw_part_id": "60607",
+      "rebrickable_color_id": 297,
+      "ldraw_color_id": 297,
+      "color_name": "Pearl Gold",
+      "rgb_hex": "AA7F2E",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "6091",
+      "canonical_ldraw_part_id": "6091",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "6232",
+      "canonical_ldraw_part_id": "6232",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "85984",
+      "canonical_ldraw_part_id": "85984",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "87544",
+      "canonical_ldraw_part_id": "87544",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 2
+    },
+    {
+      "part_num": "90195",
+      "canonical_ldraw_part_id": "90195",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "92582",
+      "canonical_ldraw_part_id": "92582",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "93273",
+      "canonical_ldraw_part_id": "93273",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "98262",
+      "canonical_ldraw_part_id": "98262",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 2
+    },
+    {
+      "part_num": "15254",
+      "canonical_ldraw_part_id": "15254",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "30151b",
+      "canonical_ldraw_part_id": "30151b",
+      "rebrickable_color_id": 47,
+      "ldraw_color_id": 47,
+      "color_name": "Trans-Clear",
+      "rgb_hex": "FCFCFC",
+      "is_trans": true,
+      "quantity": 1
+    },
+    {
+      "part_num": "3028",
+      "canonical_ldraw_part_id": "3028",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "3029",
+      "canonical_ldraw_part_id": "3029",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "3031",
+      "canonical_ldraw_part_id": "3031",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "3032",
+      "canonical_ldraw_part_id": "3032",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "3942c",
+      "canonical_ldraw_part_id": "3942c",
+      "rebrickable_color_id": 1,
+      "ldraw_color_id": 1,
+      "color_name": "Blue",
+      "rgb_hex": "0055BF",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "3957b",
+      "canonical_ldraw_part_id": "3957b",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "60479",
+      "canonical_ldraw_part_id": "60479",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "60596",
+      "canonical_ldraw_part_id": "60596",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "60599",
+      "canonical_ldraw_part_id": "60599",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "60621",
+      "canonical_ldraw_part_id": "60621",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "60623",
+      "canonical_ldraw_part_id": "60623",
+      "rebrickable_color_id": 14,
+      "ldraw_color_id": 14,
+      "color_name": "Yellow",
+      "rgb_hex": "F2CD37",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "61252",
+      "canonical_ldraw_part_id": "61252",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6223",
+      "canonical_ldraw_part_id": "6223",
+      "rebrickable_color_id": 36,
+      "ldraw_color_id": 36,
+      "color_name": "Trans-Red",
+      "rgb_hex": "C91A09",
+      "is_trans": true,
+      "quantity": 1
+    },
+    {
+      "part_num": "87081",
+      "canonical_ldraw_part_id": "87081",
+      "rebrickable_color_id": 0,
+      "ldraw_color_id": 0,
+      "color_name": "Black",
+      "rgb_hex": "05131D",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "91405",
+      "canonical_ldraw_part_id": "91405",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "96874",
+      "canonical_ldraw_part_id": "96874",
+      "rebrickable_color_id": 25,
+      "ldraw_color_id": 25,
+      "color_name": "Orange",
+      "rgb_hex": "FE8A18",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "99206",
+      "canonical_ldraw_part_id": "99206",
+      "rebrickable_color_id": 71,
+      "ldraw_color_id": 71,
+      "color_name": "Light Bluish Gray",
+      "rgb_hex": "A0A5A9",
+      "is_trans": false,
+      "quantity": 1
+    }
+  ],
+  "spare_items": [
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 5,
+      "ldraw_color_id": 5,
+      "color_name": "Dark Pink",
+      "rgb_hex": "C870A0",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 10,
+      "ldraw_color_id": 10,
+      "color_name": "Bright Green",
+      "rgb_hex": "4B9F4A",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "33291",
+      "canonical_ldraw_part_id": "33291",
+      "rebrickable_color_id": 191,
+      "ldraw_color_id": 191,
+      "color_name": "Bright Light Orange",
+      "rgb_hex": "F8BB3D",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 5,
+      "ldraw_color_id": 5,
+      "color_name": "Dark Pink",
+      "rgb_hex": "C870A0",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 36,
+      "ldraw_color_id": 36,
+      "color_name": "Trans-Red",
+      "rgb_hex": "C91A09",
+      "is_trans": true,
+      "quantity": 1
+    },
+    {
+      "part_num": "54200",
+      "canonical_ldraw_part_id": "54200",
+      "rebrickable_color_id": 322,
+      "ldraw_color_id": 322,
+      "color_name": "Medium Azure",
+      "rgb_hex": "36AEBF",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 4,
+      "ldraw_color_id": 4,
+      "color_name": "Red",
+      "rgb_hex": "C91A09",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 70,
+      "ldraw_color_id": 70,
+      "color_name": "Reddish Brown",
+      "rgb_hex": "582A12",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 72,
+      "ldraw_color_id": 72,
+      "color_name": "Dark Bluish Gray",
+      "rgb_hex": "6C6E68",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 85,
+      "ldraw_color_id": 85,
+      "color_name": "Dark Purple",
+      "rgb_hex": "3F3691",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "6141",
+      "canonical_ldraw_part_id": "6141",
+      "rebrickable_color_id": 182,
+      "ldraw_color_id": 182,
+      "color_name": "Trans-Orange",
+      "rgb_hex": "F08F1C",
+      "is_trans": true,
+      "quantity": 1
+    },
+    {
+      "part_num": "98138pr0008",
+      "canonical_ldraw_part_id": "98138pr0008",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 1
+    },
+    {
+      "part_num": "98138pr0026",
+      "canonical_ldraw_part_id": "98138pr0026",
+      "rebrickable_color_id": 15,
+      "ldraw_color_id": 15,
+      "color_name": "White",
+      "rgb_hex": "FFFFFF",
+      "is_trans": false,
+      "quantity": 1
+    }
+  ]
+}

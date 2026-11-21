@@ -2,8 +2,8 @@
 FROM python:3.13-slim-bookworm
 
 LABEL maintainer="Jacob Sullivan <jacobrsullivan@gmail.com>"
-LABEL version="5.1.0"
-LABEL description="Deterministic clean-room reproduction container for topo_chess (v5.0.0) and topo_brick (Gates 1-8B)"
+LABEL version="5.2.0"
+LABEL description="Deterministic clean-room reproduction container for topo_chess (v5.0.0) and topo_brick (Gates 1-9D)"
 
 # Deterministic seed & single-core numerical stability environment variables
 ENV PYTHONHASHSEED=42 \
@@ -39,4 +39,4 @@ COPY tests/ ./tests/
 RUN pip install --upgrade pip && pip install -e ".[dev]"
 
 # Default entrypoint runs lint + fast verification gates across both topo_chess and topo_brick
-CMD ["pytest", "-v", "tests/test_gate1_encoding_and_hygiene.py", "tests/test_gate2_ipa_equivariance.py", "tests/test_gate3_d3pm_legality.py", "tests/test_phase_d_audit_compliance.py", "tests/test_phase_e_round2_compliance.py", "tests/test_topo_brick/test_wp_l1_interface.py", "tests/test_topo_brick/test_wp_l2_fields.py", "tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py", "tests/test_topo_brick/test_revised_construction_kernel.py"]
+CMD ["pytest", "-v", "tests/test_gate1_encoding_and_hygiene.py", "tests/test_gate2_ipa_equivariance.py", "tests/test_gate3_d3pm_legality.py", "tests/test_phase_d_audit_compliance.py", "tests/test_phase_e_round2_compliance.py", "tests/test_topo_brick/test_wp_l1_interface.py", "tests/test_topo_brick/test_wp_l2_fields.py", "tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py", "tests/test_topo_brick/test_revised_construction_kernel.py", "tests/test_topo_brick/test_p12_contract_and_falsification_audit.py"]

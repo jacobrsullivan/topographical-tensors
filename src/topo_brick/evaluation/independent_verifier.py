@@ -29,7 +29,7 @@ import sys
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 from scipy.optimize import linprog
-from scipy.sparse import lil_matrix
+from scipy.sparse import csc_matrix
 
 from topo_brick.interface.brick_catalog import (
     EXTENDED_BRICK_CATALOG,
@@ -37,28 +37,59 @@ from topo_brick.interface.brick_catalog import (
     PortPolarity,
     are_connectors_compatible,
     get_brick_primitive,
+    is_known_part_id,
 )
 from topo_brick.interface.ldu_frames import LDUBox, LDUFrame, rot_id_to_matrix
 from topo_brick.interface.port_manifold import AssemblyState, get_admissible_socket_pocket_ldu
 from topo_brick.interface.se3_kinematics import (
-    ContinuousAssemblyState,
     ContinuousSE3Pose,
+    OBB3D,
+    box_to_obb,
+    get_connector_axial_slide_bounds_ldu,
+    is_obb_protrusion_contained_in_socket_pocket,
+    obb_intersects_sat,
 )
 
 
-CERTIFICATE_SCHEMA_VERSION: str = "1.0.0"
+CERTIFICATE_SCHEMA_VERSION: str = "1.1.0"
+SUPPORTED_CERTIFICATE_SCHEMAS: Tuple[str, ...] = ("1.0.0", "1.1.0")
+_VALID_ASSEMBLY_MODES: Tuple[str, ...] = ("cubic_ldu", "continuous_se3")
+_VALID_FOUNDATION_POLICIES: Tuple[str, ...] = (
+    "clutched_baseplate",
+    "table_friction_only",
+    "fixed_anchor",
+)
 
 
 _BASE_EXTENDED_CATALOG_SHA256: Optional[str] = None
-_RETRIEVAL_INDEX_SHA256: Optional[str] = None
+_FILE_SHA_CACHE: Dict[Path, Tuple[Tuple[int, int], str]] = {}
 
 
-def compute_catalog_sha256() -> str:
+def _stat_cached_file_sha256(path: Path, missing_sentinel: str) -> str:
+    """Compute SHA-256 over raw file bytes on disk, cached strictly by `(st_mtime_ns, st_size)` (`F7`)."""
+    if not path.is_file():
+        return missing_sentinel
+    st = path.stat()
+    sk = (int(st.st_mtime_ns), int(st.st_size))
+    cached = _FILE_SHA_CACHE.get(path)
+    if cached is not None and cached[0] == sk:
+        return cached[1]
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    _FILE_SHA_CACHE[path] = (sk, digest)
+    return digest
+
+
+def compute_catalog_sha256(schema_version: str = CERTIFICATE_SCHEMA_VERSION) -> str:
     """
-    Compute a deterministic O(1)-cached SHA-256 digest of `EXTENDED_BRICK_CATALOG` (`213`) plus
-    `COMPILED_LDRAW_CATALOG.archive_sha256` (`14,500+` parts when compiled).
+    Compute a deterministic SHA-256 digest over raw on-disk archive bytes and in-memory primitives (`F7`):
+      - `EXTENDED_BRICK_CATALOG` (`213` curated + `TIER_A` primitives),
+      - `COMPILED_LDRAW_CATALOG.archive_sha256` (`compiled_ldraw_catalog.json.gz` raw bytes),
+      - `COMPILED_LDRAW_CATALOG.coacd_sha256` (`compiled_coacd_hulls.npz` raw bytes, schema `>= 1.1.0`),
+      - `compiled_mold_retrieval_index.npz` raw bytes,
+      - `compiled_landmark_detail_index.json.gz` raw bytes (schema `>= 1.1.0`),
+      - `set_10698_1_rebrickable_inventory.json` raw bytes (schema `>= 1.1.0`).
     """
-    global _BASE_EXTENDED_CATALOG_SHA256, _RETRIEVAL_INDEX_SHA256
+    global _BASE_EXTENDED_CATALOG_SHA256
     if _BASE_EXTENDED_CATALOG_SHA256 is None:
         h = hashlib.sha256()
         for pid in sorted(EXTENDED_BRICK_CATALOG.keys()):
@@ -98,40 +129,64 @@ def compute_catalog_sha256() -> str:
     from topo_brick.interface.ldraw_shadow_catalog_compiler import COMPILED_LDRAW_CATALOG
 
     if COMPILED_LDRAW_CATALOG.is_available:
-        if _RETRIEVAL_INDEX_SHA256 is None:
-            idx_npz = Path(__file__).resolve().parent.parent / "interface" / "compiled_mold_retrieval_index.npz"
-            _RETRIEVAL_INDEX_SHA256 = (
-                hashlib.sha256(idx_npz.read_bytes()).hexdigest() if idx_npz.is_file() else "no_idx"
+        iface_dir = Path(__file__).resolve().parent.parent / "interface"
+        ret_sha = _stat_cached_file_sha256(iface_dir / "compiled_mold_retrieval_index.npz", "no_idx")
+        if schema_version == "1.0.0":
+            comb_v10 = hashlib.sha256()
+            comb_v10.update(
+                f"{_BASE_EXTENDED_CATALOG_SHA256}:{COMPILED_LDRAW_CATALOG.archive_sha256}:{ret_sha}".encode(
+                    "utf-8"
+                )
             )
+            return comb_v10.hexdigest()
+        lm_sha = _stat_cached_file_sha256(iface_dir / "compiled_landmark_detail_index.json.gz", "no_lm_idx")
+        rb_sha = _stat_cached_file_sha256(iface_dir / "set_10698_1_rebrickable_inventory.json", "no_rb_10698")
         comb = hashlib.sha256()
         comb.update(
-            f"{_BASE_EXTENDED_CATALOG_SHA256}:{COMPILED_LDRAW_CATALOG.archive_sha256}:{_RETRIEVAL_INDEX_SHA256}".encode(
-                "utf-8"
-            )
+            (
+                f"{_BASE_EXTENDED_CATALOG_SHA256}:{COMPILED_LDRAW_CATALOG.archive_sha256}:"
+                f"{COMPILED_LDRAW_CATALOG.coacd_sha256}:{ret_sha}:{lm_sha}:{rb_sha}"
+            ).encode("utf-8")
         )
         return comb.hexdigest()
     return _BASE_EXTENDED_CATALOG_SHA256
 
 
 def compute_target_sha256(target_field: Any) -> str:
-    """Compute a deterministic SHA-256 digest of a target field's bounds and occupied volume."""
+    """
+    Compute a canonical geometry-sensitive SHA-256 digest of `target_field` (`F7`):
+    binds occupied bounds, total volume, and sorted boxes or sparse voxel tile bitmasks
+    so distinct target shapes with equal bounding box and volume never collide.
+    """
     if target_field is None:
         return "no_target"
     h = hashlib.sha256()
     bounds = target_field.occupied_bounds_ldu()
     vol = int(getattr(target_field, "total_volume_ldu3", 0))
     payload: Dict[str, Any] = {"bounds": bounds, "total_volume_ldu3": vol}
-    if hasattr(target_field, "boxes"):
-        payload["boxes"] = [
-            (b.xmin, b.ymin, b.zmin, b.xmax, b.ymax, b.zmax) for b in target_field.boxes
-        ]
+    if hasattr(target_field, "boxes") and getattr(target_field, "boxes", None):
+        payload["boxes"] = sorted(
+            (int(b.xmin), int(b.ymin), int(b.zmin), int(b.xmax), int(b.ymax), int(b.zmax))
+            for b in target_field.boxes
+        )
+    elif hasattr(target_field, "_tiles") and isinstance(getattr(target_field, "_tiles", None), dict):
+        tile_digests = []
+        for tkey in sorted(target_field._tiles.keys()):
+            t_arr = np.ascontiguousarray(target_field._tiles[tkey])
+            tile_digests.append(
+                ([int(c) for c in tkey], hashlib.sha256(t_arr.tobytes()).hexdigest()[:24])
+            )
+        payload["tile_digests"] = tile_digests
+    elif hasattr(target_field, "occ_5x5x6"):
+        occ_arr = np.ascontiguousarray(target_field.occ_5x5x6, dtype=np.uint8)
+        payload["occ_5x5x6_sha256"] = hashlib.sha256(occ_arr.tobytes()).hexdigest()
     h.update(json.dumps(payload, sort_keys=True).encode("utf-8"))
     return h.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
 class VersionedCertificateArtifact:
-    """Self-contained, versioned JSON certificate artifact (`R9-WS1` §3.1)."""
+    """Self-contained, versioned JSON certificate artifact (`R9-WS1` §3.1 + `Phase 12` `v1.1.0`)."""
 
     schema_version: str
     catalog_sha256: str
@@ -148,6 +203,9 @@ class VersionedCertificateArtifact:
     lp_witness_summary: Dict[str, Any]
     cached_dependencies: Tuple[str, ...]
     claimed_certificates: Dict[str, str]
+    colored_inventory_spec: Optional[Dict[str, int]] = None
+    forbidden_support_boxes: Tuple[Tuple[int, int, int, int, int, int], ...] = ()
+    license_filter: str = "all"
 
     def to_json_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -158,6 +216,7 @@ class VersionedCertificateArtifact:
             for a, b in self.matched_port_pairs
         ]
         d["cached_dependencies"] = list(self.cached_dependencies)
+        d["forbidden_support_boxes"] = [list(fb) for fb in self.forbidden_support_boxes]
         return d
 
     @classmethod
@@ -189,6 +248,16 @@ class VersionedCertificateArtifact:
             claimed_certificates={
                 str(k): str(v) for k, v in data.get("claimed_certificates", {}).items()
             },
+            colored_inventory_spec=(
+                {str(k): int(v) for k, v in data["colored_inventory_spec"].items()}
+                if data.get("colored_inventory_spec") is not None
+                else None
+            ),
+            forbidden_support_boxes=tuple(
+                (int(fb[0]), int(fb[1]), int(fb[2]), int(fb[3]), int(fb[4]), int(fb[5]))
+                for fb in data.get("forbidden_support_boxes", ())
+            ),
+            license_filter=str(data.get("license_filter", "all")),
         )
 
     def save_json(self, path: str | Path) -> None:
@@ -199,15 +268,59 @@ class VersionedCertificateArtifact:
         return cls.from_json_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def _serialize_atomic_step(
+    st: Any,
+    parts_map: Optional[Dict[int, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Recursively serialize an `AtomicBuildStep` into a self-contained replay operation (`F1`)."""
+    sub_raw = getattr(st, "subtrace", ()) or ()
+    op_str = str(st.op_type.value if hasattr(st.op_type, "value") else st.op_type)
+    iids = [int(x) for x in st.instance_ids]
+    part_id_s = str(st.part_id)
+    rot_id_v = int(st.pose.rot_id) if st.pose is not None else 0
+    rot_mat_v: Any = None
+    pos_v: List[Any] = [int(c) for c in st.pose.pos] if st.pose is not None else [0, 0, 0]
+    is_g_v = bool(st.is_grounded)
+    col_v = int(getattr(st, "color_id", 15))
+    if op_str == "PLACE_PART" and len(iids) == 1 and parts_map and iids[0] in parts_map:
+        ref_p = parts_map[iids[0]]
+        col_v = int(ref_p.get("color_id", col_v))
+        if not part_id_s:
+            part_id_s = str(ref_p["part_id"])
+            rot_id_v = int(ref_p.get("rot_id", 0))
+            rot_mat_v = ref_p.get("rot_matrix")
+            pos_v = list(ref_p["pos"])
+            is_g_v = bool(ref_p["is_grounded"])
+    out_d: Dict[str, Any] = {
+        "op_type": op_str,
+        "instance_ids": iids,
+        "part_id": part_id_s,
+        "rot_id": rot_id_v,
+        "pos": pos_v,
+        "is_grounded": is_g_v,
+        "color_id": col_v,
+        "temp_support_tag": str(st.temp_support_tag),
+        "gravity_unit": [float(g) for g in st.gravity_unit],
+        "subtrace": [_serialize_atomic_step(sub_s, parts_map) for sub_s in sub_raw] if sub_raw else [],
+    }
+    if rot_mat_v is not None:
+        out_d["rot_matrix"] = rot_mat_v
+    return out_d
+
+
 def export_certificate_artifact(
-    assembly: AssemblyState | ContinuousAssemblyState,
+    assembly: Any,
     certificates: Any,
     validator: Any = None,
     target_field: Any = None,
     support_policy: str = "none",
     inventory_counts: Optional[Dict[str, int]] = None,
+    colored_inventory: Optional[Any] = None,
+    forbidden_support_boxes: Sequence[LDUBox] = (),
+    license_filter: str = "all",
+    foundation_policy: Optional[str] = None,
 ) -> VersionedCertificateArtifact:
-    """Export a self-contained `VersionedCertificateArtifact` for independent planner-free replay."""
+    """Export a self-contained `VersionedCertificateArtifact` (`v1.1.0`) for independent planner-free replay."""
     cat_sha = compute_catalog_sha256()
     tgt_sha = compute_target_sha256(target_field)
     is_cubic = isinstance(assembly, AssemblyState)
@@ -224,6 +337,7 @@ def export_certificate_artifact(
                     "rot_id": int(p.pose.rot_id),
                     "pos": [int(c) for c in p.pose.pos],
                     "is_grounded": bool(p.is_grounded),
+                    "color_id": int(getattr(p, "color_id", 15)),
                 }
             )
         else:
@@ -234,27 +348,26 @@ def export_certificate_artifact(
                     "rot_matrix": [[float(x) for x in row] for row in p.continuous_pose.rot_matrix],
                     "pos": [float(c) for c in p.continuous_pose.pos],
                     "is_grounded": bool(p.is_grounded),
+                    "color_id": int(getattr(p, "color_id", 15)),
                 }
             )
 
+    parts_map_tmp = {int(e["instance_id"]): e for e in placed_list}
     ops_list: List[Dict[str, Any]] = []
-    eff_trace = getattr(certificates, "execution_trace", None)
+    eff_trace = getattr(certificates, "execution_trace", None) or getattr(assembly, "_execution_trace", None)
     if eff_trace is not None:
         for st in eff_trace.steps:
-            ops_list.append(
-                {
-                    "op_type": str(st.op_type.value if hasattr(st.op_type, "value") else st.op_type),
-                    "instance_ids": [int(x) for x in st.instance_ids],
-                    "part_id": str(st.part_id),
-                    "rot_id": int(st.pose.rot_id) if st.pose is not None else 0,
-                    "pos": [int(c) for c in st.pose.pos] if st.pose is not None else [0, 0, 0],
-                    "is_grounded": bool(st.is_grounded),
-                    "temp_support_tag": str(st.temp_support_tag),
-                    "gravity_unit": [float(g) for g in st.gravity_unit],
-                }
-            )
-    else:
-        for entry in placed_list:
+            ops_list.append(_serialize_atomic_step(st, parts_map_tmp))
+    elif getattr(assembly, "has_execution_trace", False):
+        step_ids = list(getattr(assembly, "recorded_step_ids", ())) or list(
+            getattr(assembly, "placement_order", ())
+        )
+        ordered_entries = (
+            [parts_map_tmp[sid] for sid in step_ids if sid in parts_map_tmp]
+            if step_ids
+            else placed_list
+        )
+        for entry in ordered_entries:
             ops_list.append(
                 {
                     "op_type": "PLACE_PART",
@@ -264,8 +377,10 @@ def export_certificate_artifact(
                     "rot_matrix": entry.get("rot_matrix"),
                     "pos": list(entry["pos"]),
                     "is_grounded": bool(entry["is_grounded"]),
+                    "color_id": int(entry.get("color_id", 15)),
                     "temp_support_tag": "",
                     "gravity_unit": [0.0, 0.0, -1.0],
+                    "subtrace": [],
                 }
             )
 
@@ -301,14 +416,37 @@ def export_certificate_artifact(
                 }
             )
 
+    inv_cert_obj = getattr(certificates, "inventory", None)
+    eff_col_src = colored_inventory if colored_inventory is not None else getattr(inv_cert_obj, "colored_inventory", None)
+    eff_inv_src = inventory_counts if inventory_counts is not None else getattr(inv_cert_obj, "inventory_counts", None)
+
+    eff_col_inv_dict: Optional[Dict[str, int]] = None
+    if eff_col_src is not None:
+        if hasattr(eff_col_src, "to_flat_json_dict"):
+            eff_col_inv_dict = eff_col_src.to_flat_json_dict()
+        elif isinstance(eff_col_src, dict):
+            eff_col_inv_dict = {str(k): int(v) for k, v in eff_col_src.items()}
+    eff_mold_inv = dict(eff_inv_src) if eff_inv_src is not None else None
+    if eff_mold_inv is None and eff_col_src is not None and hasattr(eff_col_src, "marginal_mold_counts"):
+        eff_mold_inv = eff_col_src.marginal_mold_counts()
+
+    eff_fp_str = str(
+        foundation_policy
+        if foundation_policy is not None
+        else (
+            certificates.foundation_policy.value
+            if hasattr(certificates.foundation_policy, "value")
+            else certificates.foundation_policy
+        )
+    )
     return VersionedCertificateArtifact(
         schema_version=CERTIFICATE_SCHEMA_VERSION,
         catalog_sha256=cat_sha,
         target_sha256=tgt_sha,
         assembly_mode=mode,
-        foundation_policy=str(certificates.foundation_policy),
+        foundation_policy=eff_fp_str,
         support_policy=str(support_policy),
-        inventory_spec=dict(inventory_counts) if inventory_counts is not None else None,
+        inventory_spec=eff_mold_inv,
         placed_parts=tuple(placed_list),
         execution_operations=tuple(ops_list),
         matched_port_pairs=tuple(matched_pairs),
@@ -316,8 +454,10 @@ def export_certificate_artifact(
             "clutch_force_capacity_grams": clutch_g,
             "moment_arm_capacity_ldu": m_arm,
             "friction_coeff": fric,
-            "locking_hinge_detent_moment_ldu_g": 650.0,
-            "ball_joint_friction_moment_ldu_g": 450.0,
+            "coulomb_friction_coeff": 0.60,
+            "normal_crush_ratio": 25.0,
+            "locking_hinge_detent_moment_ldu_g": 380.0,
+            "ball_joint_friction_moment_ldu_g": 220.0,
         },
         tolerances={
             "eq_residual_tol_g": 1e-5,
@@ -327,6 +467,12 @@ def export_certificate_artifact(
         lp_witness_summary=witness_summary,
         cached_dependencies=("scipy.optimize.linprog:highs", "EXTENDED_BRICK_CATALOG"),
         claimed_certificates=certificates.summary_dict(),
+        colored_inventory_spec=eff_col_inv_dict,
+        forbidden_support_boxes=tuple(
+            (int(fb.xmin), int(fb.ymin), int(fb.zmin), int(fb.xmax), int(fb.ymax), int(fb.zmax))
+            for fb in forbidden_support_boxes
+        ),
+        license_filter=str(license_filter),
     )
 
 
@@ -678,6 +824,8 @@ def audit_geometry_collider_vs_csg(
             ]
         elif mode == 2:
             # Continuous SE(3) over-inserted stud into brick (axial_slide = +8 LDU into solid interior)
+            from topo_brick.interface.se3_kinematics import ContinuousAssemblyState
+
             cs = ContinuousAssemblyState()
             b0 = cs.place_part("3005", ContinuousSE3Pose.identity(), is_grounded=True)
             over_pose = ContinuousSE3Pose.from_matrix_and_pos(
@@ -817,6 +965,8 @@ def _independent_cubic_equilibrium_lp(
         for gid in grounded_ids:
             bxs = world_boxes[gid]
             z_g = float(min(b.zmin for b in bxs))
+            if is_table and abs(z_g) > 0.25:
+                return False, float("inf"), float("inf"), float("inf")
             xs = [float(b.xmin) for b in bxs] + [float(b.xmax) for b in bxs]
             ys = [float(b.ymin) for b in bxs] + [float(b.ymax) for b in bxs]
             cx_g = 0.5 * (min(xs) + max(xs))
@@ -913,10 +1063,12 @@ def _independent_cubic_equilibrium_lp(
     n_vars = eta_col + 1
     row_map = {iid: 6 * idx for idx, iid in enumerate(non_ground)}
     n_eq = 6 * len(non_ground)
-    a_eq = lil_matrix((n_eq, n_vars), dtype=np.float64)
+    eq_r_idx: List[int] = []
+    eq_c_idx: List[int] = []
+    eq_vals: List[float] = []
     b_eq = np.zeros(n_eq, dtype=np.float64)
 
-    coms: Dict[int, np.ndarray] = {}
+    coms: Dict[int, Tuple[float, float, float]] = {}
     gx_u, gy_u, gz_u = float(gravity_unit[0]), float(gravity_unit[1]), float(gravity_unit[2])
     for iid in non_ground:
         prim = get_brick_primitive(str(parts_dict[iid]["part_id"]))
@@ -925,15 +1077,26 @@ def _independent_cubic_equilibrium_lp(
         cx = sum(0.5 * (b.xmin + b.xmax) * b.volume_ldu3 for b in bxs) / max(tot_v, 1)
         cy = sum(0.5 * (b.ymin + b.ymax) * b.volume_ldu3 for b in bxs) / max(tot_v, 1)
         cz = sum(0.5 * (b.zmin + b.zmax) * b.volume_ldu3 for b in bxs) / max(tot_v, 1)
-        coms[iid] = np.array([cx, cy, cz], dtype=np.float64)
+        coms[iid] = (float(cx), float(cy), float(cz))
         r0 = row_map[iid]
         m_g = float(prim.mass_grams)
         b_eq[r0 + 0] = -m_g * gx_u
         b_eq[r0 + 1] = -m_g * gy_u
         b_eq[r0 + 2] = -m_g * gz_u
 
-    ub_rows: List[Tuple[List[int], List[float], float]] = []
+    ub_r_idx: List[int] = []
+    ub_c_idx: List[int] = []
+    ub_vals: List[float] = []
+    ub_rhs: List[float] = []
     bounds: List[Tuple[Optional[float], Optional[float]]] = []
+
+    def _add_ub(cols: List[int], vals: List[float], rhs: float = 0.0) -> None:
+        ri = len(ub_rhs)
+        ub_rhs.append(rhs)
+        for ci, vi in zip(cols, vals):
+            ub_r_idx.append(ri)
+            ub_c_idx.append(ci)
+            ub_vals.append(vi)
 
     for p_i, (u, v, r_p, n_v, t1_v, t2_v, ft_cap, sh_cap, hbu, hbv, tn_cap) in enumerate(patches):
         base = 7 * p_i
@@ -948,64 +1111,96 @@ def _independent_cubic_equilibrium_lp(
                 (None, None),
             ]
         )
+        nx0, ny0, nz0 = float(n_v[0]), float(n_v[1]), float(n_v[2])
+        u1x, u1y, u1z = float(t1_v[0]), float(t1_v[1]), float(t1_v[2])
+        u2x, u2y, u2z = float(t2_v[0]), float(t2_v[1]), float(t2_v[2])
+        rpx, rpy, rpz = float(r_p[0]), float(r_p[1]), float(r_p[2])
         # Action-reaction on u (-1) and v (+1): F_on_v = (f_c - f_t) n + f_u t1 + f_v t2
         for end_id, sgn in ((u, -1.0), (v, 1.0)):
             if end_id not in row_map:
                 continue
             r0 = row_map[end_id]
-            d_r = r_p - coms[end_id]
-            for d_ax in range(3):
-                a_eq[r0 + d_ax, base + 0] += sgn * n_v[d_ax]
-                a_eq[r0 + d_ax, base + 1] += -sgn * n_v[d_ax]
-                a_eq[r0 + d_ax, base + 2] += sgn * t1_v[d_ax]
-                a_eq[r0 + d_ax, base + 3] += sgn * t2_v[d_ax]
-            c_n = np.cross(d_r, n_v)
-            c_t1 = np.cross(d_r, t1_v)
-            c_t2 = np.cross(d_r, t2_v)
-            for d_ax in range(3):
-                a_eq[r0 + 3 + d_ax, base + 0] += sgn * c_n[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 1] += -sgn * c_n[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 2] += sgn * c_t1[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 3] += sgn * c_t2[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 4] += sgn * t1_v[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 5] += sgn * t2_v[d_ax]
-                a_eq[r0 + 3 + d_ax, base + 6] += sgn * n_v[d_ax]
+            ccx, ccy, ccz = coms[end_id]
+            drx, dry, drz = rpx - ccx, rpy - ccy, rpz - ccz
+            for d_ax, nv_a, t1_a, t2_a in ((0, nx0, u1x, u2x), (1, ny0, u1y, u2y), (2, nz0, u1z, u2z)):
+                if nv_a != 0.0:
+                    eq_r_idx.extend((r0 + d_ax, r0 + d_ax))
+                    eq_c_idx.extend((base + 0, base + 1))
+                    eq_vals.extend((sgn * nv_a, -sgn * nv_a))
+                if t1_a != 0.0:
+                    eq_r_idx.append(r0 + d_ax)
+                    eq_c_idx.append(base + 2)
+                    eq_vals.append(sgn * t1_a)
+                if t2_a != 0.0:
+                    eq_r_idx.append(r0 + d_ax)
+                    eq_c_idx.append(base + 3)
+                    eq_vals.append(sgn * t2_a)
+            cnx, cny, cnz = dry * nz0 - drz * ny0, drz * nx0 - drx * nz0, drx * ny0 - dry * nx0
+            c1x, c1y, c1z = dry * u1z - drz * u1y, drz * u1x - drx * u1z, drx * u1y - dry * u1x
+            c2x, c2y, c2z = dry * u2z - drz * u2y, drz * u2x - drx * u2z, drx * u2y - dry * u2x
+            for d_ax, cn_a, c1_a, c2_a, t1_a, t2_a, nv_a in (
+                (0, cnx, c1x, c2x, u1x, u2x, nx0),
+                (1, cny, c1y, c2y, u1y, u2y, ny0),
+                (2, cnz, c1z, c2z, u1z, u2z, nz0),
+            ):
+                if cn_a != 0.0:
+                    eq_r_idx.extend((r0 + 3 + d_ax, r0 + 3 + d_ax))
+                    eq_c_idx.extend((base + 0, base + 1))
+                    eq_vals.extend((sgn * cn_a, -sgn * cn_a))
+                if c1_a != 0.0:
+                    eq_r_idx.append(r0 + 3 + d_ax)
+                    eq_c_idx.append(base + 2)
+                    eq_vals.append(sgn * c1_a)
+                if c2_a != 0.0:
+                    eq_r_idx.append(r0 + 3 + d_ax)
+                    eq_c_idx.append(base + 3)
+                    eq_vals.append(sgn * c2_a)
+                if t1_a != 0.0:
+                    eq_r_idx.append(r0 + 3 + d_ax)
+                    eq_c_idx.append(base + 4)
+                    eq_vals.append(sgn * t1_a)
+                if t2_a != 0.0:
+                    eq_r_idx.append(r0 + 3 + d_ax)
+                    eq_c_idx.append(base + 5)
+                    eq_vals.append(sgn * t2_a)
+                if nv_a != 0.0:
+                    eq_r_idx.append(r0 + 3 + d_ax)
+                    eq_c_idx.append(base + 6)
+                    eq_vals.append(sgn * nv_a)
 
         if ft_cap > 0.0:
-            ub_rows.append(([base + 1, eta_col], [1.0, -ft_cap], 0.0))
+            _add_ub([base + 1, eta_col], [1.0, -ft_cap])
         for su in (-1.0, 1.0):
             if sh_cap > 0.0:
-                ub_rows.append(([base + 2, base + 0, eta_col], [su, -mu, -sh_cap], 0.0))
-                ub_rows.append(([base + 3, base + 0, eta_col], [su, -mu, -sh_cap], 0.0))
+                _add_ub([base + 2, base + 0, eta_col], [su, -mu, -sh_cap])
+                _add_ub([base + 3, base + 0, eta_col], [su, -mu, -sh_cap])
             else:
-                ub_rows.append(([base + 2, base + 0], [su, -mu], 0.0))
-                ub_rows.append(([base + 3, base + 0], [su, -mu], 0.0))
-        # Asymmetric bearing moment cone: |tau_u| <= hbv * f_c + (ft_cap * m_arm) * eta
+                _add_ub([base + 2, base + 0], [su, -mu])
+                _add_ub([base + 3, base + 0], [su, -mu])
         cap_m = ft_cap * m_arm
         for st in (-1.0, 1.0):
             if cap_m > 0.0:
-                ub_rows.append(([base + 4, base + 0, eta_col], [st, -hbv, -cap_m], 0.0))
-                ub_rows.append(([base + 5, base + 0, eta_col], [st, -hbu, -cap_m], 0.0))
+                _add_ub([base + 4, base + 0, eta_col], [st, -hbv, -cap_m])
+                _add_ub([base + 5, base + 0, eta_col], [st, -hbu, -cap_m])
             else:
-                ub_rows.append(([base + 4, base + 0], [st, -hbv], 0.0))
-                ub_rows.append(([base + 5, base + 0], [st, -hbu], 0.0))
+                _add_ub([base + 4, base + 0], [st, -hbv])
+                _add_ub([base + 5, base + 0], [st, -hbu])
             if tn_cap > 0.0:
-                ub_rows.append(([base + 6, base + 0, eta_col], [st, -0.5 * mu * m_arm, -tn_cap], 0.0))
+                _add_ub([base + 6, base + 0, eta_col], [st, -0.5 * mu * m_arm, -tn_cap])
             else:
-                ub_rows.append(([base + 6, base + 0], [st, -0.5 * mu * m_arm], 0.0))
+                _add_ub([base + 6, base + 0], [st, -0.5 * mu * m_arm])
 
     bounds.append((0.0, None))
-    a_ub = lil_matrix((len(ub_rows), n_vars), dtype=np.float64)
-    b_ub = np.zeros(len(ub_rows), dtype=np.float64)
-    for r_i, (cols, vals, rhs) in enumerate(ub_rows):
-        for c_i, v_i in zip(cols, vals):
-            a_ub[r_i, c_i] += v_i
-        b_ub[r_i] = rhs
+    n_ub = len(ub_rhs)
+    b_ub = np.asarray(ub_rhs, dtype=np.float64)
 
     c_obj = np.zeros(n_vars, dtype=np.float64)
     c_obj[eta_col] = 1.0 + 1e-6 * float(n_p)
-    a_eq_csc = a_eq.tocsc()
-    a_ub_csc = a_ub.tocsc()
+    a_eq_csc = csc_matrix((np.asarray(eq_vals, dtype=np.float64), (eq_r_idx, eq_c_idx)), shape=(n_eq, n_vars))
+    a_ub_csc = csc_matrix((np.asarray(ub_vals, dtype=np.float64), (ub_r_idx, ub_c_idx)), shape=(n_ub, n_vars))
+    tol_ok = 2e-4 if n_vars > 1200 else 1e-5
+    lb_arr = np.asarray([0.0 if b[0] is None else float(b[0]) for b in bounds], dtype=np.float64)
+    ub_arr = np.asarray([float("inf") if b[1] is None else float(b[1]) for b in bounds], dtype=np.float64)
     res = None
     if n_vars > 1200:
         import warnings
@@ -1020,8 +1215,24 @@ def _independent_cubic_equilibrium_lp(
                 b_eq=b_eq,
                 bounds=bounds,
                 method="highs-ipm",
-                options={"run_crossover": "off", "ipm_optimality_tolerance": 1e-6},
+                options={"run_crossover": "off", "ipm_optimality_tolerance": 1e-8},
             )
+        if res is not None and res.x is not None:
+            x_ipm = np.asarray(res.x, dtype=np.float64)
+            if x_ipm.shape == (n_vars,) and np.all(np.isfinite(x_ipm)):
+                eta_ipm = float(x_ipm[eta_col])
+                eq_ipm = float(np.max(np.abs(a_eq_csc.dot(x_ipm) - b_eq))) if n_eq > 0 else 0.0
+                ub_ipm = float(np.max(np.maximum(a_ub_csc.dot(x_ipm) - b_ub, 0.0))) if n_ub > 0 else 0.0
+                lb_ipm = float(np.max(np.maximum(lb_arr - x_ipm, 0.0)))
+                hi_ipm = float(np.max(np.where(np.isfinite(ub_arr), np.maximum(x_ipm - ub_arr, 0.0), 0.0)))
+                if (
+                    eta_ipm <= 1.0 + tol_ok
+                    and eq_ipm <= tol_ok
+                    and ub_ipm <= tol_ok
+                    and lb_ipm <= tol_ok
+                    and hi_ipm <= tol_ok
+                ):
+                    return True, eta_ipm, eq_ipm, ub_ipm
     if res is None or not res.success or res.x is None:
         res = linprog(
             c_obj, A_ub=a_ub_csc, b_ub=b_ub, A_eq=a_eq_csc, b_eq=b_eq, bounds=bounds, method="highs"
@@ -1032,9 +1243,18 @@ def _independent_cubic_equilibrium_lp(
     x_sol = np.asarray(res.x, dtype=np.float64)
     eta_val = float(x_sol[eta_col])
     eq_res = float(np.max(np.abs(a_eq_csc.dot(x_sol) - b_eq))) if n_eq > 0 else 0.0
-    ub_viol = float(np.max(np.maximum(a_ub_csc.dot(x_sol) - b_ub, 0.0))) if len(ub_rows) > 0 else 0.0
-    tol_ok = 2e-4 if n_vars > 1200 else 1e-5
+    ub_viol = float(np.max(np.maximum(a_ub_csc.dot(x_sol) - b_ub, 0.0))) if n_ub > 0 else 0.0
     is_ok = (eta_val <= 1.0 + tol_ok) and (eq_res <= tol_ok) and (ub_viol <= tol_ok)
+    if not is_ok and n_vars > 1200 and eta_val <= 1.0 + 1e-3:
+        res_sx = linprog(
+            c_obj, A_ub=a_ub_csc, b_ub=b_ub, A_eq=a_eq_csc, b_eq=b_eq, bounds=bounds, method="highs"
+        )
+        if res_sx.success and res_sx.x is not None:
+            x_sol = np.asarray(res_sx.x, dtype=np.float64)
+            eta_val = float(x_sol[eta_col])
+            eq_res = float(np.max(np.abs(a_eq_csc.dot(x_sol) - b_eq))) if n_eq > 0 else 0.0
+            ub_viol = float(np.max(np.maximum(a_ub_csc.dot(x_sol) - b_ub, 0.0))) if n_ub > 0 else 0.0
+            is_ok = (eta_val <= 1.0 + tol_ok) and (eq_res <= tol_ok) and (ub_viol <= tol_ok)
     return is_ok, eta_val, eq_res, ub_viol
 
 
@@ -1054,8 +1274,22 @@ def _try_independent_plumb_prefix_witness(
     multi-pier load sharing, SNOT, table friction, or lateral gravity is needed, delegating
     that step to `_independent_cubic_equilibrium_lp`.
     """
-    if foundation_policy == "table_friction_only" or gravity_unit != (0.0, 0.0, -1.0):
+    if gravity_unit != (0.0, 0.0, -1.0):
         return False, float("inf")
+    is_table_only = foundation_policy == "table_friction_only"
+    if is_table_only:
+        # Verify every grounded brick's own CoM lies strictly inside its own z=0 table contact rectangle
+        for gid, ge in parts_dict.items():
+            if bool(ge["is_grounded"]):
+                gbxs = world_boxes[gid]
+                tv_g = sum(float(b.volume_ldu3) for b in gbxs)
+                g_cx = sum(0.5 * (b.xmin + b.xmax) * float(b.volume_ldu3) for b in gbxs) / max(tv_g, 1.0)
+                g_cy = sum(0.5 * (b.ymin + b.ymax) * float(b.volume_ldu3) for b in gbxs) / max(tv_g, 1.0)
+                if not any(
+                    b.zmin <= 0 and (b.xmin + 0.5) <= g_cx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= g_cy <= (b.ymax - 0.5)
+                    for b in gbxs
+                ):
+                    return False, float("inf")
     clutch_f = float(joint_assumptions.get("clutch_force_capacity_grams", 99.9))
     m_arm = float(joint_assumptions.get("moment_arm_capacity_ldu", 8.0))
 
@@ -1095,6 +1329,123 @@ def _try_independent_plumb_prefix_witness(
 
     for (upper_id, lower_id), pts in pair_pts.items():
         lower_neighbors.setdefault(upper_id, []).append((lower_id, pts))
+
+    def _try_top_down_two_pier_bearing() -> Tuple[bool, float]:
+        """Exact zero-tension top-down 1-or-2-pier bearing compression witness (`0.0` force & torque residual)."""
+        f_acc: Dict[int, float] = {}
+        wx_acc: Dict[int, float] = {}
+        wy_acc: Dict[int, float] = {}
+        for k_id, k_e in parts_dict.items():
+            m_k = float(get_brick_primitive(str(k_e["part_id"])).mass_grams)
+            kbxs = world_boxes[k_id]
+            kv = sum(float(b.volume_ldu3) for b in kbxs)
+            kcx = sum(0.5 * (b.xmin + b.xmax) * float(b.volume_ldu3) for b in kbxs) / max(kv, 1.0)
+            kcy = sum(0.5 * (b.ymin + b.ymax) * float(b.volume_ldu3) for b in kbxs) / max(kv, 1.0)
+            f_acc[k_id] = m_k
+            wx_acc[k_id] = m_k * kcx
+            wy_acc[k_id] = m_k * kcy
+
+        top_down_ids = sorted(
+            parts_dict.keys(),
+            key=lambda i: (-min(b.zmin for b in world_boxes[i]), -max(b.zmax for b in world_boxes[i]), -i),
+        )
+        max_comp_u = 0.0
+        comp_cap_per_stud = 2.5 * clutch_f
+        for u_id in top_down_ids:
+            ft = f_acc[u_id]
+            qx = wx_acc[u_id] / max(ft, 1e-12)
+            qy = wy_acc[u_id] / max(ft, 1e-12)
+            if bool(parts_dict[u_id]["is_grounded"]):
+                if is_table_only:
+                    if not any(
+                        b.zmin <= 0 and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
+                        for b in world_boxes[u_id]
+                    ):
+                        return False, float("inf")
+                else:
+                    ubxs = world_boxes[u_id]
+                    ux0, ux1 = min(b.xmin for b in ubxs), max(b.xmax for b in ubxs)
+                    uy0, uy1 = min(b.ymin for b in ubxs), max(b.ymax for b in ubxs)
+                    if not ((ux0 - 4.0) <= qx <= (ux1 + 4.0) and (uy0 - 4.0) <= qy <= (uy1 + 4.0)):
+                        return False, float("inf")
+                continue
+
+            cands_u = lower_neighbors.get(u_id, ())
+            if not cands_u:
+                return False, float("inf")
+            m_cap_1 = clutch_f * m_arm
+            routed_1 = False
+            for lid, pts in cands_u:
+                k_l = float(len(pts))
+                rx_l = sum(p[0] for p in pts) / k_l
+                ry_l = sum(p[1] for p in pts) / k_l
+                px0, px1 = min(p[0] for p in pts) - 7.5, max(p[0] for p in pts) + 7.5
+                py0, py1 = min(p[1] for p in pts) - 7.5, max(p[1] for p in pts) + 7.5
+                u_c = ft / max(1e-9, k_l * comp_cap_per_stud)
+                if px0 <= qx <= px1 and py0 <= qy <= py1 and u_c <= 0.90:
+                    u_eff = u_c
+                else:
+                    hbx = max(8.0, 0.5 * (max(p[0] for p in pts) - min(p[0] for p in pts)))
+                    hby = max(8.0, 0.5 * (max(p[1] for p in pts) - min(p[1] for p in pts)))
+                    u_eff = max(
+                        u_c,
+                        max(0.0, (abs(qy - ry_l) - hby) * ft) / max(1e-9, k_l * m_cap_1),
+                        max(0.0, (abs(qx - rx_l) - hbx) * ft) / max(1e-9, k_l * m_cap_1),
+                    )
+                if u_eff <= 0.85:
+                    f_acc[lid] += ft
+                    wx_acc[lid] += ft * qx
+                    wy_acc[lid] += ft * qy
+                    if u_eff > max_comp_u:
+                        max_comp_u = u_eff
+                    routed_1 = True
+                    break
+            if routed_1:
+                continue
+
+            routed_2 = False
+            n_cu = len(cands_u)
+            for ia in range(n_cu):
+                lid_a, pts_a = cands_u[ia]
+                ax = sum(p[0] for p in pts_a) / float(len(pts_a))
+                ay = sum(p[1] for p in pts_a) / float(len(pts_a))
+                for ib in range(ia + 1, n_cu):
+                    lid_b, pts_b = cands_u[ib]
+                    bx = sum(p[0] for p in pts_b) / float(len(pts_b))
+                    by = sum(p[1] for p in pts_b) / float(len(pts_b))
+                    abx, aby = bx - ax, by - ay
+                    denom = abx * abx + aby * aby
+                    if denom < 1e-6:
+                        continue
+                    t_seg = max(0.0, min(1.0, ((qx - ax) * abx + (qy - ay) * aby) / denom))
+                    proj_x = ax + t_seg * abx
+                    proj_y = ay + t_seg * aby
+                    rx_res = qx - proj_x
+                    ry_res = qy - proj_y
+                    if abs(rx_res) <= 7.5 and abs(ry_res) <= 7.5:
+                        fa = (1.0 - t_seg) * ft
+                        fb = t_seg * ft
+                        ua = fa / max(1e-9, float(len(pts_a)) * comp_cap_per_stud)
+                        ub = fb / max(1e-9, float(len(pts_b)) * comp_cap_per_stud)
+                        if max(ua, ub) <= 0.90:
+                            f_acc[lid_a] += fa
+                            wx_acc[lid_a] += fa * (ax + rx_res)
+                            wy_acc[lid_a] += fa * (ay + ry_res)
+                            f_acc[lid_b] += fb
+                            wx_acc[lid_b] += fb * (bx + rx_res)
+                            wy_acc[lid_b] += fb * (by + ry_res)
+                            max_comp_u = max(max_comp_u, ua, ub)
+                            routed_2 = True
+                            break
+                if routed_2:
+                    break
+            if not routed_2:
+                return False, float("inf")
+        return True, max_comp_u
+
+    ok_2p, u_2p = _try_top_down_two_pier_bearing()
+    if ok_2p:
+        return True, u_2p
 
     non_ground = sorted(
         (iid for iid, e in parts_dict.items() if not bool(e["is_grounded"])),
@@ -1166,12 +1517,488 @@ def _try_independent_plumb_prefix_witness(
             visited.add(best_low)
             cur_id = best_low
 
+        if is_table_only:
+            if not any(
+                b.zmin <= 0 and (b.xmin + 1.0) <= cx <= (b.xmax - 1.0) and (b.ymin + 1.0) <= cy <= (b.ymax - 1.0)
+                for b in world_boxes[cur_id]
+            ):
+                return False, float("inf")
+
     return True, peak_eta
+
+
+def _boxes_have_continuous_half_ray_corridor(
+    new_boxes: Sequence[LDUBox],
+    existing_boxes: Sequence[LDUBox],
+) -> bool:
+    """Exact continuous 1D swept-box clearance (`t in (0, +inf)`) along any of the 6 cardinal axes (`F10`)."""
+    if not new_boxes or not existing_boxes:
+        return True
+    if not any(
+        nb.xmin < eb.xmax and nb.xmax > eb.xmin and nb.ymin < eb.ymax and nb.ymax > eb.ymin and eb.zmax > nb.zmin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    if not any(
+        nb.xmin < eb.xmax and nb.xmax > eb.xmin and nb.ymin < eb.ymax and nb.ymax > eb.ymin and eb.zmin < nb.zmax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    if not any(
+        nb.ymin < eb.ymax and nb.ymax > eb.ymin and nb.zmin < eb.zmax and nb.zmax > eb.zmin and eb.xmax > nb.xmin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    if not any(
+        nb.ymin < eb.ymax and nb.ymax > eb.ymin and nb.zmin < eb.zmax and nb.zmax > eb.zmin and eb.xmin < nb.xmax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    if not any(
+        nb.xmin < eb.xmax and nb.xmax > eb.xmin and nb.zmin < eb.zmax and nb.zmax > eb.zmin and eb.ymax > nb.ymin
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    if not any(
+        nb.xmin < eb.xmax and nb.xmax > eb.xmin and nb.zmin < eb.zmax and nb.zmax > eb.zmin and eb.ymin < nb.ymax
+        for nb in new_boxes
+        for eb in existing_boxes
+    ):
+        return True
+    return False
+
+
+def _swept_obb_hits_half_ray(
+    obb_moving: OBB3D,
+    obb_static: OBB3D,
+    ray_dir: np.ndarray,
+    allowed_penetration_ldu: float = 0.25,
+) -> bool:
+    """Exact continuous Minkowski-ray SAT intersection for `obb_moving + t * ray_dir` (`t in (0, +inf)`)."""
+    ax_a = np.asarray(obb_moving.axes_rows, dtype=np.float64)
+    he_a = np.asarray(obb_moving.half_extents, dtype=np.float64)
+    ct_a = np.asarray(obb_moving.center, dtype=np.float64)
+    ax_b = np.asarray(obb_static.axes_rows, dtype=np.float64)
+    he_b = np.asarray(obb_static.half_extents, dtype=np.float64)
+    ct_b = np.asarray(obb_static.center, dtype=np.float64)
+    delta0 = ct_a - ct_b
+    d_v = np.asarray(ray_dir, dtype=np.float64)
+
+    cand_axes: List[np.ndarray] = [ax_a[0], ax_a[1], ax_a[2], ax_b[0], ax_b[1], ax_b[2]]
+    for i in range(3):
+        for j in range(3):
+            cr = np.cross(ax_a[i], ax_b[j])
+            nrm = float(np.linalg.norm(cr))
+            if nrm > 1e-8:
+                cand_axes.append(cr / nrm)
+        cr_da = np.cross(d_v, ax_a[i])
+        n_da = float(np.linalg.norm(cr_da))
+        if n_da > 1e-8:
+            cand_axes.append(cr_da / n_da)
+        cr_db = np.cross(d_v, ax_b[i])
+        n_db = float(np.linalg.norm(cr_db))
+        if n_db > 1e-8:
+            cand_axes.append(cr_db / n_db)
+
+    t_lo = 0.0
+    t_hi = float("inf")
+    eps = float(allowed_penetration_ldu)
+    for u in cand_axes:
+        r_sum = float(np.sum(np.abs(ax_a @ u) * he_a) + np.sum(np.abs(ax_b @ u) * he_b)) - eps
+        if r_sum <= 0.0:
+            return False
+        alpha = float(np.dot(d_v, u))
+        beta = float(np.dot(delta0, u))
+        if abs(alpha) <= 1e-12:
+            if abs(beta) >= r_sum:
+                return False
+        else:
+            t1 = (-beta - r_sum) / alpha
+            t2 = (-beta + r_sum) / alpha
+            lo_u = t1 if t1 < t2 else t2
+            hi_u = t2 if t1 < t2 else t1
+            if lo_u > t_lo:
+                t_lo = lo_u
+            if hi_u < t_hi:
+                t_hi = hi_u
+            if t_lo >= t_hi - 1e-7 or t_hi <= 1e-6:
+                return False
+    return t_lo < t_hi - 1e-7 and t_hi > 1e-6
+
+
+def _orthonormal_tangent_se3(normal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    n = normal / max(float(np.linalg.norm(normal)), 1e-12)
+    ref = np.array([1.0, 0.0, 0.0]) if abs(float(n[0])) < 0.85 else np.array([0.0, 1.0, 0.0])
+    t1 = np.cross(n, ref)
+    t1 /= max(float(np.linalg.norm(t1)), 1e-12)
+    t2 = np.cross(n, t1)
+    t2 /= max(float(np.linalg.norm(t2)), 1e-12)
+    return t1, t2
+
+
+def _independent_continuous_se3_equilibrium_lp(
+    parts_dict: Dict[int, Dict[str, Any]],
+    poses_map: Dict[int, ContinuousSE3Pose],
+    obbs_map: Dict[int, Tuple[OBB3D, ...]],
+    foundation_policy: str,
+    joint_assumptions: Dict[str, float],
+    gravity_unit: Tuple[float, float, float] = (0.0, 0.0, -1.0),
+    lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
+) -> Tuple[bool, float, float, float, List[Tuple[Tuple[int, int], Tuple[int, int]]]]:
+    """
+    Completely standalone `scipy.optimize.linprog` 6-DoF static equilibrium solver for continuous
+    $SE(3)$ assemblies (`F2`: zero imports of `static_equilibrium` or `ContinuousAssemblyState`).
+    Returns `(is_stable, eta, max_eq_residual_g, max_ub_violation, discovered_port_pairs)`.
+    """
+    if not parts_dict:
+        return True, 0.0, 0.0, 0.0, []
+
+    grounded_ids = [i for i, e in parts_dict.items() if bool(e.get("is_grounded", False))]
+    if not grounded_ids:
+        return False, float("inf"), float("inf"), float("inf"), []
+
+    # Discover geometric port mates independently from `poses_map`
+    iids_sorted = sorted(parts_dict.keys())
+    used_ports: Set[Tuple[int, int]] = set()
+    discovered_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
+    for idx_a in range(len(iids_sorted)):
+        ia = iids_sorted[idx_a]
+        pr_a = get_brick_primitive(str(parts_dict[ia]["part_id"]))
+        pose_a = poses_map[ia]
+        for pa in pr_a.ports:
+            gpa = (ia, pa.port_id)
+            if gpa in used_ports:
+                continue
+            wfa = pose_a.compose(ContinuousSE3Pose.from_ldu_frame(pa.local_frame))
+            za = wfa.R[:, 2]
+            best_d = 1.5
+            best_gpb: Optional[Tuple[int, int]] = None
+            for idx_b in range(idx_a + 1, len(iids_sorted)):
+                ib = iids_sorted[idx_b]
+                pr_b = get_brick_primitive(str(parts_dict[ib]["part_id"]))
+                pose_b = poses_map[ib]
+                for pb in pr_b.ports:
+                    gpb = (ib, pb.port_id)
+                    if gpb in used_ports:
+                        continue
+                    if not are_connectors_compatible(pa.connector_type, pa.polarity, pb.connector_type, pb.polarity):
+                        continue
+                    wfb = pose_b.compose(ContinuousSE3Pose.from_ldu_frame(pb.local_frame))
+                    dist = float(np.linalg.norm(wfa.t - wfb.t))
+                    if dist > best_d:
+                        continue
+                    is_ball = pa.connector_type in (ConnectorType.BALL_JOINT, ConnectorType.BALL_SOCKET)
+                    min_cos = 0.45 if is_ball else 0.96
+                    if float(np.dot(za, wfb.R[:, 2])) >= min_cos:
+                        best_d = dist
+                        best_gpb = gpb
+            if best_gpb is not None:
+                used_ports.add(gpa)
+                used_ports.add(best_gpb)
+                discovered_pairs.append((gpa, best_gpb))
+
+    adj: Dict[int, Set[int]] = {i: set() for i in parts_dict}
+    for (ia, _), (ib, _) in discovered_pairs:
+        adj[ia].add(ib)
+        adj[ib].add(ia)
+    vis = set(grounded_ids)
+    q = list(grounded_ids)
+    while q:
+        c = q.pop(0)
+        for nb in adj[c]:
+            if nb not in vis:
+                vis.add(nb)
+                q.append(nb)
+    if len(vis) < len(parts_dict):
+        return False, float("inf"), float("inf"), float("inf"), discovered_pairs
+
+    is_table = foundation_policy == "table_friction_only"
+    table_pts_map: Dict[int, List[np.ndarray]] = {}
+    if is_table:
+        signs = np.array(
+            [
+                [-1.0, -1.0, -1.0],
+                [-1.0, -1.0, 1.0],
+                [-1.0, 1.0, -1.0],
+                [-1.0, 1.0, 1.0],
+                [1.0, -1.0, -1.0],
+                [1.0, -1.0, 1.0],
+                [1.0, 1.0, -1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        for gid in grounded_ids:
+            all_z: List[float] = []
+            low_pts: List[np.ndarray] = []
+            for ob in obbs_map[gid]:
+                ax_m = np.asarray(ob.axes_rows, dtype=np.float64)
+                he_v = np.asarray(ob.half_extents, dtype=np.float64)
+                ct_v = np.asarray(ob.center, dtype=np.float64)
+                crn = ct_v + (signs * he_v) @ ax_m
+                for pt in crn:
+                    zv = float(pt[2])
+                    all_z.append(zv)
+                    if zv <= 0.25:
+                        low_pts.append(np.array([float(pt[0]), float(pt[1]), 0.0], dtype=np.float64))
+            min_zg = min(all_z) if all_z else float("inf")
+            if abs(min_zg) > 0.25 or not low_pts:
+                return False, float("inf"), float("inf"), float("inf"), discovered_pairs
+            uniq_xy: Dict[Tuple[int, int], np.ndarray] = {}
+            for pt in low_pts:
+                uniq_xy[(int(round(pt[0] * 100.0)), int(round(pt[1] * 100.0)))] = pt
+            table_pts_map[gid] = list(uniq_xy.values())
+
+    free_insts = sorted(parts_dict.keys()) if is_table else sorted(
+        i for i, e in parts_dict.items() if not bool(e.get("is_grounded", False))
+    )
+    if not free_insts:
+        return True, 0.0, 0.0, 0.0, discovered_pairs
+    free_idx_map = {iid: idx for idx, iid in enumerate(free_insts)}
+
+    contacts: List[Tuple[Tuple[int, int], Tuple[int, int], np.ndarray, np.ndarray, np.ndarray, np.ndarray, str]] = []
+    if is_table:
+        for gid, t_pts in table_pts_map.items():
+            for tk, pt_t in enumerate(t_pts):
+                contacts.append(
+                    (
+                        (-1, -100 - tk),
+                        (gid, -100 - tk),
+                        pt_t,
+                        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+                        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+                        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+                        "table_vertex",
+                    )
+                )
+
+    for gpa, gpb in discovered_pairs:
+        ia, pa = gpa
+        ib, pb = gpb
+        if (ia not in free_idx_map) and (ib not in free_idx_map):
+            continue
+        sa = get_brick_primitive(str(parts_dict[ia]["part_id"])).ports[pa]
+        sb = get_brick_primitive(str(parts_dict[ib]["part_id"])).ports[pb]
+        wfa = poses_map[ia].compose(ContinuousSE3Pose.from_ldu_frame(sa.local_frame))
+        p_c = wfa.t
+        if sa.polarity == PortPolarity.STUD:
+            n_c = wfa.R[:, 2]
+            ord_a, ord_b = gpa, gpb
+        else:
+            wfb = poses_map[ib].compose(ContinuousSE3Pose.from_ldu_frame(sb.local_frame))
+            n_c = wfb.R[:, 2]
+            ord_a, ord_b = gpb, gpa
+        t1, t2 = _orthonormal_tangent_se3(n_c)
+        names = {sa.connector_type.name, sb.connector_type.name}
+        if "BALL_JOINT" in names or "BALL_SOCKET" in names:
+            jmode = "ball_joint"
+        elif (
+            "SMOOTH_PIN" in names
+            or "HINGE_PIN" in names
+            or "HINGE_SOCKET" in names
+            or "TURNTABLE_BASE_SOCKET" in names
+            or "TURNTABLE_TOP_PIN" in names
+            or "WHEEL_PIN" in names
+            or "WHEEL_HUB_HOLE" in names
+        ):
+            jmode = "smooth_hinge"
+        elif "LOCKING_HINGE_PIN" in names or "LOCKING_HINGE_SOCKET" in names:
+            jmode = "locking_hinge"
+        elif "TECHNIC_AXLE" in names or "TECHNIC_AXLE_HOLE" in names:
+            jmode = "axle"
+        else:
+            jmode = "rigid_clutch"
+        contacts.append((ord_a, ord_b, p_c, n_c, t1, t2, jmode))
+
+    n_free = len(free_insts)
+    n_c = len(contacts)
+    if n_c == 0:
+        return False, float("inf"), float("inf"), float("inf"), discovered_pairs
+    num_vars = 12 * n_c + 1
+    eta_col = 12 * n_c
+
+    g_norm = math.sqrt(sum(float(c) * float(c) for c in gravity_unit))
+    gx_u, gy_u, gz_u = (
+        (float(gravity_unit[0]) / g_norm, float(gravity_unit[1]) / g_norm, float(gravity_unit[2]) / g_norm)
+        if g_norm > 1e-12
+        else (0.0, 0.0, -1.0)
+    )
+
+    eq_rows: List[int] = []
+    eq_cols: List[int] = []
+    eq_vals: List[float] = []
+    b_eq = np.zeros(6 * n_free, dtype=np.float64)
+    coms: Dict[int, np.ndarray] = {}
+    for iid in free_insts:
+        pr = get_brick_primitive(str(parts_dict[iid]["part_id"]))
+        b_idx = free_idx_map[iid]
+        m_g = float(pr.mass_grams)
+        b_eq[6 * b_idx + 0] = (-gx_u + float(lateral_accel_xy[0])) * m_g
+        b_eq[6 * b_idx + 1] = (-gy_u + float(lateral_accel_xy[1])) * m_g
+        b_eq[6 * b_idx + 2] = -gz_u * m_g
+        vol_s = 0.0
+        lc = np.zeros(3, dtype=np.float64)
+        for bx in pr.hull_boxes:
+            v = float(bx.volume_ldu3)
+            vol_s += v
+            lc += v * np.array([0.5 * (bx.xmin + bx.xmax), 0.5 * (bx.ymin + bx.ymax), 0.5 * (bx.zmin + bx.zmax)])
+        lc /= max(vol_s, 1.0)
+        coms[iid] = poses_map[iid].R @ lc + poses_map[iid].t
+
+    bounds_list: List[Tuple[float, Optional[float]]] = [(0.0, None)] * num_vars
+    ub_rows: List[int] = []
+    ub_cols: List[int] = []
+    ub_vals: List[float] = []
+    b_ub_list: List[float] = []
+
+    f_max = float(joint_assumptions.get("clutch_force_capacity_grams", 99.9))
+    crush_ratio = float(joint_assumptions.get("normal_crush_ratio", 25.0))
+    f_comp_max = f_max * crush_ratio
+    m_arm = float(joint_assumptions.get("moment_arm_capacity_ldu", 8.0))
+    m_max = f_max * m_arm
+    mu = float(joint_assumptions.get("coulomb_friction_coeff", 0.60))
+    detent_m = float(joint_assumptions.get("locking_hinge_detent_moment_ldu_g", 380.0))
+    ball_m = float(joint_assumptions.get("ball_joint_friction_moment_ldu_g", 220.0))
+
+    for e_idx, (ga, gb, pc, nc, t1, t2, jmode) in enumerate(contacts):
+        base = 12 * e_idx
+        dirs = (t1, t2, nc)
+        for end_id, sgn in ((ga[0], -1.0), (gb[0], +1.0)):
+            if end_id not in free_idx_map:
+                continue
+            b_row = 6 * free_idx_map[end_id]
+            r_arm = pc - coms[end_id]
+            for d_i, d_vec in enumerate(dirs):
+                col_p = base + 2 * d_i
+                col_m = col_p + 1
+                rx_d = np.cross(r_arm, d_vec)
+                for ax in range(3):
+                    if abs(float(d_vec[ax])) > 1e-12:
+                        eq_rows.extend((b_row + ax, b_row + ax))
+                        eq_cols.extend((col_p, col_m))
+                        eq_vals.extend((sgn * float(d_vec[ax]), -sgn * float(d_vec[ax])))
+                    if abs(float(rx_d[ax])) > 1e-12:
+                        eq_rows.extend((b_row + 3 + ax, b_row + 3 + ax))
+                        eq_cols.extend((col_p, col_m))
+                        eq_vals.extend((sgn * float(rx_d[ax]), -sgn * float(rx_d[ax])))
+                mcol_p = base + 6 + 2 * d_i
+                mcol_m = mcol_p + 1
+                for ax in range(3):
+                    if abs(float(d_vec[ax])) > 1e-12:
+                        eq_rows.extend((b_row + 3 + ax, b_row + 3 + ax))
+                        eq_cols.extend((mcol_p, mcol_m))
+                        eq_vals.extend((sgn * float(d_vec[ax]), -sgn * float(d_vec[ax])))
+
+        if jmode == "table_vertex":
+            bounds_list[base + 5] = (0.0, 0.0)
+            for k_z in range(6, 12):
+                bounds_list[base + k_z] = (0.0, 0.0)
+            r0 = len(b_ub_list)
+            ub_rows.extend((r0, r0))
+            ub_cols.extend((base + 4, eta_col))
+            ub_vals.extend((1.0, -f_comp_max))
+            b_ub_list.append(0.0)
+            r2 = len(b_ub_list)
+            ub_rows.extend([r2] * 5)
+            ub_cols.extend((base, base + 1, base + 2, base + 3, base + 4))
+            ub_vals.extend((1.0, 1.0, 1.0, 1.0, -mu))
+            b_ub_list.append(0.0)
+            continue
+
+        if jmode == "smooth_hinge":
+            bounds_list[base + 10] = (0.0, 0.0)
+            bounds_list[base + 11] = (0.0, 0.0)
+        elif jmode == "axle":
+            bounds_list[base + 5] = (0.0, 0.0)
+
+        r0 = len(b_ub_list)
+        ub_rows.extend((r0, r0))
+        ub_cols.extend((base + 4, eta_col))
+        ub_vals.extend((1.0, -f_comp_max))
+        b_ub_list.append(0.0)
+
+        r1 = len(b_ub_list)
+        ub_rows.extend((r1, r1))
+        ub_cols.extend((base + 5, eta_col))
+        ub_vals.extend((1.0, -f_max))
+        b_ub_list.append(0.0)
+
+        r2 = len(b_ub_list)
+        ub_rows.extend([r2] * 7)
+        ub_cols.extend((base, base + 1, base + 2, base + 3, base + 4, base + 5, eta_col))
+        ub_vals.extend((1.0, 1.0, 1.0, 1.0, -mu, +mu, -f_max))
+        b_ub_list.append(0.0)
+
+        if jmode == "ball_joint":
+            r3 = len(b_ub_list)
+            ub_rows.extend([r3] * 7)
+            ub_cols.extend((base + 6, base + 7, base + 8, base + 9, base + 10, base + 11, eta_col))
+            ub_vals.extend((1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -ball_m))
+            b_ub_list.append(0.0)
+        elif jmode == "locking_hinge":
+            r3 = len(b_ub_list)
+            ub_rows.extend([r3] * 5)
+            ub_cols.extend((base + 6, base + 7, base + 8, base + 9, eta_col))
+            ub_vals.extend((1.0, 1.0, 1.0, 1.0, -m_max))
+            b_ub_list.append(0.0)
+            r4 = len(b_ub_list)
+            ub_rows.extend((r4, r4, r4))
+            ub_cols.extend((base + 10, base + 11, eta_col))
+            ub_vals.extend((1.0, 1.0, -detent_m))
+            b_ub_list.append(0.0)
+        else:
+            m_cap = 2.5 * m_max if jmode == "axle" else m_max
+            r3 = len(b_ub_list)
+            ub_rows.extend([r3] * 7)
+            ub_cols.extend((base + 6, base + 7, base + 8, base + 9, base + 10, base + 11, eta_col))
+            ub_vals.extend((1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -m_cap))
+            b_ub_list.append(0.0)
+
+    a_eq_csc = csc_matrix((eq_vals, (eq_rows, eq_cols)), shape=(6 * n_free, num_vars))
+    a_ub_csc = csc_matrix((ub_vals, (ub_rows, ub_cols)), shape=(len(b_ub_list), num_vars))
+    b_ub = np.asarray(b_ub_list, dtype=np.float64)
+    c_obj = np.zeros(num_vars, dtype=np.float64)
+    c_obj[eta_col] = 1.0
+    c_obj[:eta_col] = 1e-7
+
+    res = linprog(c_obj, A_ub=a_ub_csc, b_ub=b_ub, A_eq=a_eq_csc, b_eq=b_eq, bounds=bounds_list, method="highs")
+    if not res.success or res.x is None:
+        return False, float("inf"), float("inf"), float("inf"), discovered_pairs
+    sol = np.asarray(res.x, dtype=np.float64)
+    eta = float(sol[eta_col])
+    eq_res_g = float(np.max(np.abs(a_eq_csc @ sol - b_eq))) if b_eq.size > 0 else 0.0
+    ub_viol = float(max(0.0, float(np.max(a_ub_csc @ sol - b_ub)))) if b_ub.size > 0 else 0.0
+    return (eta <= 1.0 + 1e-6 and eq_res_g <= 1e-4 and ub_viol <= 1e-4), eta, eq_res_g, ub_viol, discovered_pairs
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationObligations:
+    """
+    Caller-specified verification obligations (`Phase 12 F1 & F7` contract):
+    decouples verification requirements from untrusted `artifact.claimed_certificates`.
+    """
+
+    require_static_mechanics: bool = True
+    require_prefix_mechanics: bool = True
+    require_monotone_insertion: bool = True
+    require_inventory: bool = True
+    require_perturbation_if_articulated: bool = False
+    require_loop_closure_if_cyclic: bool = False
+    expected_target_field: Optional[Any] = None
+    expected_target_sha256: Optional[str] = None
+    expected_forbidden_boxes: Tuple[LDUBox, ...] = ()
+    expected_license_filter: Optional[str] = None
+    min_target_iou: Optional[float] = None
 
 
 @dataclass(frozen=True, slots=True)
 class IndependentVerificationReport:
-    """Result returned by `verify_certificate_independently(artifact)` (`R9-WS1` §3.1)."""
+    """Result returned by `verify_certificate_independently(artifact)` (`R9-WS1` §3.1 + `Phase 12`)."""
 
     verified: bool
     schema_version_ok: bool
@@ -1187,55 +2014,265 @@ class IndependentVerificationReport:
     max_ub_violation: float
     replayed_peak_utilization: float
     failure_reasons: Tuple[str, ...]
+    verification_scope: str = "assembly_only"
+    target_verified: Optional[bool] = None
 
 
 def verify_certificate_independently(
     artifact: VersionedCertificateArtifact,
+    obligations: Optional[VerificationObligations] = None,
 ) -> IndependentVerificationReport:
     """
     Independently replay and verify a `VersionedCertificateArtifact` with ZERO `TopoBrickKernel`
-    imports: checks schema version, catalog SHA-256, inventory bounds, `2 LDU` (`0.8 mm`) CSG
-    plastic-solid collision freedom, port compatibility, 6-axis monotone insertion corridors,
-    and step-by-step independent `linprog` 6-DoF static equilibrium + primal residuals.
+    or `static_equilibrium` imports (`F1, F2, F7, F10`):
+      - Enforces caller `VerificationObligations` unconditionally (never bypassing checks when
+        `artifact.claimed_certificates` says `"FAIL"` or `"UNKNOWN"`).
+      - Replays `PLACE_PART` strictly from operation payloads and verifies exact terminal state
+        equality (`sim_parts == parts_by_id`, `temp_tags == {}`), rejecting empty traces, unknown
+        opcodes, duplicate placements, intermediate collisions, and malformed port indices.
+      - Uses exact continuous half-ray (`t in (0, +inf)`) swept-box/OBB corridor checks and
+        standalone `scipy.optimize.linprog` mechanics in both `cubic_ldu` and `continuous_se3`.
     """
+    obl = obligations if obligations is not None else VerificationObligations()
     reasons: List[str] = []
-    schema_ok = artifact.schema_version == CERTIFICATE_SCHEMA_VERSION
+    ver_scope = (
+        "assembly_and_target"
+        if (obl.expected_target_field is not None or obl.expected_target_sha256 is not None)
+        else "assembly_only"
+    )
+    target_ver: Optional[bool] = True if ver_scope == "assembly_and_target" else None
+
+    schema_ok = artifact.schema_version in SUPPORTED_CERTIFICATE_SCHEMAS
     if not schema_ok:
         reasons.append(f"unsupported_schema:{artifact.schema_version}")
 
-    cat_ok = artifact.catalog_sha256 == compute_catalog_sha256()
-    if not cat_ok:
-        reasons.append("catalog_sha256_mismatch")
+    try:
+        expected_sha = compute_catalog_sha256(
+            schema_version=(
+                artifact.schema_version
+                if artifact.schema_version in SUPPORTED_CERTIFICATE_SCHEMAS
+                else CERTIFICATE_SCHEMA_VERSION
+            )
+        )
+        cat_ok = artifact.catalog_sha256 == expected_sha
+        if not cat_ok:
+            reasons.append("catalog_sha256_mismatch")
+    except ValueError as exc_cat:
+        cat_ok = False
+        reasons.append(f"catalog_archive_tampered:{exc_cat}")
+
+    mode_ok = artifact.assembly_mode in _VALID_ASSEMBLY_MODES
+    if not mode_ok:
+        reasons.append(f"unsupported_assembly_mode:{artifact.assembly_mode}")
+    fp_ok = artifact.foundation_policy in _VALID_FOUNDATION_POLICIES
+    if not fp_ok:
+        reasons.append(f"unsupported_foundation_policy:{artifact.foundation_policy}")
+
+    # Validate placed_parts upfront without uncaught exceptions
+    parts_by_id: Dict[int, Dict[str, Any]] = {}
+    placed_valid = True
+    for raw_e in artifact.placed_parts:
+        try:
+            iid_e = int(raw_e["instance_id"])
+            pid_e = str(raw_e["part_id"])
+            pos_raw = raw_e["pos"]
+            if len(pos_raw) != 3:
+                raise ValueError("pos_len")
+            if iid_e in parts_by_id:
+                placed_valid = False
+                reasons.append(f"duplicate_placed_instance_id:{iid_e}")
+                continue
+            if not is_known_part_id(pid_e):
+                placed_valid = False
+                reasons.append(f"unknown_part_id:{pid_e}")
+                continue
+            if artifact.assembly_mode == "cubic_ldu":
+                rid_e = int(raw_e["rot_id"])
+                if not (0 <= rid_e < 24):
+                    raise ValueError("bad_rot_id")
+                _ = (int(pos_raw[0]), int(pos_raw[1]), int(pos_raw[2]))
+            elif artifact.assembly_mode == "continuous_se3":
+                rmat = np.asarray(raw_e["rot_matrix"], dtype=np.float64)
+                pvec = np.asarray(pos_raw, dtype=np.float64)
+                if rmat.shape != (3, 3) or pvec.shape != (3,) or not np.all(np.isfinite(rmat)) or not np.all(np.isfinite(pvec)):
+                    raise ValueError("bad_se3_pose")
+                orth_err = float(np.max(np.abs(rmat.T @ rmat - np.eye(3))))
+                det_r = float(np.linalg.det(rmat))
+                if orth_err > 1e-3 or abs(det_r - 1.0) > 1e-3:
+                    raise ValueError("non_so3_rot_matrix")
+            parts_by_id[iid_e] = raw_e
+        except (KeyError, TypeError, ValueError) as exc_p:
+            placed_valid = False
+            reasons.append(f"malformed_placed_part:{exc_p}")
+
+    # Check claimed_certificates against active VerificationObligations (`F1`)
+    claims = artifact.claimed_certificates
+    has_parts = len(artifact.placed_parts) > 0
+    if claims.get("geometry") != "PASS":
+        reasons.append(f"claimed_certificate_not_pass:geometry={claims.get('geometry')}")
+    if obl.require_static_mechanics and claims.get("static_mechanics") != "PASS":
+        reasons.append(f"claimed_certificate_not_pass:static_mechanics={claims.get('static_mechanics')}")
+    if obl.require_prefix_mechanics:
+        allowed_pref = ("PASS",) if has_parts else ("PASS", "NOT_APPLICABLE")
+        if claims.get("prefix_mechanics") not in allowed_pref:
+            reasons.append(f"claimed_certificate_not_pass:prefix_mechanics={claims.get('prefix_mechanics')}")
+    if obl.require_monotone_insertion:
+        allowed_ins = ("PASS",) if has_parts else ("PASS", "NOT_APPLICABLE")
+        if claims.get("insertion") not in allowed_ins:
+            reasons.append(f"claimed_certificate_not_pass:insertion={claims.get('insertion')}")
+    if obl.require_inventory and (artifact.inventory_spec is not None or artifact.colored_inventory_spec is not None):
+        if "inventory" in claims and claims.get("inventory") not in ("PASS",):
+            reasons.append(f"claimed_certificate_not_pass:inventory={claims.get('inventory')}")
 
     inv_ok = True
-    if artifact.inventory_spec is not None:
+    if obl.require_inventory and artifact.inventory_spec is not None and placed_valid:
         counts: Dict[str, int] = {}
         for entry in artifact.placed_parts:
             pid = str(entry["part_id"])
-            counts[pid] = counts.get(pid, 0) + 1
+            p_key = pid if pid in EXTENDED_BRICK_CATALOG else pid.lower()
+            counts[p_key] = counts.get(p_key, 0) + 1
         for pid, used in counts.items():
-            if used > int(artifact.inventory_spec.get(pid, 0)):
+            cap_m = int(artifact.inventory_spec.get(pid, artifact.inventory_spec.get(pid.lower(), 0)))
+            if used > cap_m:
                 inv_ok = False
                 reasons.append(f"inventory_exceeded:{pid}")
                 break
+
+    if inv_ok and obl.require_inventory and artifact.colored_inventory_spec is not None and placed_valid:
+        col_counts: Dict[str, int] = {}
+        for entry in artifact.placed_parts:
+            pid = str(entry["part_id"])
+            p_key = pid if pid in EXTENDED_BRICK_CATALOG else pid.lower()
+            cid = int(entry.get("color_id", 15))
+            ckey = f"{p_key}:{cid}"
+            col_counts[ckey] = col_counts.get(ckey, 0) + 1
+        for ckey, used_c in col_counts.items():
+            cap_c = int(artifact.colored_inventory_spec.get(ckey, 0))
+            if used_c > cap_c:
+                inv_ok = False
+                reasons.append(f"colored_inventory_exceeded:{ckey}")
+                break
+
+    # License filter check (`F7`)
+    eff_lic = obl.expected_license_filter if obl.expected_license_filter is not None else artifact.license_filter
+    if eff_lic not in ("all", "cc_by_4_0_only"):
+        inv_ok = False
+        reasons.append(f"unsupported_license_filter:{eff_lic}")
+    elif eff_lic == "cc_by_4_0_only" and placed_valid:
+        from topo_brick.interface.ldraw_shadow_catalog_compiler import COMPILED_LDRAW_CATALOG
+
+        COMPILED_LDRAW_CATALOG._ensure_loaded()
+        for entry in artifact.placed_parts:
+            pid_l = str(entry["part_id"])
+            if pid_l in EXTENDED_BRICK_CATALOG or pid_l.lower() in EXTENDED_BRICK_CATALOG:
+                continue
+            r_id = COMPILED_LDRAW_CATALOG.resolve_id(pid_l)
+            rec_l = COMPILED_LDRAW_CATALOG._raw_parts.get(r_id or pid_l.lower(), {})
+            if str(rec_l.get("t", "")).startswith("TIER_B"):
+                inv_ok = False
+                reasons.append(f"license_filter_violated:{pid_l}")
+                break
+
+    if not mode_ok or not fp_ok or not placed_valid:
+        return IndependentVerificationReport(
+            verified=False,
+            schema_version_ok=schema_ok,
+            catalog_sha256_valid=cat_ok,
+            inventory_valid=inv_ok,
+            csg_2ldu_collision_free=False,
+            ports_compatible=False,
+            monotone_insertion_valid=False,
+            static_mechanics_valid=False,
+            prefix_mechanics_valid=False,
+            witness_residuals_valid=False,
+            max_eq_residual_g=float("inf"),
+            max_ub_violation=float("inf"),
+            replayed_peak_utilization=float("inf"),
+            failure_reasons=tuple(reasons),
+            verification_scope=ver_scope,
+            target_verified=False if ver_scope == "assembly_and_target" else None,
+        )
 
     csg_ok, csg_pairs = check_fine_csg_voxel_collision_2ldu(artifact.placed_parts)
     if not csg_ok:
         reasons.append(f"csg_2ldu_collision:{csg_pairs}")
 
-    parts_by_id = {int(e["instance_id"]): e for e in artifact.placed_parts}
+    # Forbidden boxes & target binding check (`F7`)
+    forb_boxes: List[LDUBox] = [
+        LDUBox(int(fb[0]), int(fb[1]), int(fb[2]), int(fb[3]), int(fb[4]), int(fb[5]))
+        for fb in artifact.forbidden_support_boxes
+    ] + list(obl.expected_forbidden_boxes)
+    if forb_boxes and artifact.assembly_mode == "cubic_ldu":
+        for e_fb in artifact.placed_parts:
+            pr_fb = get_brick_primitive(str(e_fb["part_id"]))
+            fr_fb = LDUFrame(int(e_fb["rot_id"]), tuple(int(c) for c in e_fb["pos"]))
+            if any(b.transform(fr_fb).intersects(fbox) for b in pr_fb.hull_boxes for fbox in forb_boxes):
+                csg_ok = False
+                reasons.append(f"forbidden_support_box_violated:{e_fb['instance_id']}")
+                break
+    elif forb_boxes and artifact.assembly_mode == "continuous_se3":
+        for e_fb in artifact.placed_parts:
+            pr_fb = get_brick_primitive(str(e_fb["part_id"]))
+            ps_fb = ContinuousSE3Pose.from_matrix_and_pos(
+                np.asarray(e_fb["rot_matrix"], dtype=np.float64),
+                tuple(float(x) for x in e_fb["pos"]),
+            )
+            if any(
+                obb_intersects_sat(box_to_obb(b, ps_fb), box_to_obb(fbox, ContinuousSE3Pose.identity()), allowed_penetration_ldu=0.05)
+                for b in pr_fb.hull_boxes
+                for fbox in forb_boxes
+            ):
+                csg_ok = False
+                reasons.append(f"forbidden_support_box_violated:{e_fb['instance_id']}")
+                break
+
+    if ver_scope == "assembly_and_target":
+        exp_t_sha = (
+            obl.expected_target_sha256
+            if obl.expected_target_sha256 is not None
+            else compute_target_sha256(obl.expected_target_field)
+        )
+        if artifact.target_sha256 != exp_t_sha:
+            target_ver = False
+            reasons.append("target_sha256_mismatch")
+        elif (
+            obl.expected_target_field is not None
+            and obl.min_target_iou is not None
+            and artifact.assembly_mode == "cubic_ldu"
+        ):
+            all_wb = [
+                b.transform(LDUFrame(int(e_t["rot_id"]), tuple(int(c) for c in e_t["pos"])))
+                for e_t in artifact.placed_parts
+                for b in get_brick_primitive(str(e_t["part_id"])).hull_boxes
+            ]
+            inter_v = float(obl.expected_target_field.intersection_volume(all_wb))
+            t_v = float(getattr(obl.expected_target_field, "total_volume_ldu3", 0))
+            asm_v = float(sum(b.volume_ldu3 for b in all_wb))
+            union_v = max(t_v + asm_v - inter_v, 1.0)
+            actual_iou = inter_v / union_v if (t_v > 0 or asm_v > 0) else 1.0
+            if actual_iou < float(obl.min_target_iou) - 1e-6:
+                target_ver = False
+                reasons.append(f"target_iou_below_minimum:{actual_iou:.4f}<{obl.min_target_iou:.4f}")
+
+    # Port index & connector compatibility check (`F1`: zero uncaught IndexError)
     ports_ok = True
     for (ia, pa_id), (ib, pb_id) in artifact.matched_port_pairs:
-        if ia not in parts_by_id or ib not in parts_by_id:
+        if ia not in parts_by_id or ib not in parts_by_id or ia == ib:
             ports_ok = False
+            reasons.append("invalid_matched_port_instance")
             break
-        sa = get_brick_primitive(str(parts_by_id[ia]["part_id"])).ports[pa_id]
-        sb = get_brick_primitive(str(parts_by_id[ib]["part_id"])).ports[pb_id]
+        pr_a_m = get_brick_primitive(str(parts_by_id[ia]["part_id"]))
+        pr_b_m = get_brick_primitive(str(parts_by_id[ib]["part_id"]))
+        if not (0 <= int(pa_id) < len(pr_a_m.ports)) or not (0 <= int(pb_id) < len(pr_b_m.ports)):
+            ports_ok = False
+            reasons.append(f"invalid_port_index:({ia},{pa_id})<->({ib},{pb_id})")
+            break
+        sa = pr_a_m.ports[int(pa_id)]
+        sb = pr_b_m.ports[int(pb_id)]
         if not are_connectors_compatible(sa.connector_type, sa.polarity, sb.connector_type, sb.polarity):
             ports_ok = False
+            reasons.append("incompatible_matched_ports")
             break
-    if not ports_ok:
-        reasons.append("incompatible_matched_ports")
 
     # Witness summary residual check
     eq_tol = float(artifact.tolerances.get("eq_residual_tol_g", 1e-5))
@@ -1246,6 +2283,7 @@ def verify_certificate_independently(
     if not witness_res_ok:
         reasons.append(f"witness_residual_exceeded:eq={w_eq:.2e},ub={w_ub:.2e}")
 
+    need_trace = has_parts and (obl.require_prefix_mechanics or obl.require_monotone_insertion)
     ins_ok = True
     prefix_ok = True
     static_ok = True
@@ -1253,8 +2291,14 @@ def verify_certificate_independently(
     max_ub_v = w_ub
     final_eta = 0.0
 
+    if need_trace and len(artifact.execution_operations) == 0:
+        if obl.require_monotone_insertion:
+            ins_ok = False
+        if obl.require_prefix_mechanics:
+            prefix_ok = False
+        reasons.append("missing_execution_trace")
+
     if artifact.assembly_mode == "cubic_ldu":
-        # Replay execution trace step-by-step for insertion corridors & prefix equilibrium
         sim_parts: Dict[int, Dict[str, Any]] = {}
         sim_boxes: Dict[int, Tuple[LDUBox, ...]] = {}
         temp_tags: Dict[str, int] = {}
@@ -1269,145 +2313,769 @@ def verify_certificate_independently(
 
         def _has_corridor(new_boxes: Sequence[LDUBox]) -> bool:
             existing_boxes = [b for bxs_e in sim_boxes.values() for b in bxs_e]
-            for dx, dy, dz in ((0, 0, 1), (0, 0, -1), (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0)):
-                clear_d = True
-                for dist in (8, 16, 24, 36, 48):
-                    for nb in new_boxes:
-                        sb = LDUBox(
-                            nb.xmin + dx * dist,
-                            nb.ymin + dy * dist,
-                            nb.zmin + dz * dist,
-                            nb.xmax + dx * dist,
-                            nb.ymax + dy * dist,
-                            nb.zmax + dz * dist,
-                        )
-                        if any(sb.intersects(eb) for eb in existing_boxes):
-                            clear_d = False
-                            break
-                    if not clear_d:
+            return _boxes_have_continuous_half_ray_corridor(new_boxes, existing_boxes)
+
+        def _collides_with_sim(new_boxes: Sequence[LDUBox]) -> bool:
+            return any(
+                nb.intersects(eb)
+                for bxs_e in sim_boxes.values()
+                for eb in bxs_e
+                for nb in new_boxes
+            )
+
+        m_arm_v = float(artifact.joint_assumptions.get("moment_arm_capacity_ldu", 8.0))
+        is_table_fp = artifact.foundation_policy == "table_friction_only"
+        inc_port_grid: Dict[Tuple[int, int, int], List[Tuple[int, PortPolarity]]] = {}
+        inc_lower_nbrs: Dict[int, Dict[int, List[Tuple[float, float, float]]]] = {}
+        bearing_prefix_fails = 0
+
+        def _register_inc_part(p_iid: int, p_entry: Dict[str, Any], p_bxs: Tuple[LDUBox, ...]) -> None:
+            pr_i = get_brick_primitive(str(p_entry["part_id"]))
+            fr_i = LDUFrame(int(p_entry["rot_id"]), tuple(int(c) for c in p_entry["pos"]))
+            zmin_i = min(b.zmin for b in p_bxs)
+            zmax_i = max(b.zmax for b in p_bxs)
+            for p_s in pr_i.ports:
+                if p_s.connector_type not in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD):
+                    continue
+                wf_i = fr_i.compose(p_s.local_frame)
+                if abs(wf_i.z_axis[2]) != 1:
+                    continue
+                existing_at_pos = inc_port_grid.setdefault(wf_i.pos, [])
+                pt_f = (float(wf_i.pos[0]), float(wf_i.pos[1]), float(wf_i.pos[2]))
+                for o_iid, o_pol in existing_at_pos:
+                    if o_iid == p_iid or o_pol == p_s.polarity or o_iid not in sim_boxes:
+                        continue
+                    o_bxs = sim_boxes[o_iid]
+                    zmin_o = min(b.zmin for b in o_bxs)
+                    zmax_o = max(b.zmax for b in o_bxs)
+                    if zmax_o <= zmin_i:
+                        inc_lower_nbrs.setdefault(p_iid, {}).setdefault(o_iid, []).append(pt_f)
+                    elif zmax_i <= zmin_o:
+                        inc_lower_nbrs.setdefault(o_iid, {}).setdefault(p_iid, []).append(pt_f)
+                existing_at_pos.append((p_iid, p_s.polarity))
+
+        def _unregister_inc_part(p_iid: int) -> None:
+            inc_lower_nbrs.pop(p_iid, None)
+            for d_low in inc_lower_nbrs.values():
+                d_low.pop(p_iid, None)
+            for wpos_k in list(inc_port_grid.keys()):
+                filt = [it for it in inc_port_grid[wpos_k] if it[0] != p_iid]
+                if filt:
+                    inc_port_grid[wpos_k] = filt
+                else:
+                    inc_port_grid.pop(wpos_k, None)
+
+        def _ground_ray_ok(g_iid: int, qx: float, qy: float) -> bool:
+            gbxs = sim_boxes[g_iid]
+            if is_table_fp:
+                return any(
+                    abs(float(b.zmin)) <= 0.25
+                    and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5)
+                    and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
+                    for b in gbxs
+                )
+            gx0 = float(min(b.xmin for b in gbxs))
+            gx1 = float(max(b.xmax for b in gbxs))
+            gy0 = float(min(b.ymin for b in gbxs))
+            gy1 = float(max(b.ymax for b in gbxs))
+            return (gx0 + 0.25) <= qx <= (gx1 - 0.25) and (gy0 + 0.25) <= qy <= (gy1 - 0.25)
+
+        def _patch_kernel_ok(u_iid: int, l_iid: int, pts: List[Tuple[float, float, float]], qx: float, qy: float) -> bool:
+            rx_p = sum(p[0] for p in pts) / float(len(pts))
+            ry_p = sum(p[1] for p in pts) / float(len(pts))
+            ubxs = sim_boxes[u_iid]
+            lbxs = sim_boxes[l_iid]
+            ox0 = float(max(min(b.xmin for b in ubxs), min(b.xmin for b in lbxs)))
+            ox1 = float(min(max(b.xmax for b in ubxs), max(b.xmax for b in lbxs)))
+            oy0 = float(max(min(b.ymin for b in ubxs), min(b.ymin for b in lbxs)))
+            oy1 = float(min(max(b.ymax for b in ubxs), max(b.ymax for b in lbxs)))
+            hb_x = max(min(rx_p - ox0, ox1 - rx_p) if ox0 < rx_p < ox1 else 0.0, m_arm_v)
+            hb_y = max(min(ry_p - oy0, oy1 - ry_p) if oy0 < ry_p < oy1 else 0.0, m_arm_v)
+            return abs(qx - rx_p) <= (hb_x - 0.25) and abs(qy - ry_p) <= (hb_y - 0.25)
+
+        def _greedy_single_interior_ray(cur_u: int, qx: float, qy: float, vis_init: Set[int]) -> bool:
+            vis_s = set(vis_init)
+            while not bool(sim_parts[cur_u].get("is_grounded", False)):
+                low_map_s = inc_lower_nbrs.get(cur_u)
+                if not low_map_s:
+                    return False
+                cands_s = [(lid, pts) for lid, pts in low_map_s.items() if lid not in vis_s and lid in sim_parts]
+                if not cands_s:
+                    return False
+                cands_s.sort(
+                    key=lambda item: (
+                        (qx - sum(p[0] for p in item[1]) / float(len(item[1]))) ** 2
+                        + (qy - sum(p[1] for p in item[1]) / float(len(item[1]))) ** 2,
+                        item[0],
+                    )
+                )
+                picked = None
+                for lid_s, pts_s in cands_s:
+                    if not _patch_kernel_ok(cur_u, lid_s, pts_s, qx, qy):
+                        continue
+                    if bool(sim_parts[lid_s].get("is_grounded", False)):
+                        if _ground_ray_ok(lid_s, qx, qy):
+                            return True
+                        continue
+                    picked = lid_s
+                    break
+                if picked is None:
+                    return False
+                vis_s.add(picked)
+                cur_u = picked
+            return _ground_ray_ok(cur_u, qx, qy)
+
+        def _can_extend_prefix_interior_ray(
+            cur_u: int, qx: float, qy: float, splits_left: int = 2, vis_set: Optional[Set[int]] = None
+        ) -> bool:
+            vis = set(vis_set) if vis_set is not None else {cur_u}
+            if _greedy_single_interior_ray(cur_u, qx, qy, vis):
+                return True
+            if splits_left <= 0:
+                return False
+            while not bool(sim_parts[cur_u].get("is_grounded", False)):
+                low_map = inc_lower_nbrs.get(cur_u)
+                if not low_map:
+                    return False
+                cands = [(lid, pts) for lid, pts in low_map.items() if lid not in vis and lid in sim_parts]
+                if not cands:
+                    return False
+                cands.sort(
+                    key=lambda item: (
+                        (qx - sum(p[0] for p in item[1]) / float(len(item[1]))) ** 2
+                        + (qy - sum(p[1] for p in item[1]) / float(len(item[1]))) ** 2,
+                        item[0],
+                    )
+                )
+                if len(cands) >= 2:
+                    n_c = len(cands)
+                    for ia in range(n_c):
+                        la, pa_pts = cands[ia]
+                        ax = sum(p[0] for p in pa_pts) / float(len(pa_pts))
+                        ay = sum(p[1] for p in pa_pts) / float(len(pa_pts))
+                        for ib in range(ia + 1, n_c):
+                            lb, pb_pts = cands[ib]
+                            bx = sum(p[0] for p in pb_pts) / float(len(pb_pts))
+                            by = sum(p[1] for p in pb_pts) / float(len(pb_pts))
+                            abx, aby = bx - ax, by - ay
+                            denom = abx * abx + aby * aby
+                            if denom < 1e-6:
+                                continue
+                            t_s = max(0.05, min(0.95, ((qx - ax) * abx + (qy - ay) * aby) / denom))
+                            rx_r = qx - (ax + t_s * abx)
+                            ry_r = qy - (ay + t_s * aby)
+                            if abs(rx_r) > 7.5 or abs(ry_r) > 7.5:
+                                continue
+                            qax, qay = ax + rx_r, ay + ry_r
+                            qbx, qby = bx + rx_r, by + ry_r
+                            if not _patch_kernel_ok(cur_u, la, pa_pts, qax, qay):
+                                continue
+                            if not _patch_kernel_ok(cur_u, lb, pb_pts, qbx, qby):
+                                continue
+                            ok_a = (
+                                _ground_ray_ok(la, qax, qay)
+                                if bool(sim_parts[la].get("is_grounded", False))
+                                else _can_extend_prefix_interior_ray(la, qax, qay, splits_left - 1, vis | {la})
+                            )
+                            if not ok_a:
+                                continue
+                            ok_b = (
+                                _ground_ray_ok(lb, qbx, qby)
+                                if bool(sim_parts[lb].get("is_grounded", False))
+                                else _can_extend_prefix_interior_ray(lb, qbx, qby, splits_left - 1, vis | {lb})
+                            )
+                            if ok_b:
+                                return True
+                nxt_single = None
+                for lid, pts in cands:
+                    if not _patch_kernel_ok(cur_u, lid, pts, qx, qy):
+                        continue
+                    if not bool(sim_parts[lid].get("is_grounded", False)):
+                        nxt_single = lid
                         break
-                if clear_d:
-                    return True
+                if nxt_single is None:
+                    return False
+                vis.add(nxt_single)
+                cur_u = nxt_single
             return False
 
-        for op in artifact.execution_operations:
-            op_t = str(op["op_type"])
-            added_only_grounded = False
-            if op_t == "PLACE_PART":
-                iids = op.get("instance_ids", [])
-                iid = int(iids[0]) if iids else len(sim_parts)
-                pe = parts_by_id.get(
-                    iid,
-                    {
-                        "instance_id": iid,
-                        "part_id": str(op["part_id"]),
+        if (obl.require_prefix_mechanics or obl.require_monotone_insertion) and len(artifact.execution_operations) > 0:
+            for op in artifact.execution_operations:
+                op_t = str(op.get("op_type", ""))
+                added_only_grounded = False
+                just_placed_iid: Optional[int] = None
+                if op_t == "PLACE_PART":
+                    iids = op.get("instance_ids", [])
+                    if len(iids) != 1:
+                        prefix_ok = False
+                        reasons.append("malformed_trace_op:PLACE_PART_instance_ids")
+                        break
+                    iid = int(iids[0])
+                    if iid in sim_parts:
+                        prefix_ok = False
+                        reasons.append(f"duplicate_trace_instance:{iid}")
+                        break
+                    raw_pid_op = str(op.get("part_id", "")).strip()
+                    if raw_pid_op:
+                        if not is_known_part_id(raw_pid_op):
+                            prefix_ok = False
+                            reasons.append(f"unknown_trace_part_id:{raw_pid_op}")
+                            break
+                        try:
+                            rid_op = int(op.get("rot_id", 0))
+                            pos_op = [int(c) for c in op["pos"]]
+                            if not (0 <= rid_op < 24) or len(pos_op) != 3:
+                                raise ValueError("bad_cubic_op_pose")
+                        except (KeyError, TypeError, ValueError):
+                            prefix_ok = False
+                            reasons.append("malformed_trace_op:PLACE_PART_pose")
+                            break
+                        pe = {
+                            "instance_id": iid,
+                            "part_id": raw_pid_op,
+                            "rot_id": rid_op,
+                            "pos": pos_op,
+                            "is_grounded": bool(op.get("is_grounded", False)),
+                            "color_id": int(
+                                op.get(
+                                    "color_id",
+                                    parts_by_id[iid].get("color_id", 15) if iid in parts_by_id else 15,
+                                )
+                            ),
+                        }
+                    elif iid in parts_by_id:
+                        pe = dict(parts_by_id[iid])
+                    else:
+                        prefix_ok = False
+                        reasons.append(f"missing_trace_part_spec:{iid}")
+                        break
+                    bxs_pe = _boxes_of(pe)
+                    if _collides_with_sim(bxs_pe):
+                        csg_ok = False
+                        prefix_ok = False
+                        reasons.append(f"trace_step_collision:{iid}")
+                        break
+                    if obl.require_monotone_insertion and not _has_corridor(bxs_pe):
+                        ins_ok = False
+                    sim_parts[iid] = pe
+                    sim_boxes[iid] = bxs_pe
+                    _register_inc_part(iid, pe, bxs_pe)
+                    added_only_grounded = bool(pe.get("is_grounded", False))
+                    just_placed_iid = iid
+                elif op_t == "PLACE_SUBASSEMBLY":
+                    exp_sub_iids = [int(x) for x in op.get("instance_ids", [])]
+                    if not exp_sub_iids or any(sid in sim_parts or sid not in parts_by_id for sid in exp_sub_iids):
+                        prefix_ok = False
+                        reasons.append("malformed_subassembly_instance_ids")
+                        break
+                    sub_ops = op.get("subtrace") or []
+                    if sub_ops:
+                        loc_sim_parts: Dict[int, Dict[str, Any]] = {}
+                        loc_sim_boxes: Dict[int, Tuple[LDUBox, ...]] = {}
+                        loc_prev_stable = True
+                        for idx_sub, s_op in enumerate(sub_ops):
+                            if str(s_op.get("op_type", "")) != "PLACE_PART":
+                                prefix_ok = False
+                                reasons.append(f"unknown_subtrace_op_type:{s_op.get('op_type')}")
+                                break
+                            s_iids = s_op.get("instance_ids", [])
+                            s_iid = int(s_iids[0]) if s_iids else (idx_sub + 1)
+                            if s_iid in loc_sim_parts:
+                                prefix_ok = False
+                                reasons.append(f"duplicate_subtrace_instance:{s_iid}")
+                                break
+                            s_pid = str(s_op.get("part_id", "")).strip()
+                            if not is_known_part_id(s_pid):
+                                prefix_ok = False
+                                reasons.append(f"unknown_subtrace_part_id:{s_pid}")
+                                break
+                            s_pe = {
+                                "instance_id": s_iid,
+                                "part_id": s_pid,
+                                "rot_id": int(s_op.get("rot_id", 0)),
+                                "pos": [int(c) for c in s_op["pos"]],
+                                "is_grounded": bool(s_op.get("is_grounded", False)),
+                            }
+                            s_bxs = _boxes_of(s_pe)
+                            loc_existing = [b for lb in loc_sim_boxes.values() for b in lb]
+                            if any(nb.intersects(eb) for eb in loc_existing for nb in s_bxs):
+                                csg_ok = False
+                                prefix_ok = False
+                                reasons.append(f"subtrace_step_collision:{s_iid}")
+                                break
+                            if obl.require_monotone_insertion and not _boxes_have_continuous_half_ray_corridor(
+                                s_bxs, loc_existing
+                            ):
+                                ins_ok = False
+                            loc_sim_parts[s_iid] = s_pe
+                            loc_sim_boxes[s_iid] = s_bxs
+                            if obl.require_prefix_mechanics:
+                                if bool(s_pe["is_grounded"]) and loc_prev_stable:
+                                    continue
+                                if len(loc_sim_parts) >= 20:
+                                    p_ok_l, _ = _try_independent_plumb_prefix_witness(
+                                        loc_sim_parts,
+                                        loc_sim_boxes,
+                                        "clutched_baseplate",
+                                        artifact.joint_assumptions,
+                                        (0.0, 0.0, -1.0),
+                                    )
+                                    if p_ok_l:
+                                        loc_prev_stable = True
+                                        continue
+                                sub_st_ok, _, sub_eq_r, sub_ub_v = _independent_cubic_equilibrium_lp(
+                                    loc_sim_parts,
+                                    "clutched_baseplate",
+                                    artifact.joint_assumptions,
+                                )
+                                max_eq_r = max(max_eq_r, sub_eq_r)
+                                max_ub_v = max(max_ub_v, sub_ub_v)
+                                if not sub_st_ok:
+                                    prefix_ok = False
+                                    loc_prev_stable = False
+                                    break
+                                loc_prev_stable = True
+                        if not prefix_ok:
+                            reasons.append(f"subtrace_prefix_unstable:{op.get('part_id', '')}")
+                            break
+                        if loc_sim_parts:
+                            sub_csg_ok, sub_csg_pairs = check_fine_csg_voxel_collision_2ldu(tuple(loc_sim_parts.values()))
+                            if not sub_csg_ok:
+                                csg_ok = False
+                                reasons.append(f"subtrace_csg_2ldu_collision:{sub_csg_pairs}")
+                        if len(loc_sim_parts) != len(exp_sub_iids):
+                            prefix_ok = False
+                            reasons.append("subtrace_instance_count_mismatch")
+                            break
+                        inferred_off: Optional[Tuple[int, int, int]] = None
+                        for check_sid in exp_sub_iids:
+                            if check_sid not in loc_sim_parts or check_sid not in parts_by_id:
+                                prefix_ok = False
+                                reasons.append(f"subtrace_missing_instance:{check_sid}")
+                                break
+                            lp_e = loc_sim_parts[check_sid]
+                            wp_e = parts_by_id[check_sid]
+                            if str(lp_e["part_id"]) != str(wp_e["part_id"]) or int(lp_e["rot_id"]) != int(wp_e["rot_id"]):
+                                prefix_ok = False
+                                reasons.append(f"subtrace_pose_or_mold_mismatch:{check_sid}")
+                                break
+                            cur_off = (
+                                int(wp_e["pos"][0]) - int(lp_e["pos"][0]),
+                                int(wp_e["pos"][1]) - int(lp_e["pos"][1]),
+                                int(wp_e["pos"][2]) - int(lp_e["pos"][2]),
+                            )
+                            if inferred_off is None:
+                                inferred_off = cur_off
+                            elif cur_off != inferred_off:
+                                prefix_ok = False
+                                reasons.append(f"subtrace_non_rigid_offset:{check_sid}")
+                                break
+                        if not prefix_ok:
+                            break
+
+                    grp_boxes: List[LDUBox] = []
+                    for iid_g in exp_sub_iids:
+                        grp_boxes.extend(_boxes_of(parts_by_id[iid_g]))
+                    if _collides_with_sim(grp_boxes):
+                        csg_ok = False
+                        prefix_ok = False
+                        reasons.append("trace_subassembly_collision")
+                        break
+                    if obl.require_monotone_insertion and not _has_corridor(grp_boxes):
+                        ins_ok = False
+                    for iid_g in exp_sub_iids:
+                        pe_g = dict(parts_by_id[iid_g])
+                        bxs_g = _boxes_of(pe_g)
+                        sim_parts[iid_g] = pe_g
+                        sim_boxes[iid_g] = bxs_g
+                        _register_inc_part(iid_g, pe_g, bxs_g)
+                elif op_t == "ADD_TEMP_SUPPORT":
+                    tag_t = str(op.get("temp_support_tag", "")).strip()
+                    pid_t = str(op.get("part_id", "")).strip()
+                    if not tag_t or tag_t in temp_tags or not is_known_part_id(pid_t):
+                        prefix_ok = False
+                        reasons.append(f"malformed_temp_support:{tag_t}")
+                        break
+                    tid = next_tmp_id
+                    next_tmp_id += 1
+                    temp_tags[tag_t] = tid
+                    pe_t = {
+                        "instance_id": tid,
+                        "part_id": pid_t,
                         "rot_id": int(op.get("rot_id", 0)),
-                        "pos": list(op["pos"]),
+                        "pos": [int(c) for c in op["pos"]],
                         "is_grounded": bool(op.get("is_grounded", False)),
-                    },
-                )
-                bxs_pe = _boxes_of(pe)
-                if artifact.claimed_certificates.get("insertion") == "PASS":
-                    if not _has_corridor(bxs_pe):
-                        ins_ok = False
-                sim_parts[iid] = pe
-                sim_boxes[iid] = bxs_pe
-                added_only_grounded = bool(pe.get("is_grounded", False))
-            elif op_t == "PLACE_SUBASSEMBLY":
-                grp_boxes: List[LDUBox] = []
-                for iid_g in op.get("instance_ids", []):
-                    if int(iid_g) in parts_by_id:
-                        grp_boxes.extend(_boxes_of(parts_by_id[int(iid_g)]))
-                if artifact.claimed_certificates.get("insertion") == "PASS":
-                    if not _has_corridor(grp_boxes):
-                        ins_ok = False
-                for iid_g in op.get("instance_ids", []):
-                    if int(iid_g) in parts_by_id:
-                        pe_g = parts_by_id[int(iid_g)]
-                        sim_parts[int(iid_g)] = pe_g
-                        sim_boxes[int(iid_g)] = _boxes_of(pe_g)
-            elif op_t == "ADD_TEMP_SUPPORT":
-                tid = next_tmp_id
-                next_tmp_id += 1
-                temp_tags[str(op.get("temp_support_tag", ""))] = tid
-                pe_t = {
-                    "instance_id": tid,
-                    "part_id": str(op["part_id"]),
-                    "rot_id": int(op.get("rot_id", 0)),
-                    "pos": list(op["pos"]),
-                    "is_grounded": bool(op.get("is_grounded", False)),
-                }
-                sim_parts[tid] = pe_t
-                sim_boxes[tid] = _boxes_of(pe_t)
-            elif op_t == "REMOVE_TEMP_SUPPORT":
-                tid_rem = temp_tags.pop(str(op.get("temp_support_tag", "")), None)
-                if tid_rem is not None:
+                    }
+                    bxs_t = _boxes_of(pe_t)
+                    if _collides_with_sim(bxs_t):
+                        csg_ok = False
+                        prefix_ok = False
+                        reasons.append(f"temp_support_collision:{tag_t}")
+                        break
+                    sim_parts[tid] = pe_t
+                    sim_boxes[tid] = bxs_t
+                    _register_inc_part(tid, pe_t, bxs_t)
+                elif op_t == "REMOVE_TEMP_SUPPORT":
+                    tag_rem = str(op.get("temp_support_tag", "")).strip()
+                    if tag_rem not in temp_tags:
+                        prefix_ok = False
+                        reasons.append(f"unknown_temp_support_tag:{tag_rem}")
+                        break
+                    tid_rem = temp_tags.pop(tag_rem)
+                    _unregister_inc_part(tid_rem)
                     sim_parts.pop(tid_rem, None)
                     sim_boxes.pop(tid_rem, None)
-            elif op_t == "REORIENT_ASSEMBLY":
-                gu = op.get("gravity_unit", [0.0, 0.0, -1.0])
-                cur_grav = (float(gu[0]), float(gu[1]), float(gu[2]))
+                elif op_t == "REORIENT_ASSEMBLY":
+                    gu = op.get("gravity_unit", [0.0, 0.0, -1.0])
+                    if len(gu) != 3 or math.sqrt(sum(float(x) * float(x) for x in gu)) < 1e-6:
+                        prefix_ok = False
+                        reasons.append("invalid_reorient_gravity")
+                        break
+                    cur_grav = (float(gu[0]), float(gu[1]), float(gu[2]))
+                else:
+                    prefix_ok = False
+                    reasons.append(f"unknown_op_type:{op_t}")
+                    break
 
-            if artifact.claimed_certificates.get("prefix_mechanics") == "PASS" and sim_parts:
-                if (
-                    added_only_grounded
-                    and prev_prefix_stable
-                    and artifact.foundation_policy != "table_friction_only"
-                    and cur_grav == (0.0, 0.0, -1.0)
+                if obl.require_prefix_mechanics and sim_parts:
+                    if prev_prefix_stable and cur_grav == (0.0, 0.0, -1.0):
+                        if added_only_grounded and just_placed_iid is not None:
+                            bxs_j = sim_boxes[just_placed_iid]
+                            tv_j = sum(float(b.volume_ldu3) for b in bxs_j)
+                            j_cx = sum(0.5 * (b.xmin + b.xmax) * float(b.volume_ldu3) for b in bxs_j) / max(tv_j, 1.0)
+                            j_cy = sum(0.5 * (b.ymin + b.ymax) * float(b.volume_ldu3) for b in bxs_j) / max(tv_j, 1.0)
+                            if not is_table_fp or _ground_ray_ok(just_placed_iid, j_cx, j_cy):
+                                continue
+                        elif just_placed_iid is not None and len(sim_parts) >= 12:
+                            bxs_j = sim_boxes[just_placed_iid]
+                            tv_j = sum(float(b.volume_ldu3) for b in bxs_j)
+                            j_cx = sum(0.5 * (b.xmin + b.xmax) * float(b.volume_ldu3) for b in bxs_j) / max(tv_j, 1.0)
+                            j_cy = sum(0.5 * (b.ymin + b.ymax) * float(b.volume_ldu3) for b in bxs_j) / max(tv_j, 1.0)
+                            if _can_extend_prefix_interior_ray(just_placed_iid, j_cx, j_cy, 3):
+                                continue
+                    if len(sim_parts) >= 24 and bearing_prefix_fails < 8:
+                        plumb_ok, _ = _try_independent_plumb_prefix_witness(
+                            sim_parts,
+                            sim_boxes,
+                            artifact.foundation_policy,
+                            artifact.joint_assumptions,
+                            cur_grav,
+                        )
+                        if plumb_ok:
+                            bearing_prefix_fails = 0
+                            prev_prefix_stable = True
+                            continue
+                        bearing_prefix_fails += 1
+                    st_step, _, eq_r_s, ub_v_s = _independent_cubic_equilibrium_lp(
+                        sim_parts, artifact.foundation_policy, artifact.joint_assumptions, gravity_unit=cur_grav
+                    )
+                    max_eq_r = max(max_eq_r, eq_r_s)
+                    max_ub_v = max(max_ub_v, ub_v_s)
+                    if not st_step:
+                        prefix_ok = False
+                        prev_prefix_stable = False
+                        break
+                    prev_prefix_stable = True
+
+            # Verify terminal trace state matches `placed_parts` identically (`F1`)
+            if prefix_ok and ins_ok:
+                if temp_tags:
+                    prefix_ok = False
+                    reasons.append(f"unremoved_temp_support:{sorted(temp_tags.keys())}")
+                elif set(sim_parts.keys()) != set(parts_by_id.keys()):
+                    prefix_ok = False
+                    reasons.append("trace_terminal_instance_mismatch")
+                else:
+                    for iid_chk, w_e in parts_by_id.items():
+                        s_e = sim_parts[iid_chk]
+                        if (
+                            str(s_e["part_id"]) != str(w_e["part_id"])
+                            or int(s_e["rot_id"]) != int(w_e["rot_id"])
+                            or [int(c) for c in s_e["pos"]] != [int(c) for c in w_e["pos"]]
+                            or bool(s_e.get("is_grounded", False)) != bool(w_e.get("is_grounded", False))
+                            or int(s_e.get("color_id", 15)) != int(w_e.get("color_id", 15))
+                        ):
+                            prefix_ok = False
+                            reasons.append(f"trace_terminal_state_mismatch:{iid_chk}")
+                            break
+
+        if obl.require_static_mechanics:
+            static_ok, final_eta, eq_r_f, ub_v_f = _independent_cubic_equilibrium_lp(
+                parts_by_id, artifact.foundation_policy, artifact.joint_assumptions
+            )
+            max_eq_r = max(max_eq_r, eq_r_f)
+            max_ub_v = max(max_ub_v, ub_v_f)
+    else:
+        # Standalone Continuous SE(3) verification (`F2`: 0 imports of ContinuousAssemblyState or static_equilibrium!)
+        poses_all: Dict[int, ContinuousSE3Pose] = {}
+        obbs_all: Dict[int, Tuple[OBB3D, ...]] = {}
+        for iid_c, entry_c in parts_by_id.items():
+            pose_c = ContinuousSE3Pose.from_matrix_and_pos(
+                np.asarray(entry_c["rot_matrix"], dtype=np.float64),
+                tuple(float(x) for x in entry_c["pos"]),
+            )
+            pr_c = get_brick_primitive(str(entry_c["part_id"]))
+            poses_all[iid_c] = pose_c
+            obbs_all[iid_c] = tuple(box_to_obb(b, pose_c) for b in pr_c.hull_boxes)
+
+        # Standalone 15-axis OBB-SAT + socket-pocket protrusion check across `parts_by_id`
+        c_iids = sorted(parts_by_id.keys())
+        matched_lookup: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        for ga_m, gb_m in artifact.matched_port_pairs:
+            matched_lookup[ga_m] = gb_m
+            matched_lookup[gb_m] = ga_m
+        for idx_a in range(len(c_iids)):
+            ia_c = c_iids[idx_a]
+            for idx_b in range(idx_a + 1, len(c_iids)):
+                ib_c = c_iids[idx_b]
+                if any(
+                    obb_intersects_sat(oa, ob, allowed_penetration_ldu=0.25)
+                    for oa in obbs_all[ia_c]
+                    for ob in obbs_all[ib_c]
                 ):
-                    continue
-                if len(sim_parts) >= 24:
-                    plumb_ok, _ = _try_independent_plumb_prefix_witness(
-                        sim_parts,
-                        sim_boxes,
+                    csg_ok = False
+                    reasons.append(f"se3_obb_hull_collision:({ia_c},{ib_c})")
+                    break
+            if not csg_ok:
+                break
+
+        if csg_ok:
+            for ia_c in c_iids:
+                pr_ca = get_brick_primitive(str(parts_by_id[ia_c]["part_id"]))
+                for ps_c in pr_ca.ports:
+                    if ps_c.local_protrusion_box is None:
+                        continue
+                    wfa_p = poses_all[ia_c].compose(ContinuousSE3Pose.from_ldu_frame(ps_c.local_frame))
+                    prot_o = box_to_obb(ps_c.local_protrusion_box, wfa_p)
+                    part_m = matched_lookup.get((ia_c, ps_c.port_id))
+                    p_iid = part_m[0] if part_m is not None else -1
+                    p_wf: Optional[ContinuousSE3Pose] = None
+                    p_ct: Optional[ConnectorType] = None
+                    if part_m is not None and p_iid in parts_by_id:
+                        ps_b_m = get_brick_primitive(str(parts_by_id[p_iid]["part_id"])).ports[part_m[1]]
+                        p_wf = poses_all[p_iid].compose(ContinuousSE3Pose.from_ldu_frame(ps_b_m.local_frame))
+                        p_ct = ps_b_m.connector_type
+                    for ib_c in c_iids:
+                        if ib_c == ia_c:
+                            continue
+                        for ob_b in obbs_all[ib_c]:
+                            if (
+                                ib_c == p_iid
+                                and p_wf is not None
+                                and p_ct is not None
+                                and is_obb_protrusion_contained_in_socket_pocket(prot_o, ob_b, p_wf, p_ct)
+                            ):
+                                continue
+                            if obb_intersects_sat(prot_o, ob_b, allowed_penetration_ldu=0.25):
+                                csg_ok = False
+                                reasons.append(f"se3_protrusion_collision:({ia_c},{ib_c})")
+                                break
+                        if not csg_ok:
+                            break
+                    if not csg_ok:
+                        break
+                if not csg_ok:
+                    break
+
+        # Replay continuous trace step-by-step
+        if (obl.require_prefix_mechanics or obl.require_monotone_insertion) and len(artifact.execution_operations) > 0:
+            sim_c_parts: Dict[int, Dict[str, Any]] = {}
+            sim_c_poses: Dict[int, ContinuousSE3Pose] = {}
+            sim_c_obbs: Dict[int, Tuple[OBB3D, ...]] = {}
+            cur_grav_c = (0.0, 0.0, -1.0)
+            dirs_6_c = (
+                np.array([0.0, 0.0, 1.0]),
+                np.array([0.0, 0.0, -1.0]),
+                np.array([1.0, 0.0, 0.0]),
+                np.array([-1.0, 0.0, 0.0]),
+                np.array([0.0, 1.0, 0.0]),
+                np.array([0.0, -1.0, 0.0]),
+            )
+            for op_c in artifact.execution_operations:
+                op_tc = str(op_c.get("op_type", ""))
+                if op_tc == "PLACE_PART":
+                    iids_c = op_c.get("instance_ids", [])
+                    if len(iids_c) != 1:
+                        prefix_ok = False
+                        reasons.append("malformed_trace_op:SE3_PLACE_PART")
+                        break
+                    iid_s = int(iids_c[0])
+                    if iid_s in sim_c_parts:
+                        prefix_ok = False
+                        reasons.append(f"duplicate_trace_instance:{iid_s}")
+                        break
+                    raw_pid_c = str(op_c.get("part_id", "")).strip()
+                    if raw_pid_c:
+                        if not is_known_part_id(raw_pid_c):
+                            prefix_ok = False
+                            reasons.append(f"unknown_trace_part_id:{raw_pid_c}")
+                            break
+                        rmat_op = op_c.get("rot_matrix")
+                        if rmat_op is None and iid_s in parts_by_id:
+                            rmat_op = parts_by_id[iid_s]["rot_matrix"]
+                        if rmat_op is None:
+                            rmat_op = rot_id_to_matrix(int(op_c.get("rot_id", 0))).tolist()
+                        pose_s = ContinuousSE3Pose.from_matrix_and_pos(
+                            np.asarray(rmat_op, dtype=np.float64),
+                            tuple(float(x) for x in op_c["pos"]),
+                        )
+                        pe_s = {
+                            "instance_id": iid_s,
+                            "part_id": raw_pid_c,
+                            "rot_matrix": [[float(v) for v in row] for row in pose_s.rot_matrix],
+                            "pos": [float(v) for v in pose_s.pos],
+                            "is_grounded": bool(op_c.get("is_grounded", False)),
+                            "color_id": int(
+                                op_c.get(
+                                    "color_id",
+                                    parts_by_id[iid_s].get("color_id", 15) if iid_s in parts_by_id else 15,
+                                )
+                            ),
+                        }
+                    elif iid_s in parts_by_id:
+                        pe_s = dict(parts_by_id[iid_s])
+                        pose_s = poses_all[iid_s]
+                    else:
+                        prefix_ok = False
+                        reasons.append(f"missing_trace_part_spec:{iid_s}")
+                        break
+                    pr_s = get_brick_primitive(str(pe_s["part_id"]))
+                    obbs_s = tuple(box_to_obb(b, pose_s) for b in pr_s.hull_boxes)
+                    ex_obbs_c = [eo for o_tup in sim_c_obbs.values() for eo in o_tup]
+                    if any(obb_intersects_sat(so, eo, allowed_penetration_ldu=0.25) for eo in ex_obbs_c for so in obbs_s):
+                        csg_ok = False
+                        prefix_ok = False
+                        reasons.append(f"trace_step_collision:{iid_s}")
+                        break
+                    if obl.require_monotone_insertion and ex_obbs_c:
+                        corr_c = any(
+                            not any(_swept_obb_hits_half_ray(so, eo, dv, 0.25) for eo in ex_obbs_c for so in obbs_s)
+                            for dv in dirs_6_c
+                        )
+                        if not corr_c:
+                            ins_ok = False
+                    sim_c_parts[iid_s] = pe_s
+                    sim_c_poses[iid_s] = pose_s
+                    sim_c_obbs[iid_s] = obbs_s
+                elif op_tc == "PLACE_SUBASSEMBLY":
+                    sub_iids_c = [int(x) for x in op_c.get("instance_ids", [])]
+                    if not sub_iids_c or any(sid in sim_c_parts or sid not in parts_by_id for sid in sub_iids_c):
+                        prefix_ok = False
+                        reasons.append("malformed_subassembly_instance_ids")
+                        break
+                    ex_obbs_c = [eo for o_tup in sim_c_obbs.values() for eo in o_tup]
+                    grp_obbs_c = [so for sid in sub_iids_c for so in obbs_all[sid]]
+                    if any(obb_intersects_sat(so, eo, allowed_penetration_ldu=0.25) for eo in ex_obbs_c for so in grp_obbs_c):
+                        csg_ok = False
+                        prefix_ok = False
+                        reasons.append("trace_subassembly_collision")
+                        break
+                    if obl.require_monotone_insertion and ex_obbs_c:
+                        corr_g = any(
+                            not any(_swept_obb_hits_half_ray(so, eo, dv, 0.25) for eo in ex_obbs_c for so in grp_obbs_c)
+                            for dv in dirs_6_c
+                        )
+                        if not corr_g:
+                            ins_ok = False
+                    for sid in sub_iids_c:
+                        sim_c_parts[sid] = dict(parts_by_id[sid])
+                        sim_c_poses[sid] = poses_all[sid]
+                        sim_c_obbs[sid] = obbs_all[sid]
+                elif op_tc == "REORIENT_ASSEMBLY":
+                    gu_c = op_c.get("gravity_unit", [0.0, 0.0, -1.0])
+                    if len(gu_c) != 3 or math.sqrt(sum(float(x) * float(x) for x in gu_c)) < 1e-6:
+                        prefix_ok = False
+                        reasons.append("invalid_reorient_gravity")
+                        break
+                    cur_grav_c = (float(gu_c[0]), float(gu_c[1]), float(gu_c[2]))
+                else:
+                    prefix_ok = False
+                    reasons.append(f"unknown_op_type:{op_tc}")
+                    break
+
+                if obl.require_prefix_mechanics and sim_c_parts:
+                    st_c_step, _, eq_rc, ub_vc, _ = _independent_continuous_se3_equilibrium_lp(
+                        sim_c_parts,
+                        sim_c_poses,
+                        sim_c_obbs,
                         artifact.foundation_policy,
                         artifact.joint_assumptions,
-                        cur_grav,
+                        gravity_unit=cur_grav_c,
                     )
-                    if plumb_ok:
-                        prev_prefix_stable = True
-                        continue
-                st_step, _, eq_r_s, ub_v_s = _independent_cubic_equilibrium_lp(
-                    sim_parts, artifact.foundation_policy, artifact.joint_assumptions, gravity_unit=cur_grav
-                )
-                max_eq_r = max(max_eq_r, eq_r_s)
-                max_ub_v = max(max_ub_v, ub_v_s)
-                if not st_step:
-                    prefix_ok = False
-                    prev_prefix_stable = False
-                    break
-                prev_prefix_stable = True
+                    max_eq_r = max(max_eq_r, eq_rc)
+                    max_ub_v = max(max_ub_v, ub_vc)
+                    if not st_c_step:
+                        prefix_ok = False
+                        break
 
-        static_ok, final_eta, eq_r_f, ub_v_f = _independent_cubic_equilibrium_lp(
-            parts_by_id, artifact.foundation_policy, artifact.joint_assumptions
-        )
-        max_eq_r = max(max_eq_r, eq_r_f)
-        max_ub_v = max(max_ub_v, ub_v_f)
-    else:
-        # Continuous SE(3) replay using ContinuousAssemblyState mechanics LP
-        cs = ContinuousAssemblyState()
-        for entry in artifact.placed_parts:
-            iid_c = int(entry["instance_id"])
-            cs._next_id = iid_c
-            pose_c = ContinuousSE3Pose.from_matrix_and_pos(
-                np.asarray(entry["rot_matrix"], dtype=np.float64),
-                tuple(float(x) for x in entry["pos"]),
+            if prefix_ok and ins_ok:
+                if set(sim_c_parts.keys()) != set(parts_by_id.keys()):
+                    prefix_ok = False
+                    reasons.append("trace_terminal_instance_mismatch")
+                else:
+                    for iid_chk, w_e in parts_by_id.items():
+                        s_e = sim_c_parts[iid_chk]
+                        if (
+                            str(s_e["part_id"]) != str(w_e["part_id"])
+                            or bool(s_e.get("is_grounded", False)) != bool(w_e.get("is_grounded", False))
+                            or int(s_e.get("color_id", 15)) != int(w_e.get("color_id", 15))
+                            or not np.allclose(
+                                np.asarray(s_e["rot_matrix"], dtype=np.float64),
+                                np.asarray(w_e["rot_matrix"], dtype=np.float64),
+                                atol=1e-4,
+                            )
+                            or not np.allclose(
+                                np.asarray(s_e["pos"], dtype=np.float64),
+                                np.asarray(w_e["pos"], dtype=np.float64),
+                                atol=1e-4,
+                            )
+                        ):
+                            prefix_ok = False
+                            reasons.append(f"trace_terminal_state_mismatch:{iid_chk}")
+                            break
+
+        if obl.require_static_mechanics:
+            static_ok, final_eta, eq_rf, ub_vf, disc_pairs = _independent_continuous_se3_equilibrium_lp(
+                parts_by_id,
+                poses_all,
+                obbs_all,
+                artifact.foundation_policy,
+                artifact.joint_assumptions,
             )
-            try:
-                cs.place_part(str(entry["part_id"]), pose_c, is_grounded=bool(entry["is_grounded"]))
-            except ValueError:
-                csg_ok = False
-                break
-        eq_c = cs.evaluate_static_equilibrium(
-            clutch_force_capacity_grams=float(
-                artifact.joint_assumptions.get("clutch_force_capacity_grams", 99.9)
-            ),
-            moment_arm_capacity_ldu=float(
-                artifact.joint_assumptions.get("moment_arm_capacity_ldu", 8.0)
-            ),
-        )
-        static_ok = bool(eq_c.is_stable)
-        final_eta = float(eq_c.peak_utilization)
+            max_eq_r = max(max_eq_r, eq_rf)
+            max_ub_v = max(max_ub_v, ub_vf)
+
+            # Verify lateral perturbation & loop-closure claims when present or required (`F2`)
+            if static_ok and (
+                claims.get("perturbation_mechanics") == "PASS" or obl.require_perturbation_if_articulated
+            ):
+                for lx, ly in ((0.05, 0.0), (-0.05, 0.0), (0.0, 0.05), (0.0, -0.05)):
+                    lat_ok, _, _, _, _ = _independent_continuous_se3_equilibrium_lp(
+                        parts_by_id,
+                        poses_all,
+                        obbs_all,
+                        artifact.foundation_policy,
+                        artifact.joint_assumptions,
+                        lateral_accel_xy=(lx, ly),
+                    )
+                    if not lat_ok:
+                        static_ok = False
+                        reasons.append("se3_lateral_perturbation_failed")
+                        break
+
+            if static_ok and (claims.get("loop_closure") == "PASS" or obl.require_loop_closure_if_cyclic):
+                for (ia_l, pa_l), (ib_l, pb_l) in artifact.matched_port_pairs:
+                    sa_l = get_brick_primitive(str(parts_by_id[ia_l]["part_id"])).ports[pa_l]
+                    sb_l = get_brick_primitive(str(parts_by_id[ib_l]["part_id"])).ports[pb_l]
+                    wfa_l = poses_all[ia_l].compose(ContinuousSE3Pose.from_ldu_frame(sa_l.local_frame))
+                    wfb_l = poses_all[ib_l].compose(ContinuousSE3Pose.from_ldu_frame(sb_l.local_frame))
+                    lo_a, hi_a = get_connector_axial_slide_bounds_ldu(sa_l.connector_type)
+                    lo_b, hi_b = get_connector_axial_slide_bounds_ldu(sb_l.connector_type)
+                    max_pos_tol = max(1.5, min(hi_a, hi_b) + 1.0)
+                    if float(np.linalg.norm(wfa_l.t - wfb_l.t)) > max_pos_tol:
+                        ports_ok = False
+                        reasons.append("loop_closure_position_residual_exceeded")
+                        break
 
     if not ins_ok:
         reasons.append("monotone_insertion_corridor_blocked")
@@ -1416,6 +3084,8 @@ def verify_certificate_independently(
     if not static_ok:
         reasons.append("static_equilibrium_replay_failed")
 
+    claims_ok = not any(r.startswith("claimed_certificate_not_pass:") for r in reasons)
+    target_ok = (target_ver is not False)
     overall_ok = (
         schema_ok
         and cat_ok
@@ -1426,6 +3096,8 @@ def verify_certificate_independently(
         and ins_ok
         and prefix_ok
         and static_ok
+        and claims_ok
+        and target_ok
     )
     return IndependentVerificationReport(
         verified=overall_ok,
@@ -1442,7 +3114,42 @@ def verify_certificate_independently(
         max_ub_violation=max_ub_v,
         replayed_peak_utilization=final_eta,
         failure_reasons=tuple(reasons),
+        verification_scope=ver_scope,
+        target_verified=target_ver,
     )
+
+
+def verify_certificate_json_file(
+    path: str | Path,
+    obligations: Optional[VerificationObligations] = None,
+) -> IndependentVerificationReport:
+    """Safely parse and verify a certificate JSON file, returning structured failure on malformed JSON."""
+    try:
+        raw_text = Path(path).read_text(encoding="utf-8")
+        raw_obj = json.loads(raw_text)
+        if not isinstance(raw_obj, dict):
+            raise ValueError(f"Expected top-level JSON object, got {type(raw_obj).__name__}")
+        artifact = VersionedCertificateArtifact.from_json_dict(raw_obj)
+    except Exception as exc:
+        return IndependentVerificationReport(
+            verified=False,
+            schema_version_ok=False,
+            catalog_sha256_valid=False,
+            inventory_valid=False,
+            csg_2ldu_collision_free=False,
+            ports_compatible=False,
+            monotone_insertion_valid=False,
+            static_mechanics_valid=False,
+            prefix_mechanics_valid=False,
+            witness_residuals_valid=False,
+            max_eq_residual_g=float("inf"),
+            max_ub_violation=float("inf"),
+            replayed_peak_utilization=float("inf"),
+            failure_reasons=(f"invalid_artifact_json:{type(exc).__name__}:{exc}",),
+            verification_scope="invalid_artifact_json",
+            target_verified=False,
+        )
+    return verify_certificate_independently(artifact, obligations=obligations)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1498,8 +3205,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not args.artifact_json:
         parser.error("Provide an artifact JSON path or pass --self-test.")
-    artifact = VersionedCertificateArtifact.load_json(args.artifact_json)
-    rep = verify_certificate_independently(artifact)
+    rep = verify_certificate_json_file(args.artifact_json)
     print(json.dumps(asdict(rep), indent=2))
     return 0 if rep.verified else 1
 

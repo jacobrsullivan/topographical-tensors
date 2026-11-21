@@ -7,13 +7,14 @@ Core Capabilities:
   monotone/rigid-group insertion corridors, and versioned independent certificate verification
   (`verify_certificate_independently`).
 - Compiled Open-Catalog Universe (`16,085` LDraw `2610` + LDCad Shadow + `213` curated Tier-A parts):
-  bore-carved compound `LDUBox` colliders, `3,273` `CoACD` convex polytope decompositions, `6`
-  connector families (`STUD_TUBE`, `TECHNIC_PIN_HOLE`, `TECHNIC_AXLE_HOLE`, `BAR_CLIP`, `BALL_SOCKET`,
-  `HINGE_DETENT`), and runtime `CC-BY-4.0` commercial-safe filtering (`commercial_safe_cc_by_only`).
+  bore-carved compound `LDUBox` colliders (`0` dropped solid voxels), `6,831` `CoACD` convex polytope
+  decompositions (`320` unique shells), `6` connector families (`STUD_TUBE`, `TECHNIC_PIN_HOLE`,
+  `TECHNIC_AXLE_HOLE`, `BAR_CLIP`, `BALL_SOCKET`, `HINGE_DETENT`), and runtime `CC-BY-4.0`
+  commercial-safe filtering (`commercial_safe_cc_by_only`).
 - Sculptural Open-Catalog Surface Skinning & Megastructure Scaling: 29-D volumetric/surface-normal
-  mold retrieval (`849` mold signatures), `8 LDU` plate/slope/wedge/curved-slope/arch skinning,
-  perceptual CIELAB `CIEDE2000` palette quantization, studless tile finishing, and sub-second
-  `HierarchicalMacroBlockPlanner` scaling across `250-1,000+` piece assemblies.
+  mold retrieval (`426` active buildable molds / `1,499` pose signatures), `8 LDU` plate/slope/wedge/
+  curved-slope/arch skinning, perceptual CIELAB `CIEDE2000` palette quantization, studless tile
+  finishing, and sub-second `HierarchicalMacroBlockPlanner` scaling across `250-1,000+` piece assemblies.
 - Topographical Port Representations & Neural Planners: 24-channel frontier port tensors,
   `SparsePortIPAEncoder`, `CandidateGraphDenoiser` (`D3PM`), search-distilled value models, and live
   HuggingFace `BrickGrammarLogitsProcessor` token-level physics masking.
@@ -389,6 +390,53 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "run_gate8a_open_catalog_blind_mesh_benchmark": ("topo_brick.evaluation.phase10_open_catalog_retrieval_gates", "run_gate8a_open_catalog_blind_mesh_benchmark"),
     "run_gate8b_retrieval_ablation_license_and_style_study": ("topo_brick.evaluation.phase10_open_catalog_retrieval_gates", "run_gate8b_retrieval_ablation_license_and_style_study"),
     "run_all_phase10_gates": ("topo_brick.evaluation.phase10_open_catalog_retrieval_gates", "run_all_phase10_gates"),
+    "ColoredPartKey": ("topo_brick.interface.brick_catalog", "ColoredPartKey"),
+    "ColoredInventorySpec": ("topo_brick.interface.brick_catalog", "ColoredInventorySpec"),
+    "SET_10698_COLORED_INVENTORY": ("topo_brick.interface.brick_catalog", "SET_10698_COLORED_INVENTORY"),
+    "InventoryShortfallReport": ("topo_brick.interface.brick_catalog", "InventoryShortfallReport"),
+    "InventoryCert": ("topo_brick.kernel", "InventoryCert"),
+    "PartSurfaceExposure": ("topo_brick.kernel", "PartSurfaceExposure"),
+    "ChromaticAllocationResult": ("topo_brick.kernel", "ChromaticAllocationResult"),
+    "classify_part_surface_exposure": ("topo_brick.kernel", "classify_part_surface_exposure"),
+    "allocate_inventory_colors_min_cost": ("topo_brick.kernel", "allocate_inventory_colors_min_cost"),
+    "apply_chromatic_same_footprint_splits": ("topo_brick.kernel", "apply_chromatic_same_footprint_splits"),
+    "build_inventory_shortfall_report": ("topo_brick.kernel", "build_inventory_shortfall_report"),
+    "HollowShellPolicy": ("topo_brick.kernel", "HollowShellPolicy"),
+    "apply_hollow_shell_policy": ("topo_brick.kernel", "apply_hollow_shell_policy"),
+    "evaluate_exterior_crust_fidelity": ("topo_brick.kernel", "evaluate_exterior_crust_fidelity"),
+    "ViewPrioritySpec": ("topo_brick.kernel", "ViewPrioritySpec"),
+    "CameraReprojectionMetrics": ("topo_brick.kernel", "CameraReprojectionMetrics"),
+    "compute_subvoxel_view_weights": ("topo_brick.kernel", "compute_subvoxel_view_weights"),
+    "evaluate_camera_reprojection_fidelity": ("topo_brick.kernel", "evaluate_camera_reprojection_fidelity"),
+    "LANDMARK_DETAIL_ROLES": ("topo_brick.interface.landmark_detail_index", "LANDMARK_DETAIL_ROLES"),
+    "LANDMARK_DETAIL_INDEX": ("topo_brick.interface.landmark_detail_index", "LANDMARK_DETAIL_INDEX"),
+    "LandmarkMoldRecord": ("topo_brick.interface.landmark_detail_index", "LandmarkMoldRecord"),
+    "LandmarkDetailIndex": ("topo_brick.interface.landmark_detail_index", "LandmarkDetailIndex"),
+    "SubmodelNodeSpec": ("topo_brick.kernel", "SubmodelNodeSpec"),
+    "LandmarkAttachmentRequest": ("topo_brick.kernel", "LandmarkAttachmentRequest"),
+    "SubmodelRealizationRecord": ("topo_brick.kernel", "SubmodelRealizationRecord"),
+    "CompositionalMPDResult": ("topo_brick.kernel", "CompositionalMPDResult"),
+    "attach_semantic_landmarks": ("topo_brick.kernel", "attach_semantic_landmarks"),
+    "export_compositional_mpd": ("topo_brick.kernel", "export_compositional_mpd"),
+    "realize_compositional_mpd": ("topo_brick.kernel", "realize_compositional_mpd"),
+    "Gate9AColoredInventoryReport": ("topo_brick.evaluation.phase11_five_extensions_gates", "Gate9AColoredInventoryReport"),
+    "Gate9BHollowShellReport": ("topo_brick.evaluation.phase11_five_extensions_gates", "Gate9BHollowShellReport"),
+    "Gate9CCompositionalMPDReport": ("topo_brick.evaluation.phase11_five_extensions_gates", "Gate9CCompositionalMPDReport"),
+    "Gate9DViewPriorityReport": ("topo_brick.evaluation.phase11_five_extensions_gates", "Gate9DViewPriorityReport"),
+    "Phase11CompleteGateSummary": ("topo_brick.evaluation.phase11_five_extensions_gates", "Phase11CompleteGateSummary"),
+    "run_gate9a_colored_finite_inventory_and_sparse_kit_benchmark": ("topo_brick.evaluation.phase11_five_extensions_gates", "run_gate9a_colored_finite_inventory_and_sparse_kit_benchmark"),
+    "run_gate9b_ribbed_hollow_shell_scaling_benchmark": ("topo_brick.evaluation.phase11_five_extensions_gates", "run_gate9b_ribbed_hollow_shell_scaling_benchmark"),
+    "run_gate9c_compositional_mpd_and_landmarks_benchmark": ("topo_brick.evaluation.phase11_five_extensions_gates", "run_gate9c_compositional_mpd_and_landmarks_benchmark"),
+    "run_gate9d_view_prioritized_scarcity_study": ("topo_brick.evaluation.phase11_five_extensions_gates", "run_gate9d_view_prioritized_scarcity_study"),
+    "run_all_phase11_gates": ("topo_brick.evaluation.phase11_five_extensions_gates", "run_all_phase11_gates"),
+    "VerificationObligations": ("topo_brick.evaluation.independent_verifier", "VerificationObligations"),
+    "ValidatedConstraintSpec": ("topo_brick.kernel", "ValidatedConstraintSpec"),
+    "ExternalPhysicalObservation": ("topo_brick.kernel", "ExternalPhysicalObservation"),
+    "SET_10698_REBRICKABLE_MANIFEST": ("topo_brick.interface.tier_a_catalog", "SET_10698_REBRICKABLE_MANIFEST"),
+    "PreparedOpenCatalogTarget": ("topo_brick.kernel", "PreparedOpenCatalogTarget"),
+    "TargetPrepStage": ("topo_brick.kernel", "TargetPrepStage"),
+    "ChromaticAllocationStage": ("topo_brick.kernel", "ChromaticAllocationStage"),
+    "TraceCertifyStage": ("topo_brick.kernel", "TraceCertifyStage"),
 }
 
 __all__: List[str] = [
@@ -753,6 +801,53 @@ __all__: List[str] = [
     "run_gate8a_open_catalog_blind_mesh_benchmark",
     "run_gate8b_retrieval_ablation_license_and_style_study",
     "run_all_phase10_gates",
+    "ColoredPartKey",
+    "ColoredInventorySpec",
+    "SET_10698_COLORED_INVENTORY",
+    "InventoryShortfallReport",
+    "InventoryCert",
+    "PartSurfaceExposure",
+    "ChromaticAllocationResult",
+    "classify_part_surface_exposure",
+    "allocate_inventory_colors_min_cost",
+    "apply_chromatic_same_footprint_splits",
+    "build_inventory_shortfall_report",
+    "HollowShellPolicy",
+    "apply_hollow_shell_policy",
+    "evaluate_exterior_crust_fidelity",
+    "ViewPrioritySpec",
+    "CameraReprojectionMetrics",
+    "compute_subvoxel_view_weights",
+    "evaluate_camera_reprojection_fidelity",
+    "LANDMARK_DETAIL_ROLES",
+    "LANDMARK_DETAIL_INDEX",
+    "LandmarkMoldRecord",
+    "LandmarkDetailIndex",
+    "SubmodelNodeSpec",
+    "LandmarkAttachmentRequest",
+    "SubmodelRealizationRecord",
+    "CompositionalMPDResult",
+    "attach_semantic_landmarks",
+    "export_compositional_mpd",
+    "realize_compositional_mpd",
+    "Gate9AColoredInventoryReport",
+    "Gate9BHollowShellReport",
+    "Gate9CCompositionalMPDReport",
+    "Gate9DViewPriorityReport",
+    "Phase11CompleteGateSummary",
+    "run_gate9a_colored_finite_inventory_and_sparse_kit_benchmark",
+    "run_gate9b_ribbed_hollow_shell_scaling_benchmark",
+    "run_gate9c_compositional_mpd_and_landmarks_benchmark",
+    "run_gate9d_view_prioritized_scarcity_study",
+    "run_all_phase11_gates",
+    "VerificationObligations",
+    "ValidatedConstraintSpec",
+    "ExternalPhysicalObservation",
+    "SET_10698_REBRICKABLE_MANIFEST",
+    "PreparedOpenCatalogTarget",
+    "TargetPrepStage",
+    "ChromaticAllocationStage",
+    "TraceCertifyStage",
 ]
 
 

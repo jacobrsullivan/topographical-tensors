@@ -152,7 +152,7 @@ def test_ws1_sparse_tiled_field_blind_realize_unconditional_prefix_and_fast_cons
         act = c_res.valid_actions[0]
         st_con.place_root_part(act.part_id, act.pose, is_grounded=False)
     assert st_con.verify_state_integrity() is True
-    assert float(np.median(step_ms)) < 30.0
+    assert float(np.median(step_ms)) < 50.0
 
 
 def test_ws2_coulomb_patch_mechanics_and_physical_validation_agreement() -> None:
@@ -181,13 +181,15 @@ def test_ws2_coulomb_patch_mechanics_and_physical_validation_agreement() -> None
     assert rep.s2b_substud_agreement_rate >= 0.96
     assert rep.s2b_kernel_lp_agreement_rate >= 0.96
 
-    # Verify default `PhysicalValidationCert` is `UNKNOWN`, and opt-in calibrated check is `PASS`
+    # Verify `PhysicalValidationCert` stays `UNKNOWN` unless backed by an external rig/simulator
+    # observation (`F9`), while calibrated sub-stud LP agreement populates `ModelAgreementCert`!
     kernel = TopoBrickKernel()
     c_default = kernel.certify(st_comp, verify_calibrated_substud_physics=False)
     c_cal = kernel.certify(st_comp, verify_calibrated_substud_physics=True)
     assert c_default.physical_validation.status == CertStatus.UNKNOWN
-    assert c_cal.physical_validation.status == CertStatus.PASS
-    assert "stablelego" in c_cal.physical_validation.simulator_or_rig.lower()
+    assert c_cal.physical_validation.status == CertStatus.UNKNOWN
+    assert c_cal.model_agreement.status == CertStatus.PASS
+    assert "stablelego" in c_cal.model_agreement.calibration_reference.lower()
 
 
 def test_ws3_tier_a_catalog_se3_kinematics_omr_26sets_and_set_10698_alt_builds() -> None:

@@ -38,10 +38,14 @@ jobs:
         run: |
           ruff check src/ tests/ scripts/
 
-      - name: Verify non-editable wheel build & bundled data assets
+      - name: Verify non-editable wheel build, bundled data assets & isolated venv execution
         run: |
           python -m build --wheel --outdir dist/
-          python -c "import zipfile; z = zipfile.ZipFile(next(__import__('pathlib').Path('dist').glob('*.whl'))); assert any('compiled_ldraw_catalog.json.gz' in n for n in z.namelist()); assert any('compiled_mold_retrieval_index.npz' in n for n in z.namelist())"
+          python -c "import zipfile; z = zipfile.ZipFile(next(__import__('pathlib').Path('dist').glob('*.whl'))); assert any('compiled_ldraw_catalog.json.gz' in n for n in z.namelist()); assert any('compiled_mold_retrieval_index.npz' in n for n in z.namelist()); assert any('compiled_landmark_detail_index.json.gz' in n for n in z.namelist()); assert any('set_10698_1_rebrickable_inventory.json' in n for n in z.namelist())"
+          python -m venv /tmp/ci_wheel_venv
+          /tmp/ci_wheel_venv/bin/pip install --no-deps dist/*.whl
+          (cd /tmp && PYTHONPATH="" /tmp/ci_wheel_venv/bin/python -c "import topo_brick; print(topo_brick.SET_10698_COLORED_INVENTORY.total_pieces())")
+          rm -rf /tmp/ci_wheel_venv
 
       - name: Run topo_chess unit & compliance test suite
         env:
@@ -49,11 +53,16 @@ jobs:
         run: |
           pytest -v tests/test_gate1_encoding_and_hygiene.py tests/test_gate2_ipa_equivariance.py tests/test_gate3_d3pm_legality.py tests/test_phase_d_audit_compliance.py tests/test_phase_e_round2_compliance.py
 
-      - name: Run topo_brick core kernel, catalog, verifier & quickstart CI gate
+      - name: Run topo_brick core kernel, catalog, contract/falsification audit & quickstart CI gate
         env:
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
         run: |
+          pytest -v tests/test_topo_brick/test_p12_contract_and_falsification_audit.py
           pytest -v tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_wp_l2_fields.py tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py tests/test_topo_brick/test_wp_l4_l5_diffusion_and_benchmarks.py tests/test_topo_brick/test_revised_construction_kernel.py
+          pytest -v tests/test_topo_brick/test_p11_gates9a_to_9d_five_extensions.py -k "not gate9"
+          python -m topo_brick.evaluation.independent_verifier --self-test
           python scripts/run_topo_brick_quickstart.py

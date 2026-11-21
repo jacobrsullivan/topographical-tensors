@@ -74,7 +74,17 @@ This file provides copyright notices, license attributions, and clean-room bound
 
 ---
 
-## 7. Out-of-Process External Benchmark Comparator Disclosure (`hbmartin/legolization`)
+## 7. Rebrickable Public Catalog Inventory (`Set 10698-1`)
+
+* **Affected Bundled Files:**
+  * `src/topo_brick/interface/set_10698_1_rebrickable_inventory.json` (`rebrickable_inventory_id = 102864`, `v1`, `225` non-spare `(part_id, ldraw_color_id, quantity)` rows = `790` pieces + `14` documented spare pieces)
+* **Upstream Source:** Rebrickable Public Catalog Database Downloads (`https://rebrickable.com/downloads/`, `inventories.csv.gz`, `inventory_parts.csv.gz`, `colors.csv.gz`; set page `https://rebrickable.com/sets/10698-1/`)
+* **Attribution:**
+  > Retail set inventory counts and Rebrickable-to-LDraw color mappings for Set `10698-1` (*LEGO Classic Large Creative Brick Box*) are sourced from [Rebrickable](https://rebrickable.com/sets/10698-1/) (`Terms of Use` free attribution tier for public catalog downloads).
+
+---
+
+## 8. Out-of-Process External Benchmark Comparator Disclosure (`hbmartin/legolization`)
 
 * **Upstream Source:** Harold Martin, `hbmartin/legolization` (`legolization==0.5.0` PyPI CLI release, https://github.com/hbmartin/legolization), licensed under **`GPL-3.0-or-later`**.
 * **Clean-Room Isolation:** **Zero lines** of `legolization` source code or binaries are imported, linked, subclassed, or distributed in `topographical-tensors` (enforced by automated AST inspection in `tests/test_topo_brick/test_r9_gates1_to_5_phase8_verification.py`). When optional live comparison is requested via `--legolization-bin`, `legolization` is invoked strictly as an external out-of-process CLI executable over `.stl` / `.ldr` files; `src/topo_brick/evaluation/phase8_external_comparators.json` archives only first-party numerical timing and geometry telemetry.

@@ -214,16 +214,20 @@ def test_r9_gate4_24cell_generative_versatility_matrix() -> None:
     assert g4.held_out_continuous_pitches_deg == (13.0, 19.0, 27.0, 34.0, 38.0)
     assert g4.max_pitch_discovery_error_deg <= 0.05
     assert g4.overall_kernel_certified >= 114
-    assert g4.overall_physically_validated == 20  # Honest scope: only calibrated stud-family cell!
+    assert g4.overall_physically_validated == 0  # F9: 0 without external bench observation!
+    assert g4.overall_calibrated_model_agreement == 20  # Calibrated analytical sub-stud LP agreement!
     assert g4.overall_kernel_certified > g4.luo_inspired_total_certified
     assert g4.gate4_passed
 
 
 def test_r9_gate5_bricklayer_agent_ab_and_m3_m1_controls() -> None:
-    """Verify Gate 5: 50 paired BrickLayer agent tasks, M3_Pairwise_Sparse vs 6 controls on 3 unseen families, and M1 ablation."""
+    """Verify Gate 5: 50 paired BrickLayer SDK adapter tasks, M3_Pairwise_Sparse vs 6 controls on 3 unseen families, and M1 ablation."""
     g5 = run_gate5_bricklayer_agent_and_m3_controls()
+    assert g5.study_protocol == "paired_deterministic_sdk_adapter_matched_10part_kit_no_llm"
     assert g5.arm_standalone.num_tasks == 50
     assert g5.arm_plus_kernel.num_tasks == 50
+    assert g5.arm_standalone.mean_tokens_generated == 0.0
+    assert g5.arm_plus_kernel.mean_tokens_generated == 0.0
     assert g5.arm_plus_kernel.qualified_build_rate >= 0.92
     assert g5.arm_plus_kernel.qualified_build_rate > g5.arm_standalone.qualified_build_rate + 0.35
 
