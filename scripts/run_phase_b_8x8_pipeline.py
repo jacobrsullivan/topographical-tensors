@@ -294,6 +294,11 @@ def main() -> None:
     # =========================================================================
     # STAGE-GATE 5 (8x8 Clean-Room Checkpoint Reload & Verification)
     # =========================================================================
+    from topo_chess.security.checkpoint_io import (
+        safe_load_authenticated_checkpoint,
+        validate_wp4_state_bundle,
+    )
+
     t_sg5 = time.perf_counter()
     print("\n--- [Phase-B SG5] Executing 8x8 Clean-Room Checkpoint Reload & Verification ---")
     sha256_manifest_8x8: Dict[str, str] = {
@@ -304,8 +309,11 @@ def main() -> None:
         for cfg in ("Config_A", "Config_B", "Config_C", "Config_D"):
             fname = f"{cfg.lower()}_seed{seed}.pt"
             fpath = ckpt_dir / fname
-            sha256_manifest_8x8[fname] = compute_file_sha256(fpath)
-            reloaded_bundles[(cfg, seed)] = torch.load(fpath, map_location="cpu", weights_only=True)
+            raw_b, actual_sha = safe_load_authenticated_checkpoint(fpath, map_location="cpu")
+            sha256_manifest_8x8[fname] = actual_sha
+            reloaded_bundles[(cfg, seed)] = validate_wp4_state_bundle(
+                raw_b, require_planner=(cfg == "Config_D")
+            )
 
     deviations, max_dev_pct, sg5_pass = verify_clean_room_reproduction_from_checkpoints(
         checkpoint_bundles=reloaded_bundles,

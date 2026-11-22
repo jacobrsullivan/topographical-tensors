@@ -209,6 +209,7 @@ class KernelResultStatus(str, Enum):
 
     COMPLETED_CERTIFIED = "COMPLETED_CERTIFIED"
     PARTIAL_OR_TIMEOUT = "PARTIAL_OR_TIMEOUT"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     PROVEN_INFEASIBLE = "PROVEN_INFEASIBLE"
     UNSUPPORTED_SPEC = "UNSUPPORTED_SPEC"
     INCONCLUSIVE = "INCONCLUSIVE"
@@ -405,6 +406,7 @@ class CertificateBundle:
     inventory: InventoryCert = field(default_factory=InventoryCert)
     foundation_policy: str = FoundationPolicy.CLUTCHED_BASEPLATE.value
     execution_trace: Optional[ExecutionTrace] = None
+    ground_plane_z_ldu: float = 0.0
 
     @property
     def overall_certified(self) -> bool:
@@ -685,6 +687,8 @@ class KernelRealizeResult:
     evaluated_target_field: Optional[Any] = None
     inventory_shortfall: Optional[Any] = None
     compositional_mpd_text: Optional[str] = None
+    stopping_reason: str = ""
+    remaining_budget_s: Optional[float] = None
 
 
 class RepairEditType(str, Enum):
@@ -1264,11 +1268,16 @@ class CoverAndRepairSolver:
         pairwise_synergy_matrix: Optional[np.ndarray] = None,
         require_atomic_1by1_order: bool = True,
         prior_peak_utilization: Optional[float] = None,
+        foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
+        ground_plane_z_ldu: float = 0.0,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> Tuple[List[int], int]:
         """
         Select a compatible, static-equilibrium-certified course `selected_indices` from `pool`.
         Returns `(selected_indices, nogood_cuts_added)`.
         """
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return [], 0
         m = len(pool)
         if m == 0:
             return [], 0
@@ -1465,6 +1474,8 @@ class CoverAndRepairSolver:
         )
 
         for _round in range(self.max_nogood_rounds):
+            if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                break
             if base_csc is not None and not extra_cut_rows:
                 a_mat: Optional[csc_matrix] = base_csc
             elif extra_cut_rows:
@@ -1475,12 +1486,18 @@ class CoverAndRepairSolver:
             else:
                 a_mat = None
 
+            mip_tl = 0.06
+            if deadline_monotonic_s is not None:
+                rem_mip = deadline_monotonic_s - time.monotonic()
+                if rem_mip <= 0.0:
+                    break
+                mip_tl = min(0.06, max(0.005, rem_mip))
             x_sol = _solve_binary_mip_fast(
                 c_obj=c_obj,
                 a_mat=a_mat,
                 lbs=lbs,
                 ubs=ubs,
-                time_limit_s=0.06,
+                time_limit_s=mip_tl,
                 mip_rel_gap=0.002,
             )
             if x_sol is not None:
@@ -1531,7 +1548,12 @@ class CoverAndRepairSolver:
                     pushed_tokens.append(
                         state.push_trial_part(cand_c.part_id, cand_c.pose, is_grounded=cand_grounded)
                     )
-                eq = self.validator.evaluate(state)
+                eq = self.validator.evaluate(
+                    state,
+                    foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=deadline_monotonic_s,
+                )
             except ValueError:
                 eq = EquilibriumResult(
                     is_stable=False,
@@ -1546,6 +1568,8 @@ class CoverAndRepairSolver:
                 for tok in reversed(pushed_tokens):
                     state.pop_trial_part(tok)
 
+            if eq.budget_exceeded:
+                return [], nogood_cuts_used
             if eq.is_stable:
                 if require_atomic_1by1_order and len(chosen_cids) > 1:
                     ordered_1by1 = _order_course_atomic_1by1(
@@ -1587,11 +1611,16 @@ class CoverAndRepairSolver:
         blocked_fb: Set[int] = set()
         used_inv_fb: Dict[str, int] = {}
         rep_tokens: List[TrialPartRollbackToken] = []
+        consec_fb_fails = 0
         try:
             for cid in ordered_fallback + extra_fill:
+                if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                    break
                 if cid in blocked_fb:
                     continue
                 if max_bricks is not None and len(stable_prefix) >= max_bricks:
+                    break
+                if cid not in seen_fb and consec_fb_fails >= 24:
                     break
                 cand_fb = pool.candidates[cid]
                 if inventory_counts is not None:
@@ -1601,13 +1630,24 @@ class CoverAndRepairSolver:
                     tok = state.push_trial_part(cand_fb.part_id, cand_fb.pose, is_grounded=False)
                 except ValueError:
                     continue
-                if self.validator.evaluate(state).is_stable:
+                eq_fb = self.validator.evaluate(
+                    state,
+                    foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=deadline_monotonic_s,
+                )
+                if eq_fb.budget_exceeded:
+                    state.pop_trial_part(tok)
+                    break
+                if eq_fb.is_stable:
+                    consec_fb_fails = 0
                     rep_tokens.append(tok)
                     stable_prefix.append(cid)
                     blocked_fb.add(cid)
                     blocked_fb.update(pool.conflict_adjacency[cid])
                     used_inv_fb[cand_fb.part_id] = used_inv_fb.get(cand_fb.part_id, 0) + 1
                 else:
+                    consec_fb_fails += 1
                     state.pop_trial_part(tok)
         finally:
             for tok in reversed(rep_tokens):
@@ -2453,6 +2493,8 @@ class TopoBrickKernel:
         inventory_counts: Optional[Dict[str, int]] = None,
         colored_inventory: Optional[Any] = None,
         external_physical_observation: Optional[ExternalPhysicalObservation] = None,
+        ground_plane_z_ldu: float = 0.0,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> CertificateBundle:
         """Certify a `ContinuousAssemblyState` (15-axis OBB-SAT, continuous joint wrench LP, perturbation)."""
         from topo_brick.interface.se3_kinematics import (
@@ -2558,7 +2600,11 @@ class TopoBrickKernel:
             violating_pairs=tuple(sorted(violating_set)),
         )
 
-        eq = assembly.evaluate_static_equilibrium(foundation_policy=fp_enum)
+        eq = assembly.evaluate_static_equilibrium(
+            foundation_policy=fp_enum,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
+        )
         static_cert = StaticMechanicsCert(
             status=CertStatus.PASS if (eq.is_stable and geom_pass) else CertStatus.FAIL,
             is_stable=bool(eq.is_stable),
@@ -2640,7 +2686,10 @@ class TopoBrickKernel:
                     if verify_prefix and len(sim_c.placed_parts) > 0:
                         eval_s += 1
                         eq_r = sim_c.evaluate_static_equilibrium(
-                            foundation_policy=fp_enum, gravity_unit=cur_grav
+                            foundation_policy=fp_enum,
+                            gravity_unit=cur_grav,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=deadline_monotonic_s,
                         )
                         if eq_r.is_stable:
                             stable_s += 1
@@ -2717,7 +2766,10 @@ class TopoBrickKernel:
                             max_u = float("inf")
                     else:
                         eq_s = sim_c.evaluate_static_equilibrium(
-                            foundation_policy=fp_enum, gravity_unit=cur_grav
+                            foundation_policy=fp_enum,
+                            gravity_unit=cur_grav,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=deadline_monotonic_s,
                         )
                         if not np.isinf(eq_s.peak_utilization):
                             max_u = max(max_u, float(eq_s.peak_utilization))
@@ -2726,6 +2778,8 @@ class TopoBrickKernel:
                         elif first_u is None:
                             first_u = s_idx
                             max_u = float("inf")
+                        if eq_s.budget_exceeded:
+                            break
 
             if set(sim_c.placed_parts.keys()) != set(parts.keys()):
                 if verify_prefix and first_u is None:
@@ -2764,7 +2818,11 @@ class TopoBrickKernel:
             )
 
         if verify_perturbation:
-            pert = assembly.evaluate_perturbation_stability(foundation_policy=fp_enum)
+            pert = assembly.evaluate_perturbation_stability(
+                foundation_policy=fp_enum,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=deadline_monotonic_s,
+            )
             pert_cert = PerturbationMechanicsCert(
                 status=CertStatus.PASS if pert.is_perturbation_stable else CertStatus.FAIL,
                 is_perturbation_stable=pert.is_perturbation_stable,
@@ -2805,6 +2863,7 @@ class TopoBrickKernel:
             inventory=inv_cert_c,
             foundation_policy=fp_enum.value,
             execution_trace=eff_c_trace,
+            ground_plane_z_ldu=float(ground_plane_z_ldu),
         )
 
     def certify(
@@ -2821,6 +2880,9 @@ class TopoBrickKernel:
         inventory_counts: Optional[Dict[str, int]] = None,
         colored_inventory: Optional[Any] = None,
         external_physical_observation: Optional[ExternalPhysicalObservation] = None,
+        ground_plane_z_ldu: float = 0.0,
+        max_wall_clock_s: Optional[float] = None,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> CertificateBundle:
         """
         Evaluate independent verification certificates on `assembly` (`AssemblyState` or
@@ -2831,6 +2893,11 @@ class TopoBrickKernel:
           - Optional `PerturbationMechanicsCert` and `ModelAgreementCert` (calibrated sub-stud LP).
           - `PhysicalValidationCert` remains `UNKNOWN` unless `external_physical_observation` is provided.
         """
+        eff_cert_deadline: Optional[float] = deadline_monotonic_s
+        if max_wall_clock_s is not None:
+            cand_dl = time.monotonic() + max(0.0, float(max_wall_clock_s))
+            eff_cert_deadline = cand_dl if eff_cert_deadline is None else min(eff_cert_deadline, cand_dl)
+
         if not isinstance(assembly, AssemblyState):
             return self._certify_continuous_assembly(
                 assembly,
@@ -2842,6 +2909,8 @@ class TopoBrickKernel:
                 inventory_counts=inventory_counts,
                 colored_inventory=colored_inventory,
                 external_physical_observation=external_physical_observation,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=eff_cert_deadline,
             )
 
         fp_enum = (
@@ -2870,7 +2939,12 @@ class TopoBrickKernel:
         collision_free = len(violating_pairs) == 0
 
         # Evaluate full-assembly static equilibrium once up front under declared `foundation_policy`
-        eq = self.validator.evaluate(assembly, foundation_policy=fp_enum)
+        eq = self.validator.evaluate(
+            assembly,
+            foundation_policy=fp_enum,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=eff_cert_deadline,
+        )
 
         # 3. Prefix Mechanics & 4. Monotone Insertion Certificates over explicit atomic `ExecutionTrace`
         cold_from_prefix: Optional[AssemblyState] = None
@@ -2958,8 +3032,49 @@ class TopoBrickKernel:
             base_witness: Any = None
             plumb_deltas: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
             plumb_hop_cache: Dict[int, Any] = {}
+            full_hops_ref: Optional[Dict[int, Any]] = (
+                getattr(self.validator, "_last_plumb_hop_cache", None)
+                if getattr(self.validator, "_last_plumb_state_version", -1) == assembly.state_version
+                else None
+            )
             cur_lat_xy = (0.0, 0.0)
             grounded_reachable: Set[int] = set()
+            ins_xy_boxes: Dict[Tuple[int, int], List[LDUBox]] = {}
+            ins_max_z = -10**9
+
+            def _record_ins_boxes(wbs_rec: Sequence[LDUBox]) -> None:
+                nonlocal ins_max_z
+                for bx_r in wbs_rec:
+                    if bx_r.zmax > ins_max_z:
+                        ins_max_z = bx_r.zmax
+                    for cx_r in range(bx_r.xmin // 20, (bx_r.xmax - 1) // 20 + 1):
+                        for cy_r in range(bx_r.ymin // 20, (bx_r.ymax - 1) // 20 + 1):
+                            bucket_r = ins_xy_boxes.get((cx_r, cy_r))
+                            if bucket_r is not None:
+                                bucket_r.append(bx_r)
+                            else:
+                                ins_xy_boxes[(cx_r, cy_r)] = [bx_r]
+
+            def _fast_z_plus_clear(wbs_chk: Sequence[LDUBox]) -> bool:
+                if not wbs_chk:
+                    return True
+                for nb_c in wbs_chk:
+                    if nb_c.zmin >= ins_max_z:
+                        continue
+                    for cx_c in range(nb_c.xmin // 20, (nb_c.xmax - 1) // 20 + 1):
+                        for cy_c in range(nb_c.ymin // 20, (nb_c.ymax - 1) // 20 + 1):
+                            bucket_c = ins_xy_boxes.get((cx_c, cy_c))
+                            if bucket_c is not None:
+                                for eb_c in bucket_c:
+                                    if (
+                                        eb_c.zmax > nb_c.zmin
+                                        and nb_c.xmin < eb_c.xmax
+                                        and nb_c.xmax > eb_c.xmin
+                                        and nb_c.ymin < eb_c.ymax
+                                        and nb_c.ymax > eb_c.ymin
+                                    ):
+                                        return False
+                return True
 
             def _sync_grounded_add(new_iid: int, is_gr: bool) -> None:
                 if is_gr or any(
@@ -2977,6 +3092,12 @@ class TopoBrickKernel:
 
             n_trace_steps = len(eff_trace.steps)
             for s_idx, step in enumerate(eff_trace.steps):
+                if eff_cert_deadline is not None and time.monotonic() >= eff_cert_deadline:
+                    if verify_prefix and first_unstable is None:
+                        first_unstable = s_idx
+                        max_u = float("inf")
+                    prefix_place_ok = False
+                    break
                 op = step.op_type
                 if op == AtomicOpType.PLACE_PART:
                     if len(step.instance_ids) == 1 and step.instance_ids[0] in parts:
@@ -2999,7 +3120,14 @@ class TopoBrickKernel:
 
                     if verify_insertion:
                         eval_ins += 1
-                        if check_monotone_insertion_corridor(prefix_state, pid_p, pose_p):
+                        wbs_cand_ins = (
+                            p.world_boxes
+                            if (len(step.instance_ids) == 1 and step.instance_ids[0] in parts)
+                            else tuple(b.transform(pose_p) for b in get_brick_primitive(pid_p).hull_boxes)
+                        )
+                        if (not used_temp_supports and _fast_z_plus_clear(wbs_cand_ins)) or check_monotone_insertion_corridor(
+                            prefix_state, pid_p, pose_p
+                        ):
                             ok_ins += 1
                         else:
                             blocked_ins.append(iid_p)
@@ -3011,6 +3139,8 @@ class TopoBrickKernel:
                             pid_p, pose_p, is_grounded=gr_p, color_id=col_p
                         )
                         _sync_grounded_add(actual_iid, gr_p)
+                        if verify_insertion and not used_temp_supports:
+                            _record_ins_boxes(prefix_state.placed_parts[actual_iid].world_boxes)
                     except ValueError:
                         prefix_place_ok = False
                         step_ok = False
@@ -3033,7 +3163,7 @@ class TopoBrickKernel:
                                     fp_enum == FoundationPolicy.TABLE_FRICTION_ONLY
                                     and p.world_boxes
                                     and any(
-                                        b.zmin <= 0
+                                        abs(float(b.zmin) - ground_plane_z_ldu) <= 0.25
                                         and (b.xmin + 0.5)
                                         <= (
                                             sum(float(bx.volume_ldu3) * 0.5 * (bx.xmin + bx.xmax) for bx in p.world_boxes)
@@ -3075,6 +3205,16 @@ class TopoBrickKernel:
                                 and cur_lat_xy == (0.0, 0.0)
                                 and not np.isinf(base_lp_eta)
                             ):
+                                if (
+                                    full_hops_ref is not None
+                                    and fp_enum == FoundationPolicy.CLUTCHED_BASEPLATE
+                                    and not used_temp_supports
+                                    and iid_p in full_hops_ref
+                                    and iid_p not in plumb_hop_cache
+                                ):
+                                    fh_i = full_hops_ref[iid_p]
+                                    if all((h_it[0] in prefix_state._parts) for h_it in fh_i if not h_it[-1]):
+                                        plumb_hop_cache[iid_p] = tuple(h_it for h_it in fh_i if not h_it[-1])
                                 can_ext, peak_d = self.validator.can_extend_plumb_primal_witness(
                                     prefix_state,
                                     iid_p,
@@ -3082,10 +3222,13 @@ class TopoBrickKernel:
                                     base_witness=base_witness,
                                     hop_cache=plumb_hop_cache,
                                     foundation_policy=fp_enum,
+                                    ground_plane_z_ldu=ground_plane_z_ldu,
                                 )
                                 if not can_ext and prefix_state.num_parts >= 40:
                                     can_ext, peak_d = self.validator.verify_two_pier_bearing_compression(
-                                        prefix_state, foundation_policy=fp_enum
+                                        prefix_state,
+                                        foundation_policy=fp_enum,
+                                        ground_plane_z_ldu=ground_plane_z_ldu,
                                     )
                                     if can_ext:
                                         base_lp_eta = min(base_lp_eta, peak_d)
@@ -3097,6 +3240,8 @@ class TopoBrickKernel:
                                     prefix_state,
                                     foundation_policy=fp_enum,
                                     lateral_accel_xy=cur_lat_xy,
+                                    ground_plane_z_ldu=ground_plane_z_ldu,
+                                    deadline_monotonic_s=eff_cert_deadline,
                                 )
                                 if not np.isinf(eq_c.peak_utilization):
                                     max_u = max(max_u, float(eq_c.peak_utilization))
@@ -3111,6 +3256,9 @@ class TopoBrickKernel:
                                     if first_unstable is None:
                                         first_unstable = s_idx
                                         max_u = float("inf")
+                                    if eq_c.budget_exceeded:
+                                        prefix_place_ok = False
+                                        break
 
                 elif op == AtomicOpType.PLACE_SUBASSEMBLY:
                     eval_steps += 1 if verify_prefix else 0
@@ -3133,11 +3281,12 @@ class TopoBrickKernel:
                         continue
                     sub_ok = True
                     if step.subtrace:
-                        # Phase 11 Ext 4A: Replay explicit local-workbench `subtrace` step-by-step, verify
-                        # single-component connectivity, and check rigid-translation correspondence vs `parts[sid]`!
+                        # Phase 11 Ext 4A + TB-FIX-01 Gate 3: Replay explicit local-workbench `subtrace`
+                        # step-by-step, verify single-component connectivity, and check invariant rigid
+                        # `LDUFrame` transform `T_sub` (`wp_ref.pose == T_sub.compose(ls_op.pose)`)!
                         loc_sub_state = AssemblyState()
                         reindexed_sub_steps: List[AtomicBuildStep] = []
-                        inferred_sub_off: Optional[Tuple[int, int, int]] = None
+                        inferred_t_sub: Optional[LDUFrame] = None
                         if len(step.subtrace) != len(sub_iids):
                             sub_ok = False
                         else:
@@ -3150,17 +3299,13 @@ class TopoBrickKernel:
                                     sub_ok = False
                                     break
                                 wp_ref = parts[w_sid]
-                                if wp_ref.part_id != ls_op.part_id or wp_ref.pose.rot_id != ls_op.pose.rot_id:
+                                if wp_ref.part_id != ls_op.part_id:
                                     sub_ok = False
                                     break
-                                cur_off = (
-                                    wp_ref.pose.pos[0] - ls_op.pose.pos[0],
-                                    wp_ref.pose.pos[1] - ls_op.pose.pos[1],
-                                    wp_ref.pose.pos[2] - ls_op.pose.pos[2],
-                                )
-                                if inferred_sub_off is None:
-                                    inferred_sub_off = cur_off
-                                elif cur_off != inferred_sub_off:
+                                cur_t_sub = wp_ref.pose.compose(ls_op.pose.inverse())
+                                if inferred_t_sub is None:
+                                    inferred_t_sub = cur_t_sub
+                                elif cur_t_sub != inferred_t_sub:
                                     sub_ok = False
                                     break
                                 try:
@@ -3267,6 +3412,8 @@ class TopoBrickKernel:
                                 color_id=sp_sub.color_id,
                             )
                             _sync_grounded_add(act_s, sp_sub.is_grounded)
+                            if verify_insertion and not used_temp_supports:
+                                _record_ins_boxes(prefix_state.placed_parts[act_s].world_boxes)
                         except ValueError:
                             sub_ok = False
                             prefix_place_ok = False
@@ -3282,11 +3429,14 @@ class TopoBrickKernel:
                                 prefix_state,
                                 foundation_policy=fp_enum,
                                 lateral_accel_xy=cur_lat_xy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=eff_cert_deadline,
                             )
                             if not np.isinf(eq_sub.peak_utilization):
                                 max_u = max(max_u, float(eq_sub.peak_utilization))
                             if eq_sub.is_stable:
                                 base_lp_eta = float(eq_sub.peak_utilization)
+                                base_witness = eq_sub.primal_witness
                                 plumb_deltas.clear()
                                 stable_steps += 1
                             elif first_unstable is None:
@@ -3333,12 +3483,15 @@ class TopoBrickKernel:
                                 prefix_state,
                                 foundation_policy=fp_enum,
                                 lateral_accel_xy=cur_lat_xy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=eff_cert_deadline,
                             )
                             if ts_ok
                             else EquilibriumResult(False, float("inf"), -float("inf"), {}, None, 0.0, "fail")
                         )
                         if eq_ts.is_stable:
                             base_lp_eta = float(eq_ts.peak_utilization)
+                            base_witness = eq_ts.primal_witness
                             plumb_deltas.clear()
                             max_u = max(max_u, base_lp_eta)
                             stable_steps += 1
@@ -3383,11 +3536,14 @@ class TopoBrickKernel:
                                 prefix_state,
                                 foundation_policy=fp_enum,
                                 lateral_accel_xy=cur_lat_xy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=eff_cert_deadline,
                             )
                             if not np.isinf(eq_rem.peak_utilization):
                                 max_u = max(max_u, float(eq_rem.peak_utilization))
                             if eq_rem.is_stable:
                                 base_lp_eta = float(eq_rem.peak_utilization)
+                                base_witness = eq_rem.primal_witness
                                 plumb_deltas.clear()
                                 stable_steps += 1
                             elif first_unstable is None:
@@ -3409,6 +3565,8 @@ class TopoBrickKernel:
                             prefix_state,
                             foundation_policy=fp_enum,
                             lateral_accel_xy=cur_lat_xy,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=eff_cert_deadline,
                         )
                         if eq_ro.is_stable:
                             base_lp_eta = float(eq_ro.peak_utilization)
@@ -3524,12 +3682,17 @@ class TopoBrickKernel:
         )
 
         # 2. Static Mechanics Certificate
-        if not geom_pass:
+        if not geom_pass or not eq.is_stable or eq.budget_exceeded:
             cold_ok = False
         elif assembly.state_version == 0 or cold_from_prefix is not None:
             cold_ok = True
         else:
-            cold_ok = self.validator.verify_against_cold_rebuild(assembly)
+            cold_ok = self.validator.verify_against_cold_rebuild(
+                assembly,
+                foundation_policy=fp_enum,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=eff_cert_deadline,
+            )
         static_pass = eq.is_stable and cold_ok
         static_cert = StaticMechanicsCert(
             status=CertStatus.PASS if static_pass else CertStatus.FAIL,
@@ -3549,7 +3712,11 @@ class TopoBrickKernel:
             pert_ok = bool(eq.is_stable)
             for lat_xy in ((0.05, 0.0), (-0.05, 0.0), (0.0, 0.05), (0.0, -0.05)):
                 eq_l = self.validator.evaluate(
-                    assembly, foundation_policy=fp_enum, lateral_accel_xy=lat_xy
+                    assembly,
+                    foundation_policy=fp_enum,
+                    lateral_accel_xy=lat_xy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=eff_cert_deadline,
                 )
                 worst_lat_u = max(worst_lat_u, float(eq_l.peak_utilization))
                 if not eq_l.is_stable:
@@ -3601,6 +3768,7 @@ class TopoBrickKernel:
             inventory=inv_cert,
             foundation_policy=fp_enum.value,
             execution_trace=eff_trace,
+            ground_plane_z_ldu=float(ground_plane_z_ldu),
         )
 
     def constrain(
@@ -4748,8 +4916,11 @@ class TopoBrickKernel:
         inventory_counts: Optional[Dict[str, int]] = None,
         full_target: Optional[SparseTiledTargetField | TargetShapeBoxes] = None,
         z0_course: Optional[int] = None,
+        foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
+        ground_plane_z_ldu: float = 0.0,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> Tuple[List[int], int]:
-        if len(pool) == 0:
+        if len(pool) == 0 or (deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s):
             return [], 0
         snot_bonus: Optional[np.ndarray] = None
         if full_target is not None and z0_course is not None:
@@ -4778,6 +4949,9 @@ class TopoBrickKernel:
                 max_bricks=max_bricks,
                 inventory_counts=inventory_counts,
                 candidate_bonus_scores=snot_bonus,
+                foundation_policy=foundation_policy,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=deadline_monotonic_s,
             )
         if solver_id == "S2_PairSeededLocalSearch":
             return (
@@ -4798,6 +4972,9 @@ class TopoBrickKernel:
             max_bricks=max_bricks,
             inventory_counts=inventory_counts,
             candidate_bonus_scores=snot_bonus,
+            foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
         )
 
     def realize(
@@ -4835,6 +5012,9 @@ class TopoBrickKernel:
         subassembly_graph: Optional[Sequence[Any]] = None,
         landmark_requests: Sequence[Any] = (),
         view_priority: Optional[Any] = None,
+        max_wall_clock_s: Optional[float] = None,
+        deadline_monotonic_s: Optional[float] = None,
+        ground_plane_z_ldu: float = 0.0,
     ) -> KernelRealizeResult:
         """
         WS-1B: Genuinely Blind Whole-Target Realization (`TopoBrickKernel.realize`).
@@ -4847,6 +5027,13 @@ class TopoBrickKernel:
         """
         t0 = time.perf_counter()
         cpu_t0 = time.process_time()
+        eff_deadline: Optional[float] = deadline_monotonic_s
+        if max_wall_clock_s is not None:
+            cand_dl_r = time.monotonic() + max(0.0, float(max_wall_clock_s))
+            eff_deadline = cand_dl_r if eff_deadline is None else min(eff_deadline, cand_dl_r)
+
+        def _budget_hit() -> bool:
+            return eff_deadline is not None and time.monotonic() >= eff_deadline
         lp_calls_0 = int(getattr(self.validator, "lp_solver_calls", 0))
         wit_hits_0 = int(getattr(self.validator, "witness_reuse_hits", 0))
         max_fr_ports = 0
@@ -5105,6 +5292,8 @@ class TopoBrickKernel:
                 hollow_shell_policy=hollow_shell_policy,
                 view_priority=view_priority,
                 landmark_requests=landmark_requests,
+                deadline_monotonic_s=eff_deadline,
+                ground_plane_z_ldu=ground_plane_z_ldu,
             )
             if fine_oc_tf.total_volume_ldu3 > 0:
                 eff_cert_target_field = fine_oc_tf
@@ -5166,9 +5355,11 @@ class TopoBrickKernel:
                     support_policy=support_policy,
                     foundation_policy=fp_m,
                     forbidden_support_boxes=forbidden_support_boxes,
+                    deadline_monotonic_s=eff_deadline,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
                 )
                 t_m_pack = (time.perf_counter() - t_m0) * 1000.0
-                if m_state is not None and m_state.num_parts > 0:
+                if m_state is not None and m_state.num_parts > 0 and not _budget_hit():
                     t_mc0 = time.perf_counter()
                     m_certs = self.certify(
                         m_state,
@@ -5177,6 +5368,8 @@ class TopoBrickKernel:
                         verify_insertion=True,
                         foundation_policy=foundation_policy,
                         verify_perturbation=verify_perturbation,
+                        ground_plane_z_ldu=ground_plane_z_ldu,
+                        deadline_monotonic_s=eff_deadline,
                     )
                     t_mc_dt = (time.perf_counter() - t_mc0) * 1000.0
                     if m_certs.overall_certified and m_certs.geometry.target_recall >= 0.90:
@@ -5187,10 +5380,18 @@ class TopoBrickKernel:
                         extra_waves = m_blocks
                         t_sel_acc += t_m_pack
                         macro_succeeded = True
+                    elif macro_block_mode == "force":
+                        state = m_state
+                        precomputed_certs = m_certs
+                        t_cert_pre_ms = t_mc_dt
+                        tot_cands_gen += m_cands
+                        extra_waves = m_blocks
+                        t_sel_acc += t_m_pack
+                        macro_succeeded = True
 
             if not macro_succeeded:
                 state = AssemblyState()
-            if (not macro_succeeded) and z_bands:
+            if (not macro_succeeded) and z_bands and not _budget_hit() and macro_block_mode != "force":
                 # 1. Blind grounded base course tiling at z_bands[0]
                 z0_base, dz_base = z_bands[0]
                 t_tg = time.perf_counter()
@@ -5206,7 +5407,14 @@ class TopoBrickKernel:
                 tot_conf_edges += sum(len(s) for s in base_pool.conflict_adjacency) // 2
                 t_sl = time.perf_counter()
                 sel_base, _ = self._select_from_pool(
-                    solver_id, state, base_pool, base_target, inventory_counts=rem_inv
+                    solver_id,
+                    state,
+                    base_pool,
+                    base_target,
+                    inventory_counts=rem_inv,
+                    foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=eff_deadline,
                 )
                 t_sel_acc += (time.perf_counter() - t_sl) * 1000.0
                 for cid in sel_base:
@@ -5220,6 +5428,8 @@ class TopoBrickKernel:
 
                 # 2. Blind upward course-by-course sweep across z_bands[1:]
                 for z0, dz in z_bands[1:]:
+                    if _budget_hit():
+                        break
                     cur_kit = _active_kit()
                     if not cur_kit:
                         break
@@ -5281,6 +5491,9 @@ class TopoBrickKernel:
                         inventory_counts=rem_inv,
                         full_target=target_field,
                         z0_course=z0,
+                        foundation_policy=foundation_policy,
+                        ground_plane_z_ldu=ground_plane_z_ldu,
+                        deadline_monotonic_s=eff_deadline,
                     )
                     t_sel_acc += (time.perf_counter() - t_sl) * 1000.0
                     nogood_total += ng
@@ -5339,7 +5552,14 @@ class TopoBrickKernel:
                             if len(pool_s) == 0:
                                 break
                             sel_s, ng_s = self._select_from_pool(
-                                solver_id, state, pool_s, local_band, inventory_counts=rem_inv
+                                solver_id,
+                                state,
+                                pool_s,
+                                local_band,
+                                inventory_counts=rem_inv,
+                                foundation_policy=foundation_policy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=eff_deadline,
                             )
                             nogood_total += ng_s
                             cx_mid_s = 0.5 * (xmin + xmax)
@@ -5375,6 +5595,8 @@ class TopoBrickKernel:
                     nonlocal nogood_total
                     waves_used = 0
                     for _ in range(max_waves):
+                        if _budget_hit():
+                            break
                         cur_kit_w = _active_kit()
                         if not cur_kit_w:
                             break
@@ -5415,7 +5637,14 @@ class TopoBrickKernel:
                         if len(pool_w) == 0:
                             break
                         sel_w, ng_w = self._select_from_pool(
-                            solver_id, state, pool_w, target_field, inventory_counts=rem_inv
+                            solver_id,
+                            state,
+                            pool_w,
+                            target_field,
+                            inventory_counts=rem_inv,
+                            foundation_policy=foundation_policy,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=eff_deadline,
                         )
                         nogood_total += ng_w
                         # Commit fill-in placements inside-out sequentially so earlier placements
@@ -5459,11 +5688,20 @@ class TopoBrickKernel:
                 extra_waves = _run_frontier_completion_waves()
 
                 # 4. Optional Lexicographic Minimal-Volume Permanent Support Pillars (`Claim B`)
-                if support_policy == "minimal_permanent_pillars" and "3005" in kit:
+                if support_policy == "minimal_permanent_pillars" and "3005" in kit and not _budget_hit():
                     for _pillar_round in range(12):
+                        if _budget_hit():
+                            break
                         placed_boxes_all = [b for p in state.placed_parts.values() for b in p.world_boxes]
                         inter_cur = target_field.intersection_volume(placed_boxes_all)
-                        eq_now = self.validator.evaluate(state)
+                        eq_now = self.validator.evaluate(
+                            state,
+                            foundation_policy=foundation_policy,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=eff_deadline,
+                        )
+                        if eq_now.budget_exceeded:
+                            break
                         if inter_cur >= int(0.995 * target_vol) and eq_now.is_stable:
                             break
                         # Find either:
@@ -5652,10 +5890,44 @@ class TopoBrickKernel:
         if precomputed_certs is not None and (eff_init_inv is not None or colored_inventory is not None):
             # Re-certify with finite inventory bounds if macro-block shortcut ran without `InventoryCert`
             precomputed_certs = None
-        certs = (
-            precomputed_certs
-            if precomputed_certs is not None
-            else self.certify(
+        if precomputed_certs is not None:
+            certs = precomputed_certs
+        elif _budget_hit():
+            fp_val_b = (
+                foundation_policy.value
+                if isinstance(foundation_policy, FoundationPolicy)
+                else str(foundation_policy)
+            )
+            certs = CertificateBundle(
+                geometry=GeometryCert(
+                    status=CertStatus.UNKNOWN,
+                    collision_free=True,
+                    protrusion_collision_free=True,
+                    all_ports_compatible=True,
+                    state_integrity_verified=False,
+                    target_iou=0.0,
+                    target_precision=0.0,
+                    target_recall=0.0,
+                ),
+                static_mechanics=StaticMechanicsCert(
+                    status=CertStatus.UNKNOWN,
+                    is_stable=False,
+                    peak_utilization=float("inf"),
+                    safety_margin=-float("inf"),
+                    weakest_contact=None,
+                    moment_reference="budget_exceeded",
+                    asymmetric_bearing_active=True,
+                    cold_rebuild_consistent=False,
+                    solve_time_ms=0.0,
+                ),
+                prefix_mechanics=PrefixMechanicsCert(CertStatus.UNKNOWN, 0, 0, None, float("inf")),
+                insertion=InsertionCert(CertStatus.UNKNOWN, 0, 0, ()),
+                foundation_policy=fp_val_b,
+                execution_trace=explicit_exec_trace,
+                ground_plane_z_ldu=float(ground_plane_z_ldu),
+            )
+        else:
+            certs = self.certify(
                 state,
                 target_field=eff_cert_target_field,
                 verify_prefix=True,
@@ -5665,8 +5937,9 @@ class TopoBrickKernel:
                 verify_perturbation=verify_perturbation,
                 inventory_counts=eff_init_inv,
                 colored_inventory=colored_inventory,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=eff_deadline,
             )
-        )
         if chrom_summary_obj is not None:
             from dataclasses import replace as dc_replace
 
@@ -5685,13 +5958,21 @@ class TopoBrickKernel:
         t_exec_ms = max(0.0, t_cert_total - t_mech_ms)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0 + float(t_target_init_ms)
         coverage_ok = certs.geometry.target_recall >= min_recall_gate and state.num_parts > 0
-        status = (
-            KernelResultStatus.COMPLETED_CERTIFIED
-            if (certs.overall_certified and coverage_ok)
-            else KernelResultStatus.PARTIAL_OR_TIMEOUT
-        )
+        budget_expired_final = _budget_hit()
+        stopping_reason = ""
+        if certs.overall_certified and coverage_ok and not budget_expired_final:
+            status = KernelResultStatus.COMPLETED_CERTIFIED
+        elif budget_expired_final:
+            status = KernelResultStatus.BUDGET_EXCEEDED
+            stopping_reason = "wall_clock_deadline_exceeded"
+        else:
+            status = KernelResultStatus.PARTIAL_OR_TIMEOUT
         shortfall_rep: Optional[Any] = None
-        if eff_init_inv is not None and status != KernelResultStatus.COMPLETED_CERTIFIED:
+        if (
+            eff_init_inv is not None
+            and status != KernelResultStatus.COMPLETED_CERTIFIED
+            and status != KernelResultStatus.BUDGET_EXCEEDED
+        ):
             from topo_brick.kernel.colored_inventory_allocator import build_inventory_shortfall_report
 
             used_molds_cur: Dict[str, int] = {}
@@ -5710,6 +5991,9 @@ class TopoBrickKernel:
             )
             if not shortfall_rep.is_volume_sufficient:
                 status = KernelResultStatus.PROVEN_INFEASIBLE
+        rem_budget_final: Optional[float] = (
+            max(0.0, eff_deadline - time.monotonic()) if eff_deadline is not None else None
+        )
         total_courses = len(z_bands) + extra_waves
         n_tiles = int(getattr(target_field, "num_allocated_tiles", 0))
         tile_mib = float(n_tiles * (614400 * 4 + 76800)) / (1024.0 * 1024.0)
@@ -5768,6 +6052,8 @@ class TopoBrickKernel:
             evaluated_target_field=eff_cert_target_field,
             inventory_shortfall=shortfall_rep,
             compositional_mpd_text=comp_mpd_text,
+            stopping_reason=stopping_reason,
+            remaining_budget_s=rem_budget_final,
         )
 
     def realize_external_record(

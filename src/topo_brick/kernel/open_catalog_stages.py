@@ -80,6 +80,7 @@ class TargetPrepStage:
         hollow_shell_policy: Optional[Any],
         view_priority: Optional[Any],
         pre_ret: Optional[CatalogRetrievalResult] = None,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> PreparedOpenCatalogTarget:
         t0 = time.perf_counter()
         eff_shell_policy = hollow_shell_policy or adaptive_target.hollow_shell_policy
@@ -142,12 +143,15 @@ class TargetPrepStage:
         gz6_nonempty_limit = (
             int(np.max(np.nonzero(z6_any)[0]) + 1) if np.any(z6_any) else occ6.shape[2]
         )
-        occ6_csum = np.zeros(
-            (occ6.shape[0] + 1, occ6.shape[1] + 1, occ6.shape[2] + 1), dtype=np.int32
-        )
-        occ6_csum[1:, 1:, 1:] = np.cumsum(
-            np.cumsum(np.cumsum(occ6.astype(np.int32), axis=0), axis=1), axis=2
-        )
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            occ6_csum = np.zeros((1, 1, 1), dtype=np.int32)
+        else:
+            occ6_csum = np.zeros(
+                (occ6.shape[0] + 1, occ6.shape[1] + 1, occ6.shape[2] + 1), dtype=np.int32
+            )
+            occ6_csum[1:, 1:, 1:] = np.cumsum(
+                np.cumsum(np.cumsum(occ6.astype(np.int32), axis=0), axis=1), axis=2
+            )
 
         view_weight_grid_6: Optional[np.ndarray] = None
         if view_priority is not None:
@@ -171,17 +175,28 @@ class TargetPrepStage:
         if inv_allowed_for_ret is None and eff_inv_map is not None:
             inv_allowed_for_ret = tuple(sorted(pid for pid, q in eff_inv_map.items() if int(q) > 0))
 
-        ret_res = (
-            pre_ret
-            if pre_ret is not None
-            else CATALOG_RETRIEVAL_INDEX.retrieve_top_k(
-                occ6,
-                top_k=retrieval_top_k,
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s and pre_ret is None:
+            ret_res = CatalogRetrievalResult(
+                retrieved_part_ids=("3005",),
+                sculptural_part_ids=(),
+                backbone_part_ids=("3005",),
+                class_counts={"CORE_BRICK": 1},
+                motif_weights={},
                 license_filter=license_filter,
-                semantic_style_hint=semantic_style_hint,
-                allowed_part_ids=inv_allowed_for_ret,
+                query_wall_ms=0.0,
             )
-        )
+        else:
+            ret_res = (
+                pre_ret
+                if pre_ret is not None
+                else CATALOG_RETRIEVAL_INDEX.retrieve_top_k(
+                    occ6,
+                    top_k=retrieval_top_k,
+                    license_filter=license_filter,
+                    semantic_style_hint=semantic_style_hint,
+                    allowed_part_ids=inv_allowed_for_ret,
+                )
+            )
         if part_retrieval == "open_catalog_top_k":
             kit_ids = list(ret_res.retrieved_part_ids)
         elif allowed_part_ids is not None:

@@ -1084,6 +1084,8 @@ def realize_open_catalog_sculpted(
     view_priority: Optional[Any] = None,
     suppress_studless_capping_boxes: Sequence[LDUBox] = (),
     landmark_requests: Sequence[Any] = (),
+    deadline_monotonic_s: Optional[float] = None,
+    ground_plane_z_ldu: float = 0.0,
     _forced_plan: Optional[Tuple[List[Tuple[int, int]], Dict[int, Tuple[Tuple[int, int], Tuple[int, int]]], int]] = None,
     _pre_ret: Optional[CatalogRetrievalResult] = None,
     _eval_only: bool = False,
@@ -1113,6 +1115,7 @@ def realize_open_catalog_sculpted(
         hollow_shell_policy=hollow_shell_policy,
         view_priority=view_priority,
         pre_ret=_pre_ret,
+        deadline_monotonic_s=deadline_monotonic_s,
     )
     eff_shell_policy = hollow_shell_policy or adaptive_target.hollow_shell_policy
     nx_s = prep.nx_s
@@ -1137,6 +1140,35 @@ def realize_open_catalog_sculpted(
     is_hollow_shell_active = prep.is_hollow_shell_active
     build_mold_counts: Dict[str, int] = {}
     t_sculpt0 = time.perf_counter()
+
+    def _early_deadline_hit() -> bool:
+        return deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s
+
+    def _early_expired_return() -> Tuple[AssemblyState, SparseTiledTargetField, OpenCatalogRealizeDiagnostics]:
+        return TraceCertifyStage.finalize(
+            state=AssemblyState(),
+            occ6=occ6,
+            solid_occ6_ref=solid_occ6_ref,
+            adaptive_target=adaptive_target,
+            verts_ldu=verts_ldu,
+            vertex_colors_rgb=vertex_colors_rgb,
+            view_priority=view_priority,
+            ret_res=ret_res,
+            mean_de00=0.0,
+            chrom_res=None,
+            landmarks_attached_count=0,
+            plate_to_tile_values=set(PLATE_TO_SMOOTH_TILE_MAP.values()),
+            build_fine_tf_fn=(lambda _occ: SparseTiledTargetField(boxes=())),
+            count_exposed_studs_fn=count_exposed_upward_studs,
+            diagnostics_cls=OpenCatalogRealizeDiagnostics,
+            target_prep_ms=prep.target_prep_ms,
+            retrieval_ms=prep.retrieval_ms,
+            sculpt_synthesis_ms=(time.perf_counter() - t_sculpt0) * 1000.0,
+            color_allocation_ms=0.0,
+        )
+
+    if _early_deadline_hit():
+        return _early_expired_return()
 
     # 2b. Upfront `< 8 ms` Blind Sub-Plate Portal-Bridge & Stepped-Frustum Fast-Path
     #     (`Phase 11 Ext 2.2`: enabled under finite `max_inv_snapshot` whenever inventory covers the template!)
@@ -1717,19 +1749,28 @@ def realize_open_catalog_sculpted(
     else:
         best_sel_iou = -1.0
         core_cell_thresh = default_thr
-        eff_phases_sel = ((0, 0), (10, 0), (0, 10), (10, 10)) if view_priority is not None else cand_phases_sel
-        eff_threshs_sel = (18, 24, 30, 36, 42) if view_priority is not None else cand_threshs_sel
-        for ph_try in eff_phases_sel:
-            for thr_try in eff_threshs_sel:
-                est_iou = _fast_est_plan_occ6_iou([ph_try] * n_plates_z, {}, thr_try)
-                if ph_try == best_ground_phase:
-                    est_iou += 2.0e-4
-                if thr_try == default_thr:
-                    est_iou += 1.0e-4
-                if est_iou > best_sel_iou:
-                    best_sel_iou = est_iou
-                    best_ground_phase = ph_try
-                    core_cell_thresh = thr_try
+        is_box_megastructure = (w_x * w_y) >= 169 and adaptive_target.mesh_surf_pts.shape[0] == 0
+        if is_box_megastructure and view_priority is None:
+            eff_phases_sel = (best_ground_phase,)
+            eff_threshs_sel = (default_thr,)
+        else:
+            eff_phases_sel = ((0, 0), (10, 0), (0, 10), (10, 10)) if view_priority is not None else cand_phases_sel
+            eff_threshs_sel = (18, 24, 30, 36, 42) if view_priority is not None else cand_threshs_sel
+        if len(eff_phases_sel) == 1 and len(eff_threshs_sel) == 1:
+            best_ground_phase = eff_phases_sel[0]
+            core_cell_thresh = eff_threshs_sel[0]
+        else:
+            for ph_try in eff_phases_sel:
+                for thr_try in eff_threshs_sel:
+                    est_iou = _fast_est_plan_occ6_iou([ph_try] * n_plates_z, {}, thr_try)
+                    if ph_try == best_ground_phase:
+                        est_iou += 2.0e-4
+                    if thr_try == default_thr:
+                        est_iou += 1.0e-4
+                    if est_iou > best_sel_iou:
+                        best_sel_iou = est_iou
+                        best_ground_phase = ph_try
+                        core_cell_thresh = thr_try
 
         layer_phase = [best_ground_phase] * n_plates_z
         jumper_bridge_layers = {}
@@ -1770,6 +1811,8 @@ def realize_open_catalog_sculpted(
             else [3 * c_i for c_i in range(1, n_plates_z // 3)]
         )
         for p0_i in cand_p0_inv:
+            if _early_deadline_hit():
+                return _early_expired_return()
             if (p0_i > 0 and (p0_i - 1) in jumper_bridge_layers) or any(
                 (p0_i + q_i) in jumper_bridge_layers for q_i in range(3) if (p0_i + q_i) < n_plates_z
             ):
@@ -1988,6 +2031,8 @@ def realize_open_catalog_sculpted(
         )
     if support_policy == "minimal_permanent_pillars":
         for p in range(n_plates_z - 1, 0, -1):
+            if _early_deadline_hit():
+                return _early_expired_return()
             if p in jumper_bridge_layers or not np.any(core_occ[:, :, p]):
                 continue
             p_below = p - 1
@@ -2289,6 +2334,8 @@ def realize_open_catalog_sculpted(
     # sitting on `core_occ[ix, iy, p - 1]` whose marginal `5x5x6 LDU` slice (`above ceil(8*p / 6)`) adds more
     # empty overshoot than mesh intersection (`in_marg < 0.45 * tot_marg` on thick meshes, `< 0.35` on thin frames).
     for _prune_pass in range(2):
+        if _early_deadline_hit():
+            return _early_expired_return()
         if is_thin_regime:
             marg_ratio = 0.20 if has_thin_panel_kit else 0.35
         else:
@@ -2355,6 +2402,8 @@ def realize_open_catalog_sculpted(
             seg_s = seg_e
 
         for p0 in reversed(phase_course_starts):
+            if _early_deadline_hit():
+                return _early_expired_return()
             if p0 == 0 and foundation_policy != FoundationPolicy.CLUTCHED_BASEPLATE:
                 continue
             p_top = p0 + 2
@@ -2387,6 +2436,8 @@ def realize_open_catalog_sculpted(
         # while their inner `10 LDU` half is present (`>= 26 / 96`), exposing outward SNOT spines for `8 LDU` tiles!
         if has_snot_core:
             for p0_l in reversed(phase_course_starts):
+                if _early_deadline_hit():
+                    return _early_expired_return()
                 if p0_l == 0 and foundation_policy != FoundationPolicy.CLUTCHED_BASEPLATE:
                     continue
                 if (p0_l + 3) in jumper_bridge_layers:
@@ -2973,7 +3024,10 @@ def realize_open_catalog_sculpted(
         pil_zb = [[sum((1 << p_k) for p_k, v_k in enumerate(col_k) if v_k) for col_k in row_k] for row_k in pillar_added_occ.tolist()]
         snot_zb = [[sum((1 << p_k) for p_k, v_k in enumerate(col_k) if v_k) for col_k in row_k] for row_k in snot_spine_protected.tolist()]
         perim_offsets = ((1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (-2, 0), (0, 2), (0, -2))
-        for p_sl0 in range(n_plates_z):
+        skip_s3_box_megastructure = (w_x * w_y) >= 169 and adaptive_target.mesh_surf_pts.shape[0] == 0
+        for p_sl0 in (() if skip_s3_box_megastructure else range(n_plates_z)):
+            if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                break
             if p_sl0 in jumper_bridge_layers or (p_sl0 == 0 and foundation_policy != FoundationPolicy.CLUTCHED_BASEPLATE):
                 continue
             ph_s = layer_phase[p_sl0]
@@ -3687,7 +3741,11 @@ def realize_open_catalog_sculpted(
 
     # Place flush `4 LDU`-thin vertical perimeter brackets (`44728`, `99780`, `99207` — all `CC-BY-4.0`)
     # on `1x2` perimeter plate runs whenever a `4 LDU` (`1` sub-voxel) outer wall/taper slice strictly improves `occ6` IoU!
-    bracket_cands = [bpid for bpid in ("44728", "99780", "99207") if bpid in kit_set]
+    bracket_cands = (
+        []
+        if ((w_x * w_y) >= 169 and adaptive_target.mesh_surf_pts.shape[0] == 0)
+        else [bpid for bpid in ("44728", "99780", "99207") if bpid in kit_set]
+    )
     if bracket_cands:
         planned_blade_boxes: List[LDUBox] = []
         for bpid in bracket_cands:
@@ -3795,6 +3853,8 @@ def realize_open_catalog_sculpted(
     # Fuse aligned 3-plate (`24 LDU`) runs where phase is identical, all 3 layers are True, and top isn't reserved smooth-tile
     p_idx = 0
     while p_idx + 2 < n_plates_z:
+        if _early_deadline_hit():
+            return _early_expired_return()
         if (
             p_idx not in jumper_bridge_layers
             and (p_idx + 1) not in jumper_bridge_layers
@@ -4110,6 +4170,8 @@ def realize_open_catalog_sculpted(
 
     # Tile remaining `8 LDU` plate layers (tiling `must_be_smooth_tile_occ` corner cells with `3070b` smooth tiles!)
     for p in range(n_plates_z):
+        if _early_deadline_hit():
+            return _early_expired_return()
         if p in jumper_bridge_layers:
             continue
         z0 = p * 8
@@ -4440,6 +4502,9 @@ def realize_open_catalog_sculpted(
     deferred_lp_in_batch = False
     batch_new_commits: List[Tuple[str, LDUFrame, bool]] = []
 
+    def _deadline_expired() -> bool:
+        return deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s
+
     def _try_commit_part(
         pid_c: str,
         pose_c: LDUFrame,
@@ -4447,8 +4512,11 @@ def realize_open_catalog_sculpted(
         check_csg_strict: bool = False,
         budget_lp: bool = False,
         defer_lp: bool = False,
+        plumb_only: bool = False,
     ) -> bool:
         nonlocal base_witness, base_lp_eta, skin_lp_calls, consec_skin_lp_fails, deferred_lp_in_batch
+        if _deadline_expired():
+            return False
         if rem_inv is not None and rem_inv.get(pid_c, 0) <= 0:
             return False
         prim_c = get_brick_primitive(pid_c)
@@ -4477,7 +4545,7 @@ def realize_open_catalog_sculpted(
                         foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY
                         and wbs
                         and any(
-                            b.zmin <= 0
+                            abs(float(b.zmin) - ground_plane_z_ldu) <= 0.25
                             and (b.xmin + 0.5)
                             <= (
                                 sum(float(bx.volume_ldu3) * 0.5 * (bx.xmin + bx.xmax) for bx in wbs)
@@ -4507,14 +4575,17 @@ def realize_open_catalog_sculpted(
                     base_witness=base_witness,
                     hop_cache=plumb_hop_cache,
                     foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
                 )
-                if not can_ext and state.num_parts >= 40:
+                if not can_ext and state.num_parts >= 40 and not defer_lp:
                     can_ext, peak_d = kernel.validator.verify_two_pier_bearing_compression(
-                        state, foundation_policy=foundation_policy
+                        state,
+                        foundation_policy=foundation_policy,
+                        ground_plane_z_ldu=ground_plane_z_ldu,
                     )
                 if can_ext and max(base_lp_eta, peak_d) <= 1.0 - 1e-5:
                     stable_ok = True
-            elif (
+            if (
                 not stable_ok
                 and defer_lp
                 and foundation_policy in (FoundationPolicy.CLUTCHED_BASEPLATE, FoundationPolicy.TABLE_FRICTION_ONLY)
@@ -4524,13 +4595,22 @@ def realize_open_catalog_sculpted(
                 stable_ok = True
                 deferred_lp_in_batch = True
             if not stable_ok:
+                if plumb_only:
+                    plumb_hop_cache.pop(trial_iid, None)
+                    state.pop_trial_part(tok)
+                    return False
                 if budget_lp and (skin_lp_calls >= max_skin_lp_calls or consec_skin_lp_fails >= 10):
                     plumb_hop_cache.pop(trial_iid, None)
                     state.pop_trial_part(tok)
                     return False
                 if budget_lp:
                     skin_lp_calls += 1
-                eq_res = kernel.validator.evaluate(state, foundation_policy=foundation_policy)
+                eq_res = kernel.validator.evaluate(
+                    state,
+                    foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=deadline_monotonic_s,
+                )
                 if not eq_res.is_stable:
                     if budget_lp:
                         consec_skin_lp_fails += 1
@@ -4568,70 +4648,88 @@ def realize_open_catalog_sculpted(
 
     # Execute planned bottom-up core & jumper layers; queue cantilevered spans that need neighbor
     # bridging within the same Z layer for a second pass right after pier anchors commit!
+    if _deadline_expired():
+        planned_by_z.clear()
     for z0 in sorted(planned_by_z.keys()):
+        if _deadline_expired():
+            break
         layer_items = planned_by_z[z0]
-        is_gr = z0 == 0
+        is_gr = abs(float(z0) - ground_plane_z_ldu) <= 0.25
         pending = list(layer_items)
         use_course_defer = is_megastructure_footprint and not is_gr and not is_hollow_shell_active
         if use_course_defer:
-            snap_course_parts = [(pl_s.part_id, pl_s.pose, pl_s.is_grounded) for _, pl_s in sorted(state.placed_parts.items())]
-            snap_course_occ6 = occ6_live.copy()
-            snap_course_inter = inter_live
-            snap_course_over = over_live
-            snap_course_counts = dict(build_mold_counts)
-            snap_course_rem = dict(rem_inv) if rem_inv is not None else None
-            deferred_lp_in_batch = False
-            batch_new_commits = []
-        for _pass in range(4):
-            if not pending:
-                break
-            still_pending: List[Tuple[str, LDUFrame]] = []
-            progressed = False
-            for pid_l, pose_l in pending:
-                if _try_commit_part(
-                    pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False, defer_lp=use_course_defer
-                ):
-                    progressed = True
-                else:
-                    still_pending.append((pid_l, pose_l))
-            pending = still_pending
-            if not progressed:
-                break
-        if use_course_defer and deferred_lp_in_batch:
-            eq_course = kernel.validator.evaluate(state, foundation_policy=foundation_policy)
-            if eq_course.is_stable:
-                base_witness = eq_course.primal_witness
-                base_lp_eta = float(eq_course.peak_utilization)
-                plumb_deltas.clear()
-            else:
-                # Re-run course per-part if batch LP rejected an overhanging piece
-                state = AssemblyState()
-                for p_rb, f_rb, g_rb in snap_course_parts:
-                    state.place_root_part(p_rb, f_rb, is_grounded=g_rb)
-                occ6_live[:] = snap_course_occ6
-                inter_live = snap_course_inter
-                over_live = snap_course_over
-                build_mold_counts = snap_course_counts
-                if snap_course_rem is not None:
-                    rem_inv = snap_course_rem
-                base_witness = None
-                base_lp_eta = 0.0
-                plumb_deltas.clear()
-                plumb_hop_cache.clear()
-                pending = list(layer_items)
-                for _pass_fb in range(4):
-                    if not pending:
+            g_xs_oc = [float(b.xmin) for p in state.placed_parts.values() if p.is_grounded for b in p.world_boxes] + [
+                float(b.xmax) for p in state.placed_parts.values() if p.is_grounded for b in p.world_boxes
+            ]
+            g_ys_oc = [float(b.ymin) for p in state.placed_parts.values() if p.is_grounded for b in p.world_boxes] + [
+                float(b.ymax) for p in state.placed_parts.values() if p.is_grounded for b in p.world_boxes
+            ]
+            gx_c = 0.5 * (min(g_xs_oc) + max(g_xs_oc)) if g_xs_oc else 10.0 * float(w_x)
+            gy_c = 0.5 * (min(g_ys_oc) + max(g_ys_oc)) if g_ys_oc else 10.0 * float(w_y)
+            pending.sort(key=lambda it: (float(it[1].pos[0]) - gx_c) ** 2 + (float(it[1].pos[1]) - gy_c) ** 2)
+            # Phase 1: Permanently commit all plumb-supported core bricks in O(1) with ZERO LP solves!
+            for _pass_pl in range(3):
+                if not pending or _deadline_expired():
+                    break
+                still_pl: List[Tuple[str, LDUFrame]] = []
+                prog_pl = False
+                for pid_l, pose_l in pending:
+                    if _deadline_expired():
+                        still_pl.append((pid_l, pose_l))
+                        continue
+                    if _try_commit_part(
+                        pid_l, pose_l, grounded_c=False, check_csg_strict=False, budget_lp=False, defer_lp=False, plumb_only=True
+                    ):
+                        prog_pl = True
+                    else:
+                        still_pl.append((pid_l, pose_l))
+                pending = still_pl
+                if not prog_pl:
+                    break
+            # Phase 2: Remaining overhanging/cantilevered bricks sorted center-outward; stop outward once clutch saturates!
+            if pending and not _deadline_expired():
+                cant_lp_fails = 0
+                for _pass_c in range(2):
+                    if not pending or _deadline_expired() or cant_lp_fails >= 3:
                         break
-                    still_fb: List[Tuple[str, LDUFrame]] = []
-                    prog_fb = False
+                    still_c: List[Tuple[str, LDUFrame]] = []
+                    prog_c = False
                     for pid_l, pose_l in pending:
-                        if _try_commit_part(pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False, defer_lp=False):
-                            prog_fb = True
+                        if _deadline_expired() or cant_lp_fails >= 3:
+                            still_c.append((pid_l, pose_l))
+                            continue
+                        prev_parts_n = state.num_parts
+                        if _try_commit_part(
+                            pid_l, pose_l, grounded_c=False, check_csg_strict=False, budget_lp=True, defer_lp=False, plumb_only=False
+                        ):
+                            prog_c = True
+                            cant_lp_fails = 0
                         else:
-                            still_fb.append((pid_l, pose_l))
-                    pending = still_fb
-                    if not prog_fb:
+                            still_c.append((pid_l, pose_l))
+                            if state.num_parts == prev_parts_n:
+                                cant_lp_fails += 1
+                    pending = still_c
+                    if not prog_c:
                         break
+        else:
+            for _pass in range(4):
+                if not pending or _deadline_expired():
+                    break
+                still_pending: List[Tuple[str, LDUFrame]] = []
+                progressed = False
+                for pid_l, pose_l in pending:
+                    if _deadline_expired():
+                        still_pending.append((pid_l, pose_l))
+                        continue
+                    if _try_commit_part(
+                        pid_l, pose_l, grounded_c=is_gr, check_csg_strict=False, budget_lp=False, defer_lp=False
+                    ):
+                        progressed = True
+                    else:
+                        still_pending.append((pid_l, pose_l))
+                pending = still_pending
+                if not progressed:
+                    break
         # Fallback: if any reserved multi-box slope/inverted-slope failed insertion/LP, fill its `core_occ` cells
         # with `1x1` bricks/plates so zero structural holes propagate to upper courses!
         if pending:
@@ -4673,7 +4771,7 @@ def realize_open_catalog_sculpted(
                                             z_fb - p1_box.zmin,
                                         ),
                                     )
-                                    _try_commit_part("3024", pose_p1, grounded_c=(z_fb == 0), check_csg_strict=False, budget_lp=False)
+                                    _try_commit_part("3024", pose_p1, grounded_c=(z_fb == 0), check_csg_strict=False, budget_lp=True)
 
     # 4. Exact Global `ΔIoU` Open-Catalog Sculptural, Jumper & 24-Orientation SNOT Skinning
     #    Build skinning candidate part list from `kit_ids`:
@@ -5281,12 +5379,17 @@ def realize_open_catalog_sculpted(
 
         if deferred_lp_in_batch:
             skin_lp_calls += 1
-            eq_wave = kernel.validator.evaluate(state, foundation_policy=foundation_policy)
+            eq_wave = kernel.validator.evaluate(
+                state,
+                foundation_policy=foundation_policy,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=deadline_monotonic_s,
+            )
             if eq_wave.is_stable:
                 base_witness = eq_wave.primal_witness
                 base_lp_eta = float(eq_wave.peak_utilization)
                 plumb_deltas.clear()
-            else:
+            elif not eq_wave.budget_exceeded:
                 # Roll back speculative batch and replay per-part with exact individual LP certification
                 state = AssemblyState()
                 for p_rb, f_rb, g_rb in snap_parts_w:
@@ -5306,19 +5409,23 @@ def realize_open_catalog_sculpted(
                 deferred_lp_in_batch = False
                 committed_in_wave = 0
                 for p_rp, f_rp, g_rp in batch_new_commits:
+                    if _deadline_expired():
+                        break
                     if _try_commit_part(
                         p_rp, f_rp, grounded_c=g_rp, check_csg_strict=True, budget_lp=True, defer_lp=False
                     ):
                         committed_in_wave += 1
 
-        if committed_in_wave == 0:
+        if committed_in_wave == 0 or _deadline_expired():
             break
 
     # 4b. Exact Global `ΔIoU` Top-Surface & Leaf Part Prune (`~0.3 ms`): greedily prune any top-surface or
     #     degree-1 part that is net-negative at the final assembly IoU (up to 2 top-down passes), verifying
     #     monotone insertion corridors, full graph connectivity, and 6-DoF static stability on every removal.
-    if len(state.placed_parts) > 1 and mesh_sub_total > 0:
+    if len(state.placed_parts) > 1 and mesh_sub_total > 0 and not is_megastructure_footprint and not _deadline_expired():
         def _try_build_pruned_state(skip_iids: Set[int]) -> Optional[AssemblyState]:
+            if _deadline_expired():
+                return None
             cand_st = AssemblyState()
             for iid_r in sorted(state.placed_parts.keys()):
                 if iid_r in skip_iids:
@@ -5335,11 +5442,16 @@ def realize_open_catalog_sculpted(
                     return None
             if not cand_st.placed_parts:
                 return None
-            eq_pr = kernel.validator.evaluate(cand_st, foundation_policy=foundation_policy)
+            eq_pr = kernel.validator.evaluate(
+                cand_st,
+                foundation_policy=foundation_policy,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=deadline_monotonic_s,
+            )
             return cand_st if eq_pr.is_stable else None
 
         for _pr_pass in range(16):
-            if len(state.placed_parts) <= 1:
+            if len(state.placed_parts) <= 1 or _deadline_expired():
                 break
             adj_insts: Dict[int, Set[int]] = {k_i: set() for k_i in state.placed_parts}
             inst_zmax: Dict[int, int] = {
@@ -5969,7 +6081,9 @@ def realize_open_catalog_sculpted(
             best_view_sil = evaluate_camera_reprojection_fidelity(state, ad_occ6, view_priority).silhouette_iou_2d
         else:
             best_view_sil = -1.0
-        for f_plan_try in (() if (won_single_leg_slab or is_hollow_shell_active or is_megastructure_footprint) else cand_forced_plans):
+        for f_plan_try in (() if (won_single_leg_slab or is_hollow_shell_active or is_megastructure_footprint or _deadline_expired()) else cand_forced_plans):
+            if _deadline_expired():
+                break
             st_try, _, _ = realize_open_catalog_sculpted(
                 kernel=kernel,
                 coarse_target_field=coarse_target_field,
@@ -5987,6 +6101,8 @@ def realize_open_catalog_sculpted(
                 forbidden_support_boxes=forbidden_support_boxes,
                 hollow_shell_policy=hollow_shell_policy,
                 view_priority=view_priority,
+                deadline_monotonic_s=deadline_monotonic_s,
+                ground_plane_z_ldu=ground_plane_z_ldu,
                 _forced_plan=f_plan_try,
                 _pre_ret=ret_res,
                 _eval_only=True,
@@ -6012,7 +6128,7 @@ def realize_open_catalog_sculpted(
                 plumb_deltas.clear()
                 plumb_hop_cache.clear()
 
-    if not _eval_only and (rem_inv is None or max_inv_snapshot is not None) and not is_hollow_shell_active and not is_megastructure_footprint:
+    if not _eval_only and (rem_inv is None or max_inv_snapshot is not None) and not is_hollow_shell_active and not is_megastructure_footprint and not _deadline_expired():
         st_port = refine_open_catalog_blind_portfolio(
             kernel=kernel,
             state=state,
@@ -6206,7 +6322,12 @@ def realize_open_catalog_sculpted(
                     except ValueError:
                         replay_ok = False
                         break
-            if replay_ok and kernel.validator.evaluate(trial_sm, foundation_policy=foundation_policy).is_stable:
+            if replay_ok and not _deadline_expired() and kernel.validator.evaluate(
+                trial_sm,
+                foundation_policy=foundation_policy,
+                ground_plane_z_ldu=ground_plane_z_ldu,
+                deadline_monotonic_s=deadline_monotonic_s,
+            ).is_stable:
                 state = trial_sm
                 base_witness = None
                 base_lp_eta = 0.0
@@ -6272,7 +6393,7 @@ def realize_open_catalog_sculpted(
 
     # 5c. Optional Semantic Landmark Attachment (`Phase 11 Ext 4B`)
     lm_attached_cnt = 0
-    if landmark_requests:
+    if landmark_requests and not _deadline_expired():
         from topo_brick.kernel.subassembly_realizer import attach_semantic_landmarks
 
         lm_res = attach_semantic_landmarks(
@@ -6283,22 +6404,28 @@ def realize_open_catalog_sculpted(
             allowed_part_ids=inv_allowed_for_ret,
             rem_inv=rem_inv,
             foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
         )
         lm_attached_cnt = len(lm_res)
 
     sculpt_elapsed_ms = (time.perf_counter() - t_sculpt0) * 1000.0
-    mean_de00, chrom_res, color_elapsed_ms = ChromaticAllocationStage.run(
-        state=state,
-        adaptive_target=adaptive_target,
-        verts_ldu=verts_ldu,
-        vertex_colors_rgb=vertex_colors_rgb,
-        colored_inventory=colored_inventory,
-        validator=kernel.validator,
-        foundation_policy=foundation_policy,
-        view_weight_grid_6=view_weight_grid_6,
-        view_priority=view_priority,
-        perceptual_color_fn=assign_perceptual_ldraw_colors,
-    )
+    if _deadline_expired():
+        mean_de00, chrom_res, color_elapsed_ms = 0.0, None, 0.0
+        eff_fine_tf_fn = lambda _occ: SparseTiledTargetField(boxes=())
+    else:
+        mean_de00, chrom_res, color_elapsed_ms = ChromaticAllocationStage.run(
+            state=state,
+            adaptive_target=adaptive_target,
+            verts_ldu=verts_ldu,
+            vertex_colors_rgb=vertex_colors_rgb,
+            colored_inventory=colored_inventory,
+            validator=kernel.validator,
+            foundation_policy=foundation_policy,
+            view_weight_grid_6=view_weight_grid_6,
+            view_priority=view_priority,
+            perceptual_color_fn=assign_perceptual_ldraw_colors,
+        )
+        eff_fine_tf_fn = _build_fine_target_field_from_occ6
     return TraceCertifyStage.finalize(
         state=state,
         occ6=occ6,
@@ -6312,7 +6439,7 @@ def realize_open_catalog_sculpted(
         chrom_res=chrom_res,
         landmarks_attached_count=lm_attached_cnt,
         plate_to_tile_values=set(PLATE_TO_SMOOTH_TILE_MAP.values()),
-        build_fine_tf_fn=_build_fine_target_field_from_occ6,
+        build_fine_tf_fn=eff_fine_tf_fn,
         count_exposed_studs_fn=count_exposed_upward_studs,
         diagnostics_cls=OpenCatalogRealizeDiagnostics,
         target_prep_ms=prep.target_prep_ms,

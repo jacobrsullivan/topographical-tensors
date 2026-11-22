@@ -7,6 +7,7 @@ Splitting, Parity-Aware Sparse-Kit Course Set-Packing MILP, and `InventoryShortf
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
@@ -54,7 +55,12 @@ class ChromaticAllocationResult:
         return float((self.fifo_baseline_skin_mean_delta_e00 - self.skin_mean_delta_e00) / denom)
 
 
+@lru_cache(maxsize=1)
 def _palette_maps() -> Tuple[Dict[int, np.ndarray], np.ndarray, np.ndarray]:
+    from topo_brick.interface.ldraw_palette import (
+        LDRAW_FULL_PALETTE_RECORDS,
+        REBRICKABLE_TO_LDRAW_COLOR_ALIASES,
+    )
     from topo_brick.kernel.open_catalog_realizer import (
         LDRAW_SOLID_PALETTE_LAB,
         LDRAW_SOLID_PALETTE_SRGB,
@@ -65,17 +71,36 @@ def _palette_maps() -> Tuple[Dict[int, np.ndarray], np.ndarray, np.ndarray]:
     id_to_lab: Dict[int, np.ndarray] = {
         int(codes[i]): LDRAW_SOLID_PALETTE_LAB[i] for i in range(len(codes))
     }
-    # Official LDraw LDConfig.ldr sRGB values for non-solid / metallic retail Set 10698-1 colors
-    extra_srgb: Dict[int, Tuple[float, float, float]] = {
-        36: (201.0, 26.0, 9.0),     # Trans-Red
-        47: (252.0, 252.0, 252.0),  # Trans-Clear
-        182: (240.0, 143.0, 28.0),  # Trans-Orange
-        297: (170.0, 127.0, 46.0),  # Pearl Gold
-    }
-    for eid, rgb_t in extra_srgb.items():
-        if eid not in id_to_lab:
-            id_to_lab[eid] = srgb_to_cielab(np.asarray(rgb_t, dtype=np.float64))
+    # Populate all 322 official LDConfig.ldr colors so zero official LDraw color IDs fall back to gray (TB-FIX-03)
+    missing_recs = [r for r in LDRAW_FULL_PALETTE_RECORDS if r.code not in id_to_lab]
+    if missing_recs:
+        rgb_mat = np.array([r.rgb_u8 for r in missing_recs], dtype=np.float64)
+        lab_mat = srgb_to_cielab(rgb_mat)
+        for idx_m, rec in enumerate(missing_recs):
+            id_to_lab[int(rec.code)] = lab_mat[idx_m]
+    for rb_id, ld_id in REBRICKABLE_TO_LDRAW_COLOR_ALIASES.items():
+        if rb_id not in id_to_lab and ld_id in id_to_lab:
+            id_to_lab[int(rb_id)] = id_to_lab[int(ld_id)]
     return id_to_lab, codes, LDRAW_SOLID_PALETTE_LAB
+
+
+@lru_cache(maxsize=1)
+def _palette_finish_map() -> Dict[int, str]:
+    from topo_brick.interface.ldraw_palette import (
+        LDRAW_FULL_PALETTE_RECORDS,
+        REBRICKABLE_TO_LDRAW_COLOR_ALIASES,
+    )
+
+    fmap: Dict[int, str] = {int(r.code): r.finish for r in LDRAW_FULL_PALETTE_RECORDS}
+    for rb_id, ld_id in REBRICKABLE_TO_LDRAW_COLOR_ALIASES.items():
+        if rb_id not in fmap and ld_id in fmap:
+            fmap[int(rb_id)] = fmap[int(ld_id)]
+    return fmap
+
+
+def get_ldraw_color_finish(color_id: int) -> str:
+    """Return official `LDConfig.ldr` finish (`SOLID`, `TRANSPARENT`, `PEARLESCENT`, `METALLIC`, etc.)."""
+    return _palette_finish_map().get(int(color_id), "UNKNOWN")
 
 
 def _color_id_to_lab(color_id: int, id_to_lab: Dict[int, np.ndarray]) -> np.ndarray:
@@ -333,20 +358,32 @@ def allocate_inventory_colors_min_cost(
         n_i = len(iids)
         n_c = len(c_buckets)
         c_labs = np.stack([_color_id_to_lab(cid, id_to_lab) for cid, _ in c_buckets], axis=0)
+        fmap = _palette_finish_map()
+        finish_pen_vec = np.zeros(n_c, dtype=np.float64)
+        if not colored_inventory.enable_translucency:
+            for c_idx_f, (cid_f, _) in enumerate(c_buckets):
+                fin_tag = fmap.get(int(cid_f), "SOLID")
+                if fin_tag == "TRANSPARENT":
+                    finish_pen_vec[c_idx_f] = float(colored_inventory.trans_substitution_penalty_de00)
+                elif fin_tag != "SOLID":
+                    finish_pen_vec[c_idx_f] = float(colored_inventory.pearl_metallic_penalty_de00)
 
         # Build `(n_i, n_c)` cost matrix Φ_{i,c}
         cost_mat = np.zeros((n_i, n_c), dtype=np.float64)
-        # Precompute min distance from each color `c` to any visible skin target so clashing colors get buried
-        clash_scores = np.min(
-            ciede2000_delta_e(c_labs[:, None, :], skin_lab_arr[None, :, :]),
-            axis=1,
+        # Precompute min distance from each color `c` to any visible skin target so clashing/transparent colors get buried
+        clash_scores = (
+            np.min(
+                ciede2000_delta_e(c_labs[:, None, :], skin_lab_arr[None, :, :]),
+                axis=1,
+            )
+            + finish_pen_vec
         )
         for row_idx, iid in enumerate(iids):
             ex_i = exposure[iid]
             if ex_i.is_occluded_core and colored_inventory.allow_hidden_color_substitution:
                 cost_mat[row_idx, :] = -1e-3 * clash_scores
             else:
-                de_vec = ciede2000_delta_e(target_labs[iid][None, :], c_labs).reshape(-1)
+                de_vec = ciede2000_delta_e(target_labs[iid][None, :], c_labs).reshape(-1) + finish_pen_vec
                 w_area = math.sqrt(max(1.0, float(ex_i.exterior_facelets)) / max(1.0, max_ext_area))
                 w_tot = w_area * max(0.1, float(ex_i.mean_view_weight))
                 cost_mat[row_idx, :] = w_tot * de_vec

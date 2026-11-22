@@ -84,11 +84,13 @@ def test_p11_lazy_exports_and_schema_v110_digest_hygiene() -> None:
     for name in required_exports:
         assert hasattr(topo_brick, name), f"Missing top-level export: {name}"
 
-    assert CERTIFICATE_SCHEMA_VERSION == "1.1.0"
+    assert CERTIFICATE_SCHEMA_VERSION == "1.1.1"
+    sha_111 = compute_catalog_sha256("1.1.1")
     sha_110 = compute_catalog_sha256("1.1.0")
     sha_100 = compute_catalog_sha256("1.0.0")
-    assert len(sha_110) == 64 and len(sha_100) == 64
+    assert len(sha_111) == 64 and len(sha_110) == 64 and len(sha_100) == 64
     assert sha_110 != sha_100, "Schema 1.1.0 digest must bind compiled_landmark_detail_index.json.gz"
+    assert sha_111 != sha_110, "Schema 1.1.1 digest must bind updated Set 10698-1 LDraw color 57 inventory"
 
 
 def test_p11_independent_verifier_ast_isolation() -> None:

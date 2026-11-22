@@ -28,6 +28,8 @@ from __future__ import annotations
 import importlib
 from typing import Any, Dict, List, Tuple
 
+__version__: str = "5.2.1"
+
 _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "STUD_PITCH_LDU": ("topo_brick.interface.ldu_frames", "STUD_PITCH_LDU"),
     "HALF_STUD_LDU": ("topo_brick.interface.ldu_frames", "HALF_STUD_LDU"),
@@ -437,9 +439,22 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "TargetPrepStage": ("topo_brick.kernel", "TargetPrepStage"),
     "ChromaticAllocationStage": ("topo_brick.kernel", "ChromaticAllocationStage"),
     "TraceCertifyStage": ("topo_brick.kernel", "TraceCertifyStage"),
+    "MechanicsVerificationProfile": ("topo_brick.evaluation.independent_verifier", "MechanicsVerificationProfile"),
+    "VerifierResourceLimits": ("topo_brick.evaluation.independent_verifier", "VerifierResourceLimits"),
+    "verify_certificate_in_isolated_worker": ("topo_brick.evaluation.independent_verifier", "verify_certificate_in_isolated_worker"),
+    "CatalogProvenanceError": ("topo_brick.interface.release_provenance", "CatalogProvenanceError"),
+    "CatalogResourceLimitError": ("topo_brick.interface.ldraw_shadow_catalog_compiler", "CatalogResourceLimitError"),
+    "PINNED_RELEASE_CATALOG_SHA256_V110": ("topo_brick.interface.release_provenance", "PINNED_RELEASE_CATALOG_SHA256_V110"),
+    "PINNED_RELEASE_CATALOG_SHA256_V111": ("topo_brick.interface.release_provenance", "PINNED_RELEASE_CATALOG_SHA256_V111"),
+    "LDRAW_FULL_PALETTE_RECORDS": ("topo_brick.interface.ldraw_palette", "LDRAW_FULL_PALETTE_RECORDS"),
+    "LDRAW_COLOR_BY_CODE": ("topo_brick.interface.ldraw_palette", "LDRAW_COLOR_BY_CODE"),
+    "LDrawColorRecord": ("topo_brick.interface.ldraw_palette", "LDrawColorRecord"),
+    "resolve_ldraw_color_record": ("topo_brick.interface.ldraw_palette", "resolve_ldraw_color_record"),
+    "get_ldraw_color_finish": ("topo_brick.interface.ldraw_palette", "get_ldraw_color_finish"),
 }
 
 __all__: List[str] = [
+    "__version__",
     "STUD_PITCH_LDU",
     "HALF_STUD_LDU",
     "PLATE_HEIGHT_LDU",
@@ -848,6 +863,18 @@ __all__: List[str] = [
     "TargetPrepStage",
     "ChromaticAllocationStage",
     "TraceCertifyStage",
+    "MechanicsVerificationProfile",
+    "VerifierResourceLimits",
+    "verify_certificate_in_isolated_worker",
+    "CatalogProvenanceError",
+    "CatalogResourceLimitError",
+    "PINNED_RELEASE_CATALOG_SHA256_V110",
+    "PINNED_RELEASE_CATALOG_SHA256_V111",
+    "LDRAW_FULL_PALETTE_RECORDS",
+    "LDRAW_COLOR_BY_CODE",
+    "LDrawColorRecord",
+    "resolve_ldraw_color_record",
+    "get_ldraw_color_finish",
 ]
 
 

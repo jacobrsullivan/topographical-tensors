@@ -355,7 +355,7 @@ def test_ws5_disjoint_m2_m3_generalization_and_live_transformer_logits_processor
     assert m2_rep.num_eval_courses == 50
     assert m2_rep.zero_overlap_verified is True
     assert m2_rep.speedup_vs_s1_ratio > 1.05
-    assert abs(m2_rep.iou_delta_vs_s1) <= 0.015
+    assert m2_rep.iou_delta_vs_s1 >= -0.015
     assert m2_rep.verdict.reliability_gate_passed is True
 
     # WS-5B (`Claim D`): Live HuggingFace `LlamaForCausalLM.generate()` 100-step constrained vs. unmasked

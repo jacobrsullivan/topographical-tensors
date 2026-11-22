@@ -22,11 +22,16 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import hashlib
+import hmac
 import json
 import math
+import multiprocessing as mp
+import os
 from pathlib import Path
+import stat
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+import time
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
 import numpy as np
 from scipy.optimize import linprog
 from scipy.sparse import csc_matrix
@@ -41,6 +46,14 @@ from topo_brick.interface.brick_catalog import (
 )
 from topo_brick.interface.ldu_frames import LDUBox, LDUFrame, rot_id_to_matrix
 from topo_brick.interface.port_manifold import AssemblyState, get_admissible_socket_pocket_ldu
+from topo_brick.interface.release_provenance import (
+    CatalogProvenanceError,
+    PINNED_RELEASE_ASSET_DIGESTS_V5_2,
+    PINNED_RELEASE_CATALOG_SHA256_BY_SCHEMA,
+    PINNED_RELEASE_SET_10698_V110_SHA256,
+    is_valid_sha256_hex,
+    validate_compiled_manifest_dict,
+)
 from topo_brick.interface.se3_kinematics import (
     ContinuousSE3Pose,
     OBB3D,
@@ -51,8 +64,8 @@ from topo_brick.interface.se3_kinematics import (
 )
 
 
-CERTIFICATE_SCHEMA_VERSION: str = "1.1.0"
-SUPPORTED_CERTIFICATE_SCHEMAS: Tuple[str, ...] = ("1.0.0", "1.1.0")
+CERTIFICATE_SCHEMA_VERSION: str = "1.1.1"
+SUPPORTED_CERTIFICATE_SCHEMAS: Tuple[str, ...] = ("1.0.0", "1.1.0", "1.1.1")
 _VALID_ASSEMBLY_MODES: Tuple[str, ...] = ("cubic_ldu", "continuous_se3")
 _VALID_FOUNDATION_POLICIES: Tuple[str, ...] = (
     "clutched_baseplate",
@@ -79,15 +92,28 @@ def _stat_cached_file_sha256(path: Path, missing_sentinel: str) -> str:
     return digest
 
 
-def compute_catalog_sha256(schema_version: str = CERTIFICATE_SCHEMA_VERSION) -> str:
+def _raw_file_sha256(path: Path, missing_sentinel: str) -> str:
+    """Compute SHA-256 directly from raw disk bytes with zero stat-cache trust (`S8`)."""
+    if not path.is_file():
+        return missing_sentinel
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compute_catalog_sha256(
+    schema_version: str = CERTIFICATE_SCHEMA_VERSION,
+    *,
+    recompute_from_disk: bool = False,
+) -> str:
     """
-    Compute a deterministic SHA-256 digest over raw on-disk archive bytes and in-memory primitives (`F7`):
+    Compute a deterministic SHA-256 digest over raw on-disk archive bytes and in-memory primitives (`F7`, `S8`):
       - `EXTENDED_BRICK_CATALOG` (`213` curated + `TIER_A` primitives),
       - `COMPILED_LDRAW_CATALOG.archive_sha256` (`compiled_ldraw_catalog.json.gz` raw bytes),
       - `COMPILED_LDRAW_CATALOG.coacd_sha256` (`compiled_coacd_hulls.npz` raw bytes, schema `>= 1.1.0`),
       - `compiled_mold_retrieval_index.npz` raw bytes,
       - `compiled_landmark_detail_index.json.gz` raw bytes (schema `>= 1.1.0`),
       - `set_10698_1_rebrickable_inventory.json` raw bytes (schema `>= 1.1.0`).
+    When `recompute_from_disk=True`, bypasses `(mtime_ns, st_size)` caches and enforces complete
+    manifest provenance (`S8`).
     """
     global _BASE_EXTENDED_CATALOG_SHA256
     if _BASE_EXTENDED_CATALOG_SHA256 is None:
@@ -129,23 +155,53 @@ def compute_catalog_sha256(schema_version: str = CERTIFICATE_SCHEMA_VERSION) -> 
     from topo_brick.interface.ldraw_shadow_catalog_compiler import COMPILED_LDRAW_CATALOG
 
     if COMPILED_LDRAW_CATALOG.is_available:
+        if getattr(COMPILED_LDRAW_CATALOG, "_allow_unverified_dev_catalog", False):
+            raise CatalogProvenanceError(
+                "Refusing certificate verification against an unverified dev catalog."
+            )
         iface_dir = Path(__file__).resolve().parent.parent / "interface"
-        ret_sha = _stat_cached_file_sha256(iface_dir / "compiled_mold_retrieval_index.npz", "no_idx")
+        read_fn = _raw_file_sha256 if recompute_from_disk else _stat_cached_file_sha256
+        if recompute_from_disk:
+            manifest_d = validate_compiled_manifest_dict(
+                json.loads(COMPILED_LDRAW_CATALOG._manifest_path.read_text(encoding="utf-8")),
+                require_coacd_sha256=COMPILED_LDRAW_CATALOG._coacd_npz_path.is_file(),
+                require_structural_metadata=True,
+            )
+            cat_gz_sha = _raw_file_sha256(COMPILED_LDRAW_CATALOG._catalog_gz_path, "not_compiled")
+            if not hmac.compare_digest(cat_gz_sha, str(manifest_d["catalog_gz_sha256"]).strip().lower()):
+                raise CatalogProvenanceError(
+                    f"Compiled catalog SHA-256 mismatch: file={cat_gz_sha} vs manifest={manifest_d['catalog_gz_sha256']}"
+                )
+            if COMPILED_LDRAW_CATALOG._coacd_npz_path.is_file():
+                coacd_sha = _raw_file_sha256(COMPILED_LDRAW_CATALOG._coacd_npz_path, "no_coacd")
+                if not hmac.compare_digest(coacd_sha, str(manifest_d["coacd_npz_sha256"]).strip().lower()):
+                    raise CatalogProvenanceError(
+                        f"Compiled CoACD archive SHA-256 mismatch: file={coacd_sha} vs manifest={manifest_d['coacd_npz_sha256']}"
+                    )
+            else:
+                coacd_sha = "no_coacd"
+        else:
+            cat_gz_sha = COMPILED_LDRAW_CATALOG.archive_sha256
+            coacd_sha = COMPILED_LDRAW_CATALOG.coacd_sha256
+
+        ret_sha = read_fn(iface_dir / "compiled_mold_retrieval_index.npz", "no_idx")
         if schema_version == "1.0.0":
             comb_v10 = hashlib.sha256()
             comb_v10.update(
-                f"{_BASE_EXTENDED_CATALOG_SHA256}:{COMPILED_LDRAW_CATALOG.archive_sha256}:{ret_sha}".encode(
-                    "utf-8"
-                )
+                f"{_BASE_EXTENDED_CATALOG_SHA256}:{cat_gz_sha}:{ret_sha}".encode("utf-8")
             )
             return comb_v10.hexdigest()
-        lm_sha = _stat_cached_file_sha256(iface_dir / "compiled_landmark_detail_index.json.gz", "no_lm_idx")
-        rb_sha = _stat_cached_file_sha256(iface_dir / "set_10698_1_rebrickable_inventory.json", "no_rb_10698")
+        lm_sha = read_fn(iface_dir / "compiled_landmark_detail_index.json.gz", "no_lm_idx")
+        rb_sha = read_fn(iface_dir / "set_10698_1_rebrickable_inventory.json", "no_rb_10698")
+        if schema_version == "1.1.0" and hmac.compare_digest(
+            rb_sha, PINNED_RELEASE_ASSET_DIGESTS_V5_2["set_10698_1_rebrickable_inventory.json"]
+        ):
+            rb_sha = PINNED_RELEASE_SET_10698_V110_SHA256
         comb = hashlib.sha256()
         comb.update(
             (
-                f"{_BASE_EXTENDED_CATALOG_SHA256}:{COMPILED_LDRAW_CATALOG.archive_sha256}:"
-                f"{COMPILED_LDRAW_CATALOG.coacd_sha256}:{ret_sha}:{lm_sha}:{rb_sha}"
+                f"{_BASE_EXTENDED_CATALOG_SHA256}:{cat_gz_sha}:"
+                f"{coacd_sha}:{ret_sha}:{lm_sha}:{rb_sha}"
             ).encode("utf-8")
         )
         return comb.hexdigest()
@@ -206,6 +262,7 @@ class VersionedCertificateArtifact:
     colored_inventory_spec: Optional[Dict[str, int]] = None
     forbidden_support_boxes: Tuple[Tuple[int, int, int, int, int, int], ...] = ()
     license_filter: str = "all"
+    ground_plane_z_ldu: float = 0.0
 
     def to_json_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -217,10 +274,14 @@ class VersionedCertificateArtifact:
         ]
         d["cached_dependencies"] = list(self.cached_dependencies)
         d["forbidden_support_boxes"] = [list(fb) for fb in self.forbidden_support_boxes]
+        d["ground_plane_z_ldu"] = float(self.ground_plane_z_ldu)
         return d
 
     @classmethod
     def from_json_dict(cls, data: Dict[str, Any]) -> "VersionedCertificateArtifact":
+        raw_gz = data.get("ground_plane_z_ldu", 0.0)
+        if isinstance(raw_gz, bool) or not isinstance(raw_gz, (int, float)) or not math.isfinite(float(raw_gz)):
+            raise ValueError(f"Invalid ground_plane_z_ldu: {raw_gz!r}")
         return cls(
             schema_version=str(data["schema_version"]),
             catalog_sha256=str(data["catalog_sha256"]),
@@ -258,6 +319,7 @@ class VersionedCertificateArtifact:
                 for fb in data.get("forbidden_support_boxes", ())
             ),
             license_filter=str(data.get("license_filter", "all")),
+            ground_plane_z_ldu=float(raw_gz),
         )
 
     def save_json(self, path: str | Path) -> None:
@@ -319,8 +381,14 @@ def export_certificate_artifact(
     forbidden_support_boxes: Sequence[LDUBox] = (),
     license_filter: str = "all",
     foundation_policy: Optional[str] = None,
+    ground_plane_z_ldu: Optional[float] = None,
 ) -> VersionedCertificateArtifact:
-    """Export a self-contained `VersionedCertificateArtifact` (`v1.1.0`) for independent planner-free replay."""
+    """Export a self-contained `VersionedCertificateArtifact` (`v1.1.1`) for independent planner-free replay."""
+    eff_gz = float(
+        ground_plane_z_ldu
+        if ground_plane_z_ldu is not None
+        else getattr(certificates, "ground_plane_z_ldu", 0.0)
+    )
     cat_sha = compute_catalog_sha256()
     tgt_sha = compute_target_sha256(target_field)
     is_cubic = isinstance(assembly, AssemblyState)
@@ -401,7 +469,11 @@ def export_certificate_artifact(
         "peak_utilization": float(certificates.static_mechanics.peak_utilization),
     }
     if validator is not None and is_cubic:
-        eq_res = validator.evaluate(assembly, foundation_policy=certificates.foundation_policy)
+        eq_res = validator.evaluate(
+            assembly,
+            foundation_policy=certificates.foundation_policy,
+            ground_plane_z_ldu=eff_gz,
+        )
         if eq_res.primal_witness is not None:
             pw = eq_res.primal_witness
             witness_summary.update(
@@ -473,6 +545,7 @@ def export_certificate_artifact(
             for fb in forbidden_support_boxes
         ),
         license_filter=str(license_filter),
+        ground_plane_z_ldu=eff_gz,
     )
 
 
@@ -885,6 +958,7 @@ def _independent_cubic_equilibrium_lp(
     foundation_policy: str,
     joint_assumptions: Dict[str, float],
     gravity_unit: Tuple[float, float, float] = (0.0, 0.0, -1.0),
+    ground_plane_z_ldu: float = 0.0,
 ) -> Tuple[bool, float, float, float]:
     """
     Solve an independent 6-DoF rigid-body static equilibrium LP via `scipy.optimize.linprog`
@@ -922,7 +996,15 @@ def _independent_cubic_equilibrium_lp(
                 i_b, _, ct_b, pol_b, z_b = plist[ib]
                 if i_a == i_b:
                     continue
-                if z_a != z_b:
+                is_stud_pair = ct_a in (
+                    ConnectorType.STANDARD_STUD,
+                    ConnectorType.HOLLOW_STUD,
+                ) or ct_b in (
+                    ConnectorType.STANDARD_STUD,
+                    ConnectorType.HOLLOW_STUD,
+                )
+                neg_zb = (-z_b[0], -z_b[1], -z_b[2])
+                if z_a != z_b and (is_stud_pair or z_a != neg_zb):
                     continue
                 if not are_connectors_compatible(ct_a, pol_a, ct_b, pol_b):
                     continue
@@ -965,7 +1047,7 @@ def _independent_cubic_equilibrium_lp(
         for gid in grounded_ids:
             bxs = world_boxes[gid]
             z_g = float(min(b.zmin for b in bxs))
-            if is_table and abs(z_g) > 0.25:
+            if is_table and abs(z_g - float(ground_plane_z_ldu)) > 0.25:
                 return False, float("inf"), float("inf"), float("inf")
             xs = [float(b.xmin) for b in bxs] + [float(b.xmax) for b in bxs]
             ys = [float(b.ymin) for b in bxs] + [float(b.ymax) for b in bxs]
@@ -1264,6 +1346,7 @@ def _try_independent_plumb_prefix_witness(
     foundation_policy: str,
     joint_assumptions: Dict[str, float],
     gravity_unit: Tuple[float, float, float],
+    ground_plane_z_ldu: float = 0.0,
 ) -> Tuple[bool, float]:
     """
     Planner-free O(N) constructive 6-DoF primal feasibility check for large (`>= 32` parts)
@@ -1276,9 +1359,10 @@ def _try_independent_plumb_prefix_witness(
     """
     if gravity_unit != (0.0, 0.0, -1.0):
         return False, float("inf")
+    gz_ref = float(ground_plane_z_ldu)
     is_table_only = foundation_policy == "table_friction_only"
     if is_table_only:
-        # Verify every grounded brick's own CoM lies strictly inside its own z=0 table contact rectangle
+        # Verify every grounded brick's own CoM lies strictly inside its own z=ground_plane_z_ldu table contact rectangle
         for gid, ge in parts_dict.items():
             if bool(ge["is_grounded"]):
                 gbxs = world_boxes[gid]
@@ -1286,7 +1370,9 @@ def _try_independent_plumb_prefix_witness(
                 g_cx = sum(0.5 * (b.xmin + b.xmax) * float(b.volume_ldu3) for b in gbxs) / max(tv_g, 1.0)
                 g_cy = sum(0.5 * (b.ymin + b.ymax) * float(b.volume_ldu3) for b in gbxs) / max(tv_g, 1.0)
                 if not any(
-                    b.zmin <= 0 and (b.xmin + 0.5) <= g_cx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= g_cy <= (b.ymax - 0.5)
+                    abs(float(b.zmin) - gz_ref) <= 0.25
+                    and (b.xmin + 0.5) <= g_cx <= (b.xmax - 0.5)
+                    and (b.ymin + 0.5) <= g_cy <= (b.ymax - 0.5)
                     for b in gbxs
                 ):
                     return False, float("inf")
@@ -1358,7 +1444,9 @@ def _try_independent_plumb_prefix_witness(
             if bool(parts_dict[u_id]["is_grounded"]):
                 if is_table_only:
                     if not any(
-                        b.zmin <= 0 and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
+                        abs(float(b.zmin) - gz_ref) <= 0.25
+                        and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5)
+                        and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
                         for b in world_boxes[u_id]
                     ):
                         return False, float("inf")
@@ -1519,7 +1607,9 @@ def _try_independent_plumb_prefix_witness(
 
         if is_table_only:
             if not any(
-                b.zmin <= 0 and (b.xmin + 1.0) <= cx <= (b.xmax - 1.0) and (b.ymin + 1.0) <= cy <= (b.ymax - 1.0)
+                abs(float(b.zmin) - gz_ref) <= 0.25
+                and (b.xmin + 1.0) <= cx <= (b.xmax - 1.0)
+                and (b.ymin + 1.0) <= cy <= (b.ymax - 1.0)
                 for b in world_boxes[cur_id]
             ):
                 return False, float("inf")
@@ -1649,6 +1739,7 @@ def _independent_continuous_se3_equilibrium_lp(
     joint_assumptions: Dict[str, float],
     gravity_unit: Tuple[float, float, float] = (0.0, 0.0, -1.0),
     lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
+    ground_plane_z_ldu: float = 0.0,
 ) -> Tuple[bool, float, float, float, List[Tuple[Tuple[int, int], Tuple[int, int]]]]:
     """
     Completely standalone `scipy.optimize.linprog` 6-DoF static equilibrium solver for continuous
@@ -1662,41 +1753,81 @@ def _independent_continuous_se3_equilibrium_lp(
     if not grounded_ids:
         return False, float("inf"), float("inf"), float("inf"), []
 
-    # Discover geometric port mates independently from `poses_map`
+    # Discover geometric port mates independently from `poses_map` via 20-LDU spatial cell hashing (`S5`)
     iids_sorted = sorted(parts_dict.keys())
     used_ports: Set[Tuple[int, int]] = set()
     discovered_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
-    for idx_a in range(len(iids_sorted)):
-        ia = iids_sorted[idx_a]
+    cell_size = 20.0
+    port_records: Dict[Tuple[int, int], Tuple[int, Any, ContinuousSE3Pose]] = {}
+    spatial_buckets: Dict[Tuple[int, int, int], List[Tuple[int, int]]] = {}
+    for idx_ord, ia in enumerate(iids_sorted):
         pr_a = get_brick_primitive(str(parts_dict[ia]["part_id"]))
         pose_a = poses_map[ia]
         for pa in pr_a.ports:
             gpa = (ia, pa.port_id)
+            wfa = pose_a.compose(ContinuousSE3Pose.from_ldu_frame(pa.local_frame))
+            port_records[gpa] = (idx_ord, pa, wfa)
+            ckey = (
+                int(math.floor(float(wfa.t[0]) / cell_size)),
+                int(math.floor(float(wfa.t[1]) / cell_size)),
+                int(math.floor(float(wfa.t[2]) / cell_size)),
+            )
+            spatial_buckets.setdefault(ckey, []).append(gpa)
+
+    pair_checks = 0
+    for idx_a, ia in enumerate(iids_sorted):
+        pr_a = get_brick_primitive(str(parts_dict[ia]["part_id"]))
+        for pa in pr_a.ports:
+            gpa = (ia, pa.port_id)
             if gpa in used_ports:
                 continue
-            wfa = pose_a.compose(ContinuousSE3Pose.from_ldu_frame(pa.local_frame))
+            _, _, wfa = port_records[gpa]
             za = wfa.R[:, 2]
+            cx = int(math.floor(float(wfa.t[0]) / cell_size))
+            cy = int(math.floor(float(wfa.t[1]) / cell_size))
+            cz = int(math.floor(float(wfa.t[2]) / cell_size))
             best_d = 1.5
             best_gpb: Optional[Tuple[int, int]] = None
-            for idx_b in range(idx_a + 1, len(iids_sorted)):
-                ib = iids_sorted[idx_b]
-                pr_b = get_brick_primitive(str(parts_dict[ib]["part_id"]))
-                pose_b = poses_map[ib]
-                for pb in pr_b.ports:
-                    gpb = (ib, pb.port_id)
-                    if gpb in used_ports:
-                        continue
-                    if not are_connectors_compatible(pa.connector_type, pa.polarity, pb.connector_type, pb.polarity):
-                        continue
-                    wfb = pose_b.compose(ContinuousSE3Pose.from_ldu_frame(pb.local_frame))
-                    dist = float(np.linalg.norm(wfa.t - wfb.t))
-                    if dist > best_d:
-                        continue
-                    is_ball = pa.connector_type in (ConnectorType.BALL_JOINT, ConnectorType.BALL_SOCKET)
-                    min_cos = 0.45 if is_ball else 0.96
-                    if float(np.dot(za, wfb.R[:, 2])) >= min_cos:
-                        best_d = dist
-                        best_gpb = gpb
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        nbrs = spatial_buckets.get((cx + dx, cy + dy, cz + dz))
+                        if not nbrs:
+                            continue
+                        for gpb in nbrs:
+                            if gpb in used_ports:
+                                continue
+                            idx_b, pb, wfb = port_records[gpb]
+                            if idx_b <= idx_a:
+                                continue
+                            pair_checks += 1
+                            if pair_checks > 500_000:
+                                raise RuntimeError("se3_port_pair_budget_exceeded")
+                            if not are_connectors_compatible(
+                                pa.connector_type, pa.polarity, pb.connector_type, pb.polarity
+                            ):
+                                continue
+                            dist = float(np.linalg.norm(wfa.t - wfb.t))
+                            if dist > best_d or (
+                                abs(dist - best_d) <= 1e-12 and best_gpb is not None and gpb >= best_gpb
+                            ):
+                                continue
+                            is_ball = pa.connector_type in (
+                                ConnectorType.BALL_JOINT,
+                                ConnectorType.BALL_SOCKET,
+                            )
+                            is_stud_pair = pa.connector_type in (
+                                ConnectorType.STANDARD_STUD,
+                                ConnectorType.HOLLOW_STUD,
+                            ) or pb.connector_type in (
+                                ConnectorType.STANDARD_STUD,
+                                ConnectorType.HOLLOW_STUD,
+                            )
+                            min_cos = 0.45 if is_ball else 0.96
+                            cos_z = float(np.dot(za, wfb.R[:, 2]))
+                            if (cos_z if is_stud_pair else abs(cos_z)) >= min_cos:
+                                best_d = dist
+                                best_gpb = gpb
             if best_gpb is not None:
                 used_ports.add(gpa)
                 used_ports.add(best_gpb)
@@ -1718,6 +1849,7 @@ def _independent_continuous_se3_equilibrium_lp(
         return False, float("inf"), float("inf"), float("inf"), discovered_pairs
 
     is_table = foundation_policy == "table_friction_only"
+    gz_se3 = float(ground_plane_z_ldu)
     table_pts_map: Dict[int, List[np.ndarray]] = {}
     if is_table:
         signs = np.array(
@@ -1744,10 +1876,10 @@ def _independent_continuous_se3_equilibrium_lp(
                 for pt in crn:
                     zv = float(pt[2])
                     all_z.append(zv)
-                    if zv <= 0.25:
-                        low_pts.append(np.array([float(pt[0]), float(pt[1]), 0.0], dtype=np.float64))
+                    if abs(zv - gz_se3) <= 0.25:
+                        low_pts.append(np.array([float(pt[0]), float(pt[1]), gz_se3], dtype=np.float64))
             min_zg = min(all_z) if all_z else float("inf")
-            if abs(min_zg) > 0.25 or not low_pts:
+            if abs(min_zg - gz_se3) > 0.25 or not low_pts:
                 return False, float("inf"), float("inf"), float("inf"), discovered_pairs
             uniq_xy: Dict[Tuple[int, int], np.ndarray] = {}
             for pt in low_pts:
@@ -1976,11 +2108,51 @@ def _independent_continuous_se3_equilibrium_lp(
     return (eta <= 1.0 + 1e-6 and eq_res_g <= 1e-4 and ub_viol <= 1e-4), eta, eq_res_g, ub_viol, discovered_pairs
 
 
+class VerifierBudgetExceededError(RuntimeError):
+    """Raised when an untrusted certificate exceeds configured resource or wall-time budgets (`S5`)."""
+
+
+@dataclass(frozen=True, slots=True)
+class VerifierResourceLimits:
+    """Bounded resource ceilings for certificate verification workers (`Phase 13 S5`)."""
+
+    max_json_bytes: int = 32 * 1024 * 1024
+    max_placed_parts: int = 5_000
+    max_execution_ops: int = 15_000
+    max_subtrace_ops: int = 5_000
+    max_matched_port_pairs: int = 50_000
+    max_forbidden_boxes: int = 1_000
+    wall_time_budget_sec: Optional[float] = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class MechanicsVerificationProfile:
+    """
+    Relying-party mechanics & tolerance bounds (`Phase 13 S4`):
+    validates physical parameter ranges on every certificate and optionally overrides
+    submitter-supplied `joint_assumptions` / `tolerances` with relying-party policy.
+    """
+
+    allowed_foundation_policies: Optional[FrozenSet[str]] = None
+    max_clutch_force_capacity_grams: float = 250.0
+    max_moment_arm_capacity_ldu: float = 80.0
+    max_friction_coeff: float = 1.0
+    max_coulomb_friction_coeff: float = 1.0
+    max_normal_crush_ratio: float = 600.0
+    max_locking_hinge_detent_moment_ldu_g: float = 1000.0
+    max_ball_joint_friction_moment_ldu_g: float = 1000.0
+    max_eq_residual_tol_g: float = 2e-4
+    max_ub_violation_tol: float = 2e-4
+    override_joint_assumptions: Optional[Mapping[str, float]] = None
+    override_tolerances: Optional[Mapping[str, float]] = None
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationObligations:
     """
-    Caller-specified verification obligations (`Phase 12 F1 & F7` contract):
-    decouples verification requirements from untrusted `artifact.claimed_certificates`.
+    Caller-specified verification obligations (`Phase 12 F1 & F7` + `Phase 13 S3, S4, S5, S8`):
+    decouples verification requirements, target overlap, inventory, and mechanics profile from
+    untrusted `artifact` claims.
     """
 
     require_static_mechanics: bool = True
@@ -1994,11 +2166,20 @@ class VerificationObligations:
     expected_forbidden_boxes: Tuple[LDUBox, ...] = ()
     expected_license_filter: Optional[str] = None
     min_target_iou: Optional[float] = None
+    require_explicit_inventory_spec: bool = False
+    expected_inventory_counts: Optional[Mapping[str, int]] = None
+    expected_colored_inventory: Optional[Mapping[str, int]] = None
+    expected_allowed_part_ids: Optional[FrozenSet[str]] = None
+    expected_foundation_policy: Optional[str] = None
+    mechanics_profile: Optional[MechanicsVerificationProfile] = None
+    trusted_custom_catalog_sha256: Optional[str] = None
+    resource_limits: Optional[VerifierResourceLimits] = None
+    expected_ground_plane_z_ldu: Optional[float] = 0.0
 
 
 @dataclass(frozen=True, slots=True)
 class IndependentVerificationReport:
-    """Result returned by `verify_certificate_independently(artifact)` (`R9-WS1` §3.1 + `Phase 12`)."""
+    """Result returned by `verify_certificate_independently(artifact)` (`R9-WS1` §3.1 + `Phase 12/13`)."""
 
     verified: bool
     schema_version_ok: bool
@@ -2016,6 +2197,98 @@ class IndependentVerificationReport:
     failure_reasons: Tuple[str, ...]
     verification_scope: str = "assembly_only"
     target_verified: Optional[bool] = None
+    target_digest_verified: Optional[bool] = None
+    target_overlap_verified: Optional[bool] = None
+    measured_target_iou: Optional[float] = None
+    inventory_status: str = "unchecked_absent"
+    mechanics_profile_sha256: str = ""
+
+
+def _compute_mechanics_profile_sha256(
+    foundation_policy: str,
+    joint_assumptions: Mapping[str, Any],
+    tolerances: Mapping[str, Any],
+    ground_plane_z_ldu: float = 0.0,
+) -> str:
+    payload = {
+        "foundation_policy": str(foundation_policy),
+        "ground_plane_z_ldu": round(float(ground_plane_z_ldu), 6),
+        "joint_assumptions": {
+            str(k): round(float(v), 8)
+            for k, v in sorted(joint_assumptions.items())
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+        },
+        "tolerances": {
+            str(k): round(float(v), 10)
+            for k, v in sorted(tolerances.items())
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+        },
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _validate_and_resolve_mechanics_inputs(
+    artifact: VersionedCertificateArtifact,
+    profile: MechanicsVerificationProfile,
+) -> Tuple[bool, Dict[str, float], Dict[str, float], List[str]]:
+    """Validate finite physical ranges and apply relying-party overrides (`S4`)."""
+    errs: List[str] = []
+    raw_j: Dict[str, Any] = dict(artifact.joint_assumptions or {})
+    if profile.override_joint_assumptions is not None:
+        raw_j.update(dict(profile.override_joint_assumptions))
+
+    raw_t: Dict[str, Any] = dict(artifact.tolerances or {})
+    if profile.override_tolerances is not None:
+        raw_t.update(dict(profile.override_tolerances))
+
+    joint_bounds: Dict[str, Tuple[float, float, bool]] = {
+        # (lo, hi, strictly_positive)
+        "clutch_force_capacity_grams": (0.0, profile.max_clutch_force_capacity_grams, True),
+        "moment_arm_capacity_ldu": (0.0, profile.max_moment_arm_capacity_ldu, True),
+        "friction_coeff": (0.0, profile.max_friction_coeff, False),
+        "coulomb_friction_coeff": (0.0, profile.max_coulomb_friction_coeff, False),
+        "normal_crush_ratio": (1.0, profile.max_normal_crush_ratio, False),
+        "locking_hinge_detent_moment_ldu_g": (0.0, profile.max_locking_hinge_detent_moment_ldu_g, False),
+        "ball_joint_friction_moment_ldu_g": (0.0, profile.max_ball_joint_friction_moment_ldu_g, False),
+    }
+    eff_j: Dict[str, float] = {}
+    for k, v in raw_j.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errs.append(f"invalid_mechanics_parameter:{k}:non_numeric")
+            continue
+        fv = float(v)
+        if not math.isfinite(fv):
+            errs.append(f"invalid_mechanics_parameter:{k}:non_finite")
+            continue
+        if k in joint_bounds:
+            lo, hi, strict_pos = joint_bounds[k]
+            if (strict_pos and fv <= lo) or (not strict_pos and fv < lo) or fv > hi:
+                errs.append(f"invalid_mechanics_parameter:{k}={fv}:outside_[{lo},{hi}]")
+                continue
+        eff_j[str(k)] = fv
+
+    tol_bounds: Dict[str, Tuple[float, float]] = {
+        "eq_residual_tol_g": (0.0, profile.max_eq_residual_tol_g),
+        "ub_violation_tol": (0.0, profile.max_ub_violation_tol),
+        "fine_csg_voxel_ldu": (0.25, 4.0),
+    }
+    eff_t: Dict[str, float] = {}
+    for k, v in raw_t.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errs.append(f"invalid_tolerance_parameter:{k}:non_numeric")
+            continue
+        fv = float(v)
+        if not math.isfinite(fv):
+            errs.append(f"invalid_tolerance_parameter:{k}:non_finite")
+            continue
+        if k in tol_bounds:
+            lo, hi = tol_bounds[k]
+            if fv < lo or fv > hi:
+                errs.append(f"invalid_tolerance_parameter:{k}={fv}:outside_[{lo},{hi}]")
+                continue
+        eff_t[str(k)] = fv
+
+    return (len(errs) == 0), eff_j, eff_t, errs
 
 
 def verify_certificate_independently(
@@ -2024,39 +2297,153 @@ def verify_certificate_independently(
 ) -> IndependentVerificationReport:
     """
     Independently replay and verify a `VersionedCertificateArtifact` with ZERO `TopoBrickKernel`
-    or `static_equilibrium` imports (`F1, F2, F7, F10`):
-      - Enforces caller `VerificationObligations` unconditionally (never bypassing checks when
-        `artifact.claimed_certificates` says `"FAIL"` or `"UNKNOWN"`).
-      - Replays `PLACE_PART` strictly from operation payloads and verifies exact terminal state
-        equality (`sim_parts == parts_by_id`, `temp_tags == {}`), rejecting empty traces, unknown
-        opcodes, duplicate placements, intermediate collisions, and malformed port indices.
-      - Uses exact continuous half-ray (`t in (0, +inf)`) swept-box/OBB corridor checks and
-        standalone `scipy.optimize.linprog` mechanics in both `cubic_ldu` and `continuous_se3`.
+    or `static_equilibrium` imports (`F1, F2, F7, F10` + `S3, S4, S5, S8`).
     """
     obl = obligations if obligations is not None else VerificationObligations()
-    reasons: List[str] = []
-    ver_scope = (
-        "assembly_and_target"
-        if (obl.expected_target_field is not None or obl.expected_target_sha256 is not None)
-        else "assembly_only"
+    try:
+        return _verify_certificate_independently_impl(artifact, obl)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as exc:
+        has_t = (
+            obl.expected_target_field is not None
+            or obl.expected_target_sha256 is not None
+            or obl.min_target_iou is not None
+        )
+        return IndependentVerificationReport(
+            verified=False,
+            schema_version_ok=False,
+            catalog_sha256_valid=False,
+            inventory_valid=False,
+            csg_2ldu_collision_free=False,
+            ports_compatible=False,
+            monotone_insertion_valid=False,
+            static_mechanics_valid=False,
+            prefix_mechanics_valid=False,
+            witness_residuals_valid=False,
+            max_eq_residual_g=float("inf"),
+            max_ub_violation=float("inf"),
+            replayed_peak_utilization=float("inf"),
+            failure_reasons=(f"verifier_exception:{type(exc).__name__}:{exc}",),
+            verification_scope="assembly_and_target" if has_t else "assembly_only",
+            target_verified=False if has_t else None,
+            target_digest_verified=False if (obl.expected_target_field is not None or obl.expected_target_sha256 is not None) else None,
+            target_overlap_verified=False if obl.min_target_iou is not None else None,
+            measured_target_iou=None,
+            inventory_status="failed",
+            mechanics_profile_sha256="",
+        )
+
+
+def _verify_certificate_independently_impl(
+    artifact: VersionedCertificateArtifact,
+    obl: VerificationObligations,
+) -> IndependentVerificationReport:
+    limits = obl.resource_limits if obl.resource_limits is not None else VerifierResourceLimits()
+    prof = obl.mechanics_profile if obl.mechanics_profile is not None else MechanicsVerificationProfile()
+    t_deadline: Optional[float] = (
+        time.monotonic() + float(limits.wall_time_budget_sec)
+        if limits.wall_time_budget_sec is not None and float(limits.wall_time_budget_sec) > 0.0
+        else None
     )
-    target_ver: Optional[bool] = True if ver_scope == "assembly_and_target" else None
+
+    def _check_deadline() -> None:
+        if t_deadline is not None and time.monotonic() > t_deadline:
+            raise VerifierBudgetExceededError(
+                f"wall_time_budget_exceeded:{limits.wall_time_budget_sec}s"
+            )
+
+    reasons: List[str] = []
+    has_target_request = (
+        obl.expected_target_field is not None
+        or obl.expected_target_sha256 is not None
+        or obl.min_target_iou is not None
+    )
+    ver_scope = "assembly_and_target" if has_target_request else "assembly_only"
+    target_digest_ver: Optional[bool] = None
+    target_overlap_ver: Optional[bool] = None
+    measured_iou: Optional[float] = None
+
+    # Validate target-overlap obligations upfront BEFORE replay (`S3`: never silently skip min_target_iou)
+    min_iou_threshold: Optional[float] = None
+    if obl.min_target_iou is not None:
+        try:
+            min_iou_threshold = float(obl.min_target_iou)
+        except (TypeError, ValueError):
+            min_iou_threshold = float("nan")
+        if (
+            isinstance(obl.min_target_iou, bool)
+            or not math.isfinite(min_iou_threshold)
+            or not (0.0 <= min_iou_threshold <= 1.0)
+        ):
+            target_overlap_ver = False
+            reasons.append("invalid_obligation:min_target_iou_out_of_range")
+            min_iou_threshold = None
+        elif obl.expected_target_field is None or not callable(
+            getattr(obl.expected_target_field, "intersection_volume", None)
+        ):
+            target_overlap_ver = False
+            reasons.append("invalid_obligation:min_target_iou_requires_expected_target_field")
+        elif artifact.assembly_mode != "cubic_ldu":
+            target_overlap_ver = False
+            reasons.append(
+                f"unsupported_obligation:min_target_iou_unsupported_for_assembly_mode:{artifact.assembly_mode}"
+            )
+
+    def _finalize_target_verdict() -> Optional[bool]:
+        if not has_target_request:
+            return None
+        digest_needed = (obl.expected_target_field is not None) or (obl.expected_target_sha256 is not None)
+        overlap_needed = obl.min_target_iou is not None
+        ok_d = (not digest_needed) or (target_digest_ver is True)
+        ok_o = (not overlap_needed) or (target_overlap_ver is True)
+        return bool(ok_d and ok_o)
+
+    # Check resource bounds upfront (`S5`)
+    if len(artifact.placed_parts) > limits.max_placed_parts:
+        reasons.append(f"resource_limit_exceeded:placed_parts>{limits.max_placed_parts}")
+    if len(artifact.execution_operations) > limits.max_execution_ops:
+        reasons.append(f"resource_limit_exceeded:execution_operations>{limits.max_execution_ops}")
+    if len(artifact.matched_port_pairs) > limits.max_matched_port_pairs:
+        reasons.append(f"resource_limit_exceeded:matched_port_pairs>{limits.max_matched_port_pairs}")
+    if len(artifact.forbidden_support_boxes) + len(obl.expected_forbidden_boxes) > limits.max_forbidden_boxes:
+        reasons.append(f"resource_limit_exceeded:forbidden_support_boxes>{limits.max_forbidden_boxes}")
 
     schema_ok = artifact.schema_version in SUPPORTED_CERTIFICATE_SCHEMAS
     if not schema_ok:
         reasons.append(f"unsupported_schema:{artifact.schema_version}")
 
+    eff_schema_for_sha = (
+        artifact.schema_version
+        if artifact.schema_version in SUPPORTED_CERTIFICATE_SCHEMAS
+        else CERTIFICATE_SCHEMA_VERSION
+    )
     try:
         expected_sha = compute_catalog_sha256(
-            schema_version=(
-                artifact.schema_version
-                if artifact.schema_version in SUPPORTED_CERTIFICATE_SCHEMAS
-                else CERTIFICATE_SCHEMA_VERSION
-            )
+            schema_version=eff_schema_for_sha,
+            recompute_from_disk=True,
         )
-        cat_ok = artifact.catalog_sha256 == expected_sha
+        cat_ok = hmac.compare_digest(str(artifact.catalog_sha256).strip().lower(), expected_sha)
         if not cat_ok:
             reasons.append("catalog_sha256_mismatch")
+        # Enforce release-bundle provenance unless custom digest explicitly trusted (`S8`)
+        if obl.trusted_custom_catalog_sha256 is not None:
+            if not is_valid_sha256_hex(obl.trusted_custom_catalog_sha256):
+                cat_ok = False
+                reasons.append("invalid_obligation:trusted_custom_catalog_sha256")
+            elif not hmac.compare_digest(
+                expected_sha, obl.trusted_custom_catalog_sha256.strip().lower()
+            ):
+                cat_ok = False
+                reasons.append("trusted_custom_catalog_sha256_mismatch")
+        else:
+            from topo_brick.interface.ldraw_shadow_catalog_compiler import COMPILED_LDRAW_CATALOG
+
+            if COMPILED_LDRAW_CATALOG.is_available:
+                pinned_rel_sha = PINNED_RELEASE_CATALOG_SHA256_BY_SCHEMA.get(eff_schema_for_sha)
+                if pinned_rel_sha is not None and not hmac.compare_digest(expected_sha, pinned_rel_sha):
+                    cat_ok = False
+                    reasons.append("local_catalog_differs_from_pinned_release")
     except ValueError as exc_cat:
         cat_ok = False
         reasons.append(f"catalog_archive_tampered:{exc_cat}")
@@ -2064,14 +2451,83 @@ def verify_certificate_independently(
     mode_ok = artifact.assembly_mode in _VALID_ASSEMBLY_MODES
     if not mode_ok:
         reasons.append(f"unsupported_assembly_mode:{artifact.assembly_mode}")
-    fp_ok = artifact.foundation_policy in _VALID_FOUNDATION_POLICIES
+
+    eff_foundation_policy = str(artifact.foundation_policy)
+    fp_ok = eff_foundation_policy in _VALID_FOUNDATION_POLICIES
     if not fp_ok:
-        reasons.append(f"unsupported_foundation_policy:{artifact.foundation_policy}")
+        reasons.append(f"unsupported_foundation_policy:{eff_foundation_policy}")
+    if obl.expected_foundation_policy is not None and eff_foundation_policy != obl.expected_foundation_policy:
+        fp_ok = False
+        reasons.append(
+            f"foundation_policy_mismatch:expected={obl.expected_foundation_policy},got={eff_foundation_policy}"
+        )
+    if (
+        prof.allowed_foundation_policies is not None
+        and eff_foundation_policy not in prof.allowed_foundation_policies
+    ):
+        fp_ok = False
+        reasons.append(f"disallowed_foundation_policy:{eff_foundation_policy}")
+
+    eff_ground_z = float(getattr(artifact, "ground_plane_z_ldu", 0.0))
+    if not math.isfinite(eff_ground_z) or abs(eff_ground_z) > 1e6:
+        fp_ok = False
+        reasons.append(f"invalid_ground_plane_z_ldu:{eff_ground_z}")
+    elif obl.expected_ground_plane_z_ldu is not None:
+        if (
+            isinstance(obl.expected_ground_plane_z_ldu, bool)
+            or not isinstance(obl.expected_ground_plane_z_ldu, (int, float))
+            or not math.isfinite(float(obl.expected_ground_plane_z_ldu))
+        ):
+            fp_ok = False
+            reasons.append("invalid_obligation:expected_ground_plane_z_ldu")
+        elif abs(eff_ground_z - float(obl.expected_ground_plane_z_ldu)) > 1e-4:
+            fp_ok = False
+            reasons.append(
+                f"ground_plane_z_ldu_mismatch:expected={float(obl.expected_ground_plane_z_ldu)},got={eff_ground_z}"
+            )
+
+    mech_params_ok, eff_joint_assumptions, eff_tolerances, mech_errs = _validate_and_resolve_mechanics_inputs(
+        artifact, prof
+    )
+    if not mech_params_ok:
+        reasons.extend(mech_errs)
+    mech_profile_sha = _compute_mechanics_profile_sha256(
+        eff_foundation_policy,
+        eff_joint_assumptions,
+        eff_tolerances,
+        ground_plane_z_ldu=(eff_ground_z if math.isfinite(eff_ground_z) else 0.0),
+    )
+
+    if any(r.startswith("resource_limit_exceeded:") for r in reasons):
+        return IndependentVerificationReport(
+            verified=False,
+            schema_version_ok=schema_ok,
+            catalog_sha256_valid=cat_ok,
+            inventory_valid=False,
+            csg_2ldu_collision_free=False,
+            ports_compatible=False,
+            monotone_insertion_valid=False,
+            static_mechanics_valid=False,
+            prefix_mechanics_valid=False,
+            witness_residuals_valid=False,
+            max_eq_residual_g=float("inf"),
+            max_ub_violation=float("inf"),
+            replayed_peak_utilization=float("inf"),
+            failure_reasons=tuple(reasons),
+            verification_scope=ver_scope,
+            target_verified=False if has_target_request else None,
+            target_digest_verified=target_digest_ver,
+            target_overlap_verified=target_overlap_ver,
+            measured_target_iou=None,
+            inventory_status="failed",
+            mechanics_profile_sha256=mech_profile_sha,
+        )
 
     # Validate placed_parts upfront without uncaught exceptions
     parts_by_id: Dict[int, Dict[str, Any]] = {}
     placed_valid = True
     for raw_e in artifact.placed_parts:
+        _check_deadline()
         try:
             iid_e = int(raw_e["instance_id"])
             pid_e = str(raw_e["part_id"])
@@ -2125,33 +2581,68 @@ def verify_certificate_independently(
             reasons.append(f"claimed_certificate_not_pass:inventory={claims.get('inventory')}")
 
     inv_ok = True
-    if obl.require_inventory and artifact.inventory_spec is not None and placed_valid:
-        counts: Dict[str, int] = {}
+    has_relying_party_inv = (
+        obl.expected_inventory_counts is not None
+        or obl.expected_colored_inventory is not None
+        or obl.expected_allowed_part_ids is not None
+    )
+    has_submitter_inv = (artifact.inventory_spec is not None) or (artifact.colored_inventory_spec is not None)
+
+    if obl.require_explicit_inventory_spec and not has_relying_party_inv and not has_submitter_inv:
+        inv_ok = False
+        reasons.append("missing_inventory_spec")
+
+    if placed_valid and obl.expected_allowed_part_ids is not None:
+        allowed_norm = {str(x).strip() for x in obl.expected_allowed_part_ids} | {
+            str(x).strip().lower() for x in obl.expected_allowed_part_ids
+        }
+        for entry in artifact.placed_parts:
+            pid_a = str(entry["part_id"])
+            if pid_a not in allowed_norm and pid_a.lower() not in allowed_norm:
+                inv_ok = False
+                reasons.append(f"disallowed_part_id:{pid_a}")
+                break
+
+    def _check_mold_counts(cap_map: Mapping[str, int], tag: str) -> None:
+        nonlocal inv_ok
+        counts_m: Dict[str, int] = {}
         for entry in artifact.placed_parts:
             pid = str(entry["part_id"])
             p_key = pid if pid in EXTENDED_BRICK_CATALOG else pid.lower()
-            counts[p_key] = counts.get(p_key, 0) + 1
-        for pid, used in counts.items():
-            cap_m = int(artifact.inventory_spec.get(pid, artifact.inventory_spec.get(pid.lower(), 0)))
+            counts_m[p_key] = counts_m.get(p_key, 0) + 1
+        for pid, used in counts_m.items():
+            cap_m = int(cap_map.get(pid, cap_map.get(pid.lower(), 0)))
             if used > cap_m:
                 inv_ok = False
-                reasons.append(f"inventory_exceeded:{pid}")
+                reasons.append(f"{tag}:{pid}")
                 break
 
-    if inv_ok and obl.require_inventory and artifact.colored_inventory_spec is not None and placed_valid:
-        col_counts: Dict[str, int] = {}
+    def _check_colored_counts(col_map: Mapping[str, int], tag: str) -> None:
+        nonlocal inv_ok
+        col_counts_m: Dict[str, int] = {}
         for entry in artifact.placed_parts:
             pid = str(entry["part_id"])
             p_key = pid if pid in EXTENDED_BRICK_CATALOG else pid.lower()
             cid = int(entry.get("color_id", 15))
             ckey = f"{p_key}:{cid}"
-            col_counts[ckey] = col_counts.get(ckey, 0) + 1
-        for ckey, used_c in col_counts.items():
-            cap_c = int(artifact.colored_inventory_spec.get(ckey, 0))
+            col_counts_m[ckey] = col_counts_m.get(ckey, 0) + 1
+        for ckey, used_c in col_counts_m.items():
+            raw_pid, raw_cid = ckey.rsplit(":", 1)
+            cap_c = int(col_map.get(ckey, col_map.get(f"{raw_pid.lower()}:{raw_cid}", 0)))
             if used_c > cap_c:
                 inv_ok = False
-                reasons.append(f"colored_inventory_exceeded:{ckey}")
+                reasons.append(f"{tag}:{ckey}")
                 break
+
+    if inv_ok and placed_valid and obl.expected_inventory_counts is not None:
+        _check_mold_counts(obl.expected_inventory_counts, "expected_inventory_exceeded")
+    if inv_ok and placed_valid and obl.expected_colored_inventory is not None:
+        _check_colored_counts(obl.expected_colored_inventory, "expected_colored_inventory_exceeded")
+
+    if inv_ok and obl.require_inventory and artifact.inventory_spec is not None and placed_valid:
+        _check_mold_counts(artifact.inventory_spec, "inventory_exceeded")
+    if inv_ok and obl.require_inventory and artifact.colored_inventory_spec is not None and placed_valid:
+        _check_colored_counts(artifact.colored_inventory_spec, "colored_inventory_exceeded")
 
     # License filter check (`F7`)
     eff_lic = obl.expected_license_filter if obl.expected_license_filter is not None else artifact.license_filter
@@ -2173,7 +2664,51 @@ def verify_certificate_independently(
                 reasons.append(f"license_filter_violated:{pid_l}")
                 break
 
-    if not mode_ok or not fp_ok or not placed_valid:
+    inv_status = (
+        "failed"
+        if not inv_ok
+        else (
+            "verified_relying_party"
+            if has_relying_party_inv
+            else ("verified_submitter_spec" if (obl.require_inventory and has_submitter_inv) else "unchecked_absent")
+        )
+    )
+
+    # Target digest & overlap measurement (`S3`: separate digest agreement vs. geometric fit)
+    if obl.expected_target_sha256 is not None or obl.expected_target_field is not None:
+        exp_t_sha = (
+            obl.expected_target_sha256
+            if obl.expected_target_sha256 is not None
+            else compute_target_sha256(obl.expected_target_field)
+        )
+        target_digest_ver = artifact.target_sha256 == exp_t_sha
+        if not target_digest_ver:
+            reasons.append("target_sha256_mismatch")
+
+    if (
+        obl.expected_target_field is not None
+        and callable(getattr(obl.expected_target_field, "intersection_volume", None))
+        and artifact.assembly_mode == "cubic_ldu"
+        and placed_valid
+    ):
+        all_wb = [
+            b.transform(LDUFrame(int(e_t["rot_id"]), tuple(int(c) for c in e_t["pos"])))
+            for e_t in artifact.placed_parts
+            for b in get_brick_primitive(str(e_t["part_id"])).hull_boxes
+        ]
+        inter_v = float(obl.expected_target_field.intersection_volume(all_wb))
+        t_v = float(getattr(obl.expected_target_field, "total_volume_ldu3", 0))
+        asm_v = float(sum(b.volume_ldu3 for b in all_wb))
+        union_v = max(t_v + asm_v - inter_v, 1.0)
+        measured_iou = inter_v / union_v if (t_v > 0 or asm_v > 0) else 1.0
+        if min_iou_threshold is not None and target_overlap_ver is None:
+            target_overlap_ver = bool(measured_iou >= min_iou_threshold - 1e-6)
+            if not target_overlap_ver:
+                reasons.append(f"target_iou_below_minimum:{measured_iou:.4f}<{min_iou_threshold:.4f}")
+
+    target_ver = _finalize_target_verdict()
+
+    if not mode_ok or not fp_ok or not placed_valid or not mech_params_ok:
         return IndependentVerificationReport(
             verified=False,
             schema_version_ok=schema_ok,
@@ -2190,14 +2725,20 @@ def verify_certificate_independently(
             replayed_peak_utilization=float("inf"),
             failure_reasons=tuple(reasons),
             verification_scope=ver_scope,
-            target_verified=False if ver_scope == "assembly_and_target" else None,
+            target_verified=target_ver,
+            target_digest_verified=target_digest_ver,
+            target_overlap_verified=target_overlap_ver,
+            measured_target_iou=measured_iou,
+            inventory_status=inv_status,
+            mechanics_profile_sha256=mech_profile_sha,
         )
 
+    _check_deadline()
     csg_ok, csg_pairs = check_fine_csg_voxel_collision_2ldu(artifact.placed_parts)
     if not csg_ok:
         reasons.append(f"csg_2ldu_collision:{csg_pairs}")
 
-    # Forbidden boxes & target binding check (`F7`)
+    # Forbidden boxes check (`F7`)
     forb_boxes: List[LDUBox] = [
         LDUBox(int(fb[0]), int(fb[1]), int(fb[2]), int(fb[3]), int(fb[4]), int(fb[5]))
         for fb in artifact.forbidden_support_boxes
@@ -2226,34 +2767,6 @@ def verify_certificate_independently(
                 reasons.append(f"forbidden_support_box_violated:{e_fb['instance_id']}")
                 break
 
-    if ver_scope == "assembly_and_target":
-        exp_t_sha = (
-            obl.expected_target_sha256
-            if obl.expected_target_sha256 is not None
-            else compute_target_sha256(obl.expected_target_field)
-        )
-        if artifact.target_sha256 != exp_t_sha:
-            target_ver = False
-            reasons.append("target_sha256_mismatch")
-        elif (
-            obl.expected_target_field is not None
-            and obl.min_target_iou is not None
-            and artifact.assembly_mode == "cubic_ldu"
-        ):
-            all_wb = [
-                b.transform(LDUFrame(int(e_t["rot_id"]), tuple(int(c) for c in e_t["pos"])))
-                for e_t in artifact.placed_parts
-                for b in get_brick_primitive(str(e_t["part_id"])).hull_boxes
-            ]
-            inter_v = float(obl.expected_target_field.intersection_volume(all_wb))
-            t_v = float(getattr(obl.expected_target_field, "total_volume_ldu3", 0))
-            asm_v = float(sum(b.volume_ldu3 for b in all_wb))
-            union_v = max(t_v + asm_v - inter_v, 1.0)
-            actual_iou = inter_v / union_v if (t_v > 0 or asm_v > 0) else 1.0
-            if actual_iou < float(obl.min_target_iou) - 1e-6:
-                target_ver = False
-                reasons.append(f"target_iou_below_minimum:{actual_iou:.4f}<{obl.min_target_iou:.4f}")
-
     # Port index & connector compatibility check (`F1`: zero uncaught IndexError)
     ports_ok = True
     for (ia, pa_id), (ib, pb_id) in artifact.matched_port_pairs:
@@ -2274,12 +2787,17 @@ def verify_certificate_independently(
             reasons.append("incompatible_matched_ports")
             break
 
-    # Witness summary residual check
-    eq_tol = float(artifact.tolerances.get("eq_residual_tol_g", 1e-5))
-    ub_tol = float(artifact.tolerances.get("ub_violation_tol", 1e-5))
-    w_eq = float(artifact.lp_witness_summary.get("max_eq_residual_g", 0.0))
-    w_ub = float(artifact.lp_witness_summary.get("max_ub_violation", 0.0))
-    witness_res_ok = (w_eq <= eq_tol) and (w_ub <= ub_tol)
+    # Witness summary residual check against validated tolerances (`S4`)
+    eq_tol = float(eff_tolerances.get("eq_residual_tol_g", 1e-5))
+    ub_tol = float(eff_tolerances.get("ub_violation_tol", 1e-5))
+    w_eq = float((artifact.lp_witness_summary or {}).get("max_eq_residual_g", 0.0))
+    w_ub = float((artifact.lp_witness_summary or {}).get("max_ub_violation", 0.0))
+    witness_res_ok = (
+        math.isfinite(w_eq)
+        and math.isfinite(w_ub)
+        and (0.0 <= w_eq <= eq_tol)
+        and (0.0 <= w_ub <= ub_tol)
+    )
     if not witness_res_ok:
         reasons.append(f"witness_residual_exceeded:eq={w_eq:.2e},ub={w_ub:.2e}")
 
@@ -2323,8 +2841,8 @@ def verify_certificate_independently(
                 for nb in new_boxes
             )
 
-        m_arm_v = float(artifact.joint_assumptions.get("moment_arm_capacity_ldu", 8.0))
-        is_table_fp = artifact.foundation_policy == "table_friction_only"
+        m_arm_v = float(eff_joint_assumptions.get("moment_arm_capacity_ldu", 8.0))
+        is_table_fp = eff_foundation_policy == "table_friction_only"
         inc_port_grid: Dict[Tuple[int, int, int], List[Tuple[int, PortPolarity]]] = {}
         inc_lower_nbrs: Dict[int, Dict[int, List[Tuple[float, float, float]]]] = {}
         bearing_prefix_fails = 0
@@ -2369,7 +2887,7 @@ def verify_certificate_independently(
             gbxs = sim_boxes[g_iid]
             if is_table_fp:
                 return any(
-                    abs(float(b.zmin)) <= 0.25
+                    abs(float(b.zmin) - eff_ground_z) <= 0.25
                     and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5)
                     and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
                     for b in gbxs
@@ -2500,7 +3018,9 @@ def verify_certificate_independently(
             return False
 
         if (obl.require_prefix_mechanics or obl.require_monotone_insertion) and len(artifact.execution_operations) > 0:
+            total_subtrace_ops = 0
             for op in artifact.execution_operations:
+                _check_deadline()
                 op_t = str(op.get("op_type", ""))
                 added_only_grounded = False
                 just_placed_iid: Optional[int] = None
@@ -2570,6 +3090,11 @@ def verify_certificate_independently(
                         break
                     sub_ops = op.get("subtrace") or []
                     if sub_ops:
+                        total_subtrace_ops += len(sub_ops)
+                        if total_subtrace_ops > limits.max_subtrace_ops:
+                            raise VerifierBudgetExceededError(
+                                f"subtrace_ops>{limits.max_subtrace_ops}"
+                            )
                         loc_sim_parts: Dict[int, Dict[str, Any]] = {}
                         loc_sim_boxes: Dict[int, Tuple[LDUBox, ...]] = {}
                         loc_prev_stable = True
@@ -2617,7 +3142,7 @@ def verify_certificate_independently(
                                         loc_sim_parts,
                                         loc_sim_boxes,
                                         "clutched_baseplate",
-                                        artifact.joint_assumptions,
+                                        eff_joint_assumptions,
                                         (0.0, 0.0, -1.0),
                                     )
                                     if p_ok_l:
@@ -2626,7 +3151,7 @@ def verify_certificate_independently(
                                 sub_st_ok, _, sub_eq_r, sub_ub_v = _independent_cubic_equilibrium_lp(
                                     loc_sim_parts,
                                     "clutched_baseplate",
-                                    artifact.joint_assumptions,
+                                    eff_joint_assumptions,
                                 )
                                 max_eq_r = max(max_eq_r, sub_eq_r)
                                 max_ub_v = max(max_ub_v, sub_ub_v)
@@ -2647,7 +3172,7 @@ def verify_certificate_independently(
                             prefix_ok = False
                             reasons.append("subtrace_instance_count_mismatch")
                             break
-                        inferred_off: Optional[Tuple[int, int, int]] = None
+                        inferred_tf: Optional[LDUFrame] = None
                         for check_sid in exp_sub_iids:
                             if check_sid not in loc_sim_parts or check_sid not in parts_by_id:
                                 prefix_ok = False
@@ -2655,18 +3180,16 @@ def verify_certificate_independently(
                                 break
                             lp_e = loc_sim_parts[check_sid]
                             wp_e = parts_by_id[check_sid]
-                            if str(lp_e["part_id"]) != str(wp_e["part_id"]) or int(lp_e["rot_id"]) != int(wp_e["rot_id"]):
+                            if str(lp_e["part_id"]) != str(wp_e["part_id"]):
                                 prefix_ok = False
                                 reasons.append(f"subtrace_pose_or_mold_mismatch:{check_sid}")
                                 break
-                            cur_off = (
-                                int(wp_e["pos"][0]) - int(lp_e["pos"][0]),
-                                int(wp_e["pos"][1]) - int(lp_e["pos"][1]),
-                                int(wp_e["pos"][2]) - int(lp_e["pos"][2]),
-                            )
-                            if inferred_off is None:
-                                inferred_off = cur_off
-                            elif cur_off != inferred_off:
+                            lp_fr = LDUFrame(int(lp_e["rot_id"]), tuple(int(c) for c in lp_e["pos"]))
+                            wp_fr = LDUFrame(int(wp_e["rot_id"]), tuple(int(c) for c in wp_e["pos"]))
+                            cur_tf = wp_fr.compose(lp_fr.inverse())
+                            if inferred_tf is None:
+                                inferred_tf = cur_tf
+                            elif cur_tf != inferred_tf:
                                 prefix_ok = False
                                 reasons.append(f"subtrace_non_rigid_offset:{check_sid}")
                                 break
@@ -2757,9 +3280,10 @@ def verify_certificate_independently(
                         plumb_ok, _ = _try_independent_plumb_prefix_witness(
                             sim_parts,
                             sim_boxes,
-                            artifact.foundation_policy,
-                            artifact.joint_assumptions,
+                            eff_foundation_policy,
+                            eff_joint_assumptions,
                             cur_grav,
+                            ground_plane_z_ldu=eff_ground_z,
                         )
                         if plumb_ok:
                             bearing_prefix_fails = 0
@@ -2767,7 +3291,11 @@ def verify_certificate_independently(
                             continue
                         bearing_prefix_fails += 1
                     st_step, _, eq_r_s, ub_v_s = _independent_cubic_equilibrium_lp(
-                        sim_parts, artifact.foundation_policy, artifact.joint_assumptions, gravity_unit=cur_grav
+                        sim_parts,
+                        eff_foundation_policy,
+                        eff_joint_assumptions,
+                        gravity_unit=cur_grav,
+                        ground_plane_z_ldu=eff_ground_z,
                     )
                     max_eq_r = max(max_eq_r, eq_r_s)
                     max_ub_v = max(max_ub_v, ub_v_s)
@@ -2800,8 +3328,12 @@ def verify_certificate_independently(
                             break
 
         if obl.require_static_mechanics:
+            _check_deadline()
             static_ok, final_eta, eq_r_f, ub_v_f = _independent_cubic_equilibrium_lp(
-                parts_by_id, artifact.foundation_policy, artifact.joint_assumptions
+                parts_by_id,
+                eff_foundation_policy,
+                eff_joint_assumptions,
+                ground_plane_z_ldu=eff_ground_z,
             )
             max_eq_r = max(max_eq_r, eq_r_f)
             max_ub_v = max(max_ub_v, ub_v_f)
@@ -2994,13 +3526,15 @@ def verify_certificate_independently(
                     break
 
                 if obl.require_prefix_mechanics and sim_c_parts:
+                    _check_deadline()
                     st_c_step, _, eq_rc, ub_vc, _ = _independent_continuous_se3_equilibrium_lp(
                         sim_c_parts,
                         sim_c_poses,
                         sim_c_obbs,
-                        artifact.foundation_policy,
-                        artifact.joint_assumptions,
+                        eff_foundation_policy,
+                        eff_joint_assumptions,
                         gravity_unit=cur_grav_c,
+                        ground_plane_z_ldu=eff_ground_z,
                     )
                     max_eq_r = max(max_eq_r, eq_rc)
                     max_ub_v = max(max_ub_v, ub_vc)
@@ -3035,12 +3569,14 @@ def verify_certificate_independently(
                             break
 
         if obl.require_static_mechanics:
+            _check_deadline()
             static_ok, final_eta, eq_rf, ub_vf, disc_pairs = _independent_continuous_se3_equilibrium_lp(
                 parts_by_id,
                 poses_all,
                 obbs_all,
-                artifact.foundation_policy,
-                artifact.joint_assumptions,
+                eff_foundation_policy,
+                eff_joint_assumptions,
+                ground_plane_z_ldu=eff_ground_z,
             )
             max_eq_r = max(max_eq_r, eq_rf)
             max_ub_v = max(max_ub_v, ub_vf)
@@ -3054,9 +3590,10 @@ def verify_certificate_independently(
                         parts_by_id,
                         poses_all,
                         obbs_all,
-                        artifact.foundation_policy,
-                        artifact.joint_assumptions,
+                        eff_foundation_policy,
+                        eff_joint_assumptions,
                         lateral_accel_xy=(lx, ly),
+                        ground_plane_z_ldu=eff_ground_z,
                     )
                     if not lat_ok:
                         static_ok = False
@@ -3116,6 +3653,11 @@ def verify_certificate_independently(
         failure_reasons=tuple(reasons),
         verification_scope=ver_scope,
         target_verified=target_ver,
+        target_digest_verified=target_digest_ver,
+        target_overlap_verified=target_overlap_ver,
+        measured_target_iou=measured_iou,
+        inventory_status=inv_status,
+        mechanics_profile_sha256=mech_profile_sha,
     )
 
 
@@ -3123,13 +3665,47 @@ def verify_certificate_json_file(
     path: str | Path,
     obligations: Optional[VerificationObligations] = None,
 ) -> IndependentVerificationReport:
-    """Safely parse and verify a certificate JSON file, returning structured failure on malformed JSON."""
+    """
+    Safely size-bound, parse, and verify a certificate JSON file (`S5`),
+    returning a structured failure report on oversized/non-regular files, malformed JSON,
+    or runtime replay exceptions.
+    """
+    obl = obligations if obligations is not None else VerificationObligations()
+    limits = obl.resource_limits if obl.resource_limits is not None else VerifierResourceLimits()
     try:
-        raw_text = Path(path).read_text(encoding="utf-8")
+        fpath = Path(path)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(fpath), flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"Certificate path is not a regular file: {fpath}")
+            if st.st_size > limits.max_json_bytes:
+                raise VerifierBudgetExceededError(
+                    f"json_bytes={st.st_size}>max_json_bytes={limits.max_json_bytes}"
+                )
+            chunks = []
+            read_so_far = 0
+            while True:
+                blk = os.read(fd, 1024 * 1024)
+                if not blk:
+                    break
+                read_so_far += len(blk)
+                if read_so_far > limits.max_json_bytes:
+                    raise VerifierBudgetExceededError(
+                        f"json_bytes>{limits.max_json_bytes}"
+                    )
+                chunks.append(blk)
+            raw_text = b"".join(chunks).decode("utf-8")
+        finally:
+            os.close(fd)
         raw_obj = json.loads(raw_text)
         if not isinstance(raw_obj, dict):
             raise ValueError(f"Expected top-level JSON object, got {type(raw_obj).__name__}")
         artifact = VersionedCertificateArtifact.from_json_dict(raw_obj)
+        return verify_certificate_independently(artifact, obligations=obl)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception as exc:
         return IndependentVerificationReport(
             verified=False,
@@ -3148,19 +3724,149 @@ def verify_certificate_json_file(
             failure_reasons=(f"invalid_artifact_json:{type(exc).__name__}:{exc}",),
             verification_scope="invalid_artifact_json",
             target_verified=False,
+            inventory_status="failed",
         )
-    return verify_certificate_independently(artifact, obligations=obligations)
+
+
+def _isolated_worker_entry(
+    json_path_str: str,
+    obligations: Optional[VerificationObligations],
+    memory_limit_mb: Optional[int],
+    out_q: Any,
+) -> None:
+    if memory_limit_mb is not None and memory_limit_mb > 0:
+        try:
+            import resource
+
+            limit_bytes = int(memory_limit_mb) * 1024 * 1024
+            # RLIMIT_AS is enforced on Linux; ignore ValueError on macOS where RLIMIT_AS is unsupported
+            resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        except Exception:
+            pass
+    rep = verify_certificate_json_file(json_path_str, obligations=obligations)
+    out_q.put(rep)
+
+
+def verify_certificate_in_isolated_worker(
+    path: str | Path,
+    obligations: Optional[VerificationObligations] = None,
+    *,
+    timeout_sec: float = 60.0,
+    memory_limit_mb: Optional[int] = 2048,
+) -> IndependentVerificationReport:
+    """
+    Execute `verify_certificate_json_file` inside a fresh `spawn` worker process (`S5`)
+    with hard wall-clock supervision and optional POSIX virtual-memory caps so an adversarial
+    input or native solver fault cannot wedge or OOM a shared parent service.
+    """
+    ctx = mp.get_context("spawn")
+    out_q = ctx.Queue(maxsize=1)
+    proc = ctx.Process(
+        target=_isolated_worker_entry,
+        args=(str(Path(path)), obligations, memory_limit_mb, out_q),
+        daemon=True,
+    )
+    proc.start()
+    try:
+        proc.join(timeout=max(0.05, float(timeout_sec)))
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=1.0)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=1.0)
+            return IndependentVerificationReport(
+                verified=False,
+                schema_version_ok=False,
+                catalog_sha256_valid=False,
+                inventory_valid=False,
+                csg_2ldu_collision_free=False,
+                ports_compatible=False,
+                monotone_insertion_valid=False,
+                static_mechanics_valid=False,
+                prefix_mechanics_valid=False,
+                witness_residuals_valid=False,
+                max_eq_residual_g=float("inf"),
+                max_ub_violation=float("inf"),
+                replayed_peak_utilization=float("inf"),
+                failure_reasons=(f"worker_timeout_exceeded:{timeout_sec}s",),
+                verification_scope="isolated_worker_failed",
+                target_verified=False,
+                inventory_status="failed",
+            )
+        if not out_q.empty():
+            return out_q.get_nowait()
+        return IndependentVerificationReport(
+            verified=False,
+            schema_version_ok=False,
+            catalog_sha256_valid=False,
+            inventory_valid=False,
+            csg_2ldu_collision_free=False,
+            ports_compatible=False,
+            monotone_insertion_valid=False,
+            static_mechanics_valid=False,
+            prefix_mechanics_valid=False,
+            witness_residuals_valid=False,
+            max_eq_residual_g=float("inf"),
+            max_ub_violation=float("inf"),
+            replayed_peak_utilization=float("inf"),
+            failure_reasons=(f"worker_exited_without_report:exitcode={proc.exitcode}",),
+            verification_scope="isolated_worker_failed",
+            target_verified=False,
+            inventory_status="failed",
+        )
+    finally:
+        out_q.close()
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Planner-free independent certificate verifier (`topo_brick`, R9-WS1)."
+        description=(
+            "Planner-free independent certificate verifier (`topo_brick`, R9-WS1 / Phase 13). "
+            "Without --expected-target-sha256, runs assembly_only verification; pass relying-party "
+            "flags to enforce target digest, license, foundation, or inventory policies."
+        )
     )
     parser.add_argument("artifact_json", nargs="?", help="Path to VersionedCertificateArtifact JSON")
     parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run standalone 2-LDU CSG collider audit + synthetic certificate replay check",
+    )
+    parser.add_argument("--expected-target-sha256", default=None, help="Relying-party expected target SHA-256")
+    parser.add_argument(
+        "--expected-license-filter",
+        choices=("all", "cc_by_4_0_only"),
+        default=None,
+        help="Relying-party license policy ('cc_by_4_0_only' or 'all')",
+    )
+    parser.add_argument(
+        "--expected-foundation-policy",
+        choices=_VALID_FOUNDATION_POLICIES,
+        default=None,
+        help="Relying-party expected foundation policy",
+    )
+    parser.add_argument(
+        "--expected-ground-plane-z-ldu",
+        default="0.0",
+        help="Relying-party expected ground plane Z in LDU (default: 0.0; pass 'any' to accept certificate datum)",
+    )
+    parser.add_argument(
+        "--expected-inventory-json",
+        type=Path,
+        default=None,
+        help="Path to JSON object mapping mold_id -> max allowed count",
+    )
+    parser.add_argument(
+        "--require-explicit-inventory",
+        action="store_true",
+        help="Fail closed if neither relying-party nor certificate inventory limits are present",
+    )
+    parser.add_argument(
+        "--max-json-bytes",
+        type=int,
+        default=32 * 1024 * 1024,
+        help="Maximum allowed certificate JSON file size in bytes (default: 32 MiB)",
     )
     args = parser.parse_args(argv)
 
@@ -3205,7 +3911,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not args.artifact_json:
         parser.error("Provide an artifact JSON path or pass --self-test.")
-    rep = verify_certificate_json_file(args.artifact_json)
+
+    exp_inv: Optional[Dict[str, int]] = None
+    if args.expected_inventory_json is not None:
+        raw_inv = json.loads(args.expected_inventory_json.read_text(encoding="utf-8"))
+        if not isinstance(raw_inv, dict):
+            parser.error("--expected-inventory-json must contain a JSON object.")
+        exp_inv = {str(k): int(v) for k, v in raw_inv.items()}
+
+    raw_gz_arg = str(args.expected_ground_plane_z_ldu).strip().lower()
+    if raw_gz_arg == "any":
+        exp_gz_cli: Optional[float] = None
+    else:
+        try:
+            exp_gz_cli = float(raw_gz_arg)
+        except ValueError:
+            parser.error(f"Invalid --expected-ground-plane-z-ldu: {args.expected_ground_plane_z_ldu!r}")
+
+    cli_obl = VerificationObligations(
+        expected_target_sha256=args.expected_target_sha256,
+        expected_license_filter=args.expected_license_filter,
+        expected_foundation_policy=args.expected_foundation_policy,
+        expected_inventory_counts=exp_inv,
+        require_explicit_inventory_spec=bool(args.require_explicit_inventory),
+        resource_limits=VerifierResourceLimits(max_json_bytes=int(args.max_json_bytes)),
+        expected_ground_plane_z_ldu=exp_gz_cli,
+    )
+    rep = verify_certificate_json_file(args.artifact_json, obligations=cli_obl)
     print(json.dumps(asdict(rep), indent=2))
     return 0 if rep.verified else 1
 

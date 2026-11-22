@@ -99,6 +99,8 @@ class EquilibriumResult:
     foundation_policy: str = FoundationPolicy.CLUTCHED_BASEPLATE.value
     interface_model: str = "decomposed_contact_hull"
     primal_witness: Optional[PrimalEquilibriumWitness] = None
+    budget_exceeded: bool = False
+    ground_plane_z_ldu: float = 0.0
 
 
 _HIGHS_THREAD_LOCAL = threading.local()
@@ -138,15 +140,27 @@ def _solve_lp_highspy_or_scipy(
     b_ub: np.ndarray,
     var_lb: np.ndarray,
     var_ub: np.ndarray,
+    *,
+    deadline_monotonic_s: Optional[float] = None,
+    force_scipy_backend: bool = False,
 ) -> Tuple[bool, Optional[np.ndarray], str]:
     """
     Solve `min c_obj^T x` s.t. `A_eq x = b_eq`, `A_ub x <= b_ub`, `var_lb <= x <= var_ub`
     using native C++ `highspy` (1 thread) with graceful fallback to `scipy.optimize.linprog`.
-    Uses interior-point (`ipm`, `run_crossover="off"`) first for large (`n_vars > 1500`) LPs
-    to avoid minimax (`min eta`) dual-simplex degeneracy while keeping simplex first for small LPs.
+    Enforces a shared wall-clock `deadline_monotonic_s` across BOTH `highspy` and `scipy` (`TB-FIX-02`),
+    returning `(False, None, "BUDGET_EXCEEDED")` immediately upon deadline expiry.
     """
+    def _rem_budget() -> Optional[float]:
+        if deadline_monotonic_s is None:
+            return None
+        return float(deadline_monotonic_s - time.monotonic())
+
+    rem0 = _rem_budget()
+    if rem0 is not None and rem0 <= 0.0:
+        return False, None, "BUDGET_EXCEEDED"
+
     n_vars = int(c_obj.shape[0])
-    if _HAS_HIGHSPY and n_vars > 0:
+    if _HAS_HIGHSPY and not force_scipy_backend and n_vars > 0:
         from scipy.sparse import vstack as sp_vstack
 
         a_comb = sp_vstack([a_eq_csc, a_ub_csc], format="csc")
@@ -181,12 +195,18 @@ def _solve_lp_highspy_or_scipy(
 
         solver_order = (True, False) if n_vars > 1200 else (False, True)
         for idx_s, try_ipm in enumerate(solver_order):
+            rem_h = _rem_budget()
+            if rem_h is not None and rem_h <= 0.0:
+                return False, None, "BUDGET_EXCEEDED"
             h = _get_shared_highs_lp(use_ipm=try_ipm)
+            h.setOptionValue("time_limit", max(0.002, rem_h) if rem_h is not None else inf)
             if not try_ipm:
                 h.setOptionValue("simplex_iteration_limit", 1800 if idx_s == 0 else 50000)
             h.passModel(lp)
             h.run()
             model_status = h.getModelStatus()
+            if model_status == highspy.HighsModelStatus.kTimeLimit:
+                return False, None, "BUDGET_EXCEEDED"
             if model_status == highspy.HighsModelStatus.kOptimal:
                 sol_arr = np.asarray(h.getSolution().col_value, dtype=np.float64)
                 if sol_arr.shape[0] == n_vars and np.all(np.isfinite(sol_arr)):
@@ -204,21 +224,24 @@ def _solve_lp_highspy_or_scipy(
                     return True, sol_arr, "Optimal (highspy-ipm)" if try_ipm else "Optimal (highspy)"
             if model_status == highspy.HighsModelStatus.kInfeasible:
                 return False, None, "Infeasible (highspy)"
+            if _rem_budget() is not None and (_rem_budget() or 0.0) <= 0.0:
+                return False, None, "BUDGET_EXCEEDED"
 
     bounds_list: List[Tuple[float, Optional[float]]] = [
         (float(lb), None if not np.isfinite(ub) else float(ub))
         for lb, ub in zip(var_lb, var_ub)
     ]
-    res = linprog(
-        c=c_obj,
-        A_ub=a_ub_csc,
-        b_ub=b_ub,
-        A_eq=a_eq_csc,
-        b_eq=b_eq,
-        bounds=bounds_list,
-        method="highs",
-    )
-    if not res.success or res.x is None:
+    for sc_method, extra_opts in (
+        ("highs", {}),
+        ("highs-ipm", {}),
+        ("highs-ds", {"presolve": False}),
+    ):
+        rem_sc = _rem_budget()
+        if rem_sc is not None and rem_sc <= 0.0:
+            return False, None, "BUDGET_EXCEEDED"
+        opts = dict(extra_opts)
+        if rem_sc is not None:
+            opts["time_limit"] = max(0.002, rem_sc)
         res = linprog(
             c=c_obj,
             A_ub=a_ub_csc,
@@ -226,22 +249,18 @@ def _solve_lp_highspy_or_scipy(
             A_eq=a_eq_csc,
             b_eq=b_eq,
             bounds=bounds_list,
-            method="highs-ipm",
+            method=sc_method,
+            options=opts if opts else None,
         )
-    if not res.success or res.x is None:
-        res = linprog(
-            c=c_obj,
-            A_ub=a_ub_csc,
-            b_ub=b_ub,
-            A_eq=a_eq_csc,
-            b_eq=b_eq,
-            bounds=bounds_list,
-            method="highs-ds",
-            options={"presolve": False},
-        )
-    if not res.success or res.x is None:
-        return False, None, str(res.message)
-    return True, np.asarray(res.x, dtype=np.float64), "Optimal (scipy-highs)"
+        if getattr(res, "status", -1) == 3:
+            return False, None, "BUDGET_EXCEEDED"
+        if res.success and res.x is not None:
+            return True, np.asarray(res.x, dtype=np.float64), "Optimal (scipy-highs)"
+        if getattr(res, "status", -1) == 2:
+            return False, None, str(res.message)
+        if _rem_budget() is not None and (_rem_budget() or 0.0) <= 0.0:
+            return False, None, "BUDGET_EXCEEDED"
+    return False, None, str(res.message)
 
 
 class SparseStaticEquilibriumValidator:
@@ -269,6 +288,8 @@ class SparseStaticEquilibriumValidator:
         stud_snap_preload_ratio: float = 0.7142857,  # BrickSim 2026: (0.2 * 3.5 N) / 0.98 N
         rim_fulcrum_ldu: float = 10.0,  # Exact 0.5 stud pitch outer brick wall rim
         stud_knob_height_ldu: float = 4.8,  # Exact 1.92 mm physical LEGO stud engagement height
+        ground_plane_z_ldu: float = 0.0,
+        _force_scipy_backend: bool = False,
     ) -> None:
         self.clutch_force_capacity_grams = float(clutch_force_capacity_grams)
         self.moment_arm_capacity_ldu = float(moment_arm_capacity_ldu)
@@ -287,6 +308,8 @@ class SparseStaticEquilibriumValidator:
         self.stud_snap_preload_ratio = float(stud_snap_preload_ratio)
         self.rim_fulcrum_ldu = float(rim_fulcrum_ldu)
         self.stud_knob_height_ldu = float(stud_knob_height_ldu)
+        self.ground_plane_z_ldu = float(ground_plane_z_ldu)
+        self._force_scipy_backend = bool(_force_scipy_backend)
         self._last_state_version: Optional[int] = None
         self._last_result: Optional[EquilibriumResult] = None
         self._component_cache: Dict[
@@ -333,25 +356,45 @@ class SparseStaticEquilibriumValidator:
         if not wbs_a or not wbs_b:
             return None
 
-        def _proj_span(wbs: Any, axis: Tuple[float, float, float]) -> Tuple[float, float]:
-            lo = float("inf")
-            hi = -float("inf")
-            ax, ay, az = axis
-            for b in wbs:
-                for x in (float(b.xmin), float(b.xmax)):
-                    for y in (float(b.ymin), float(b.ymax)):
-                        for z in (float(b.zmin), float(b.zmax)):
-                            val = (x - rx_m) * ax + (y - ry_m) * ay + (z - rz_m) * az
-                            if val < lo:
-                                lo = val
-                            if val > hi:
-                                hi = val
-            return lo, hi
+        if t1_0 == (1.0, 0.0, 0.0) and t2_0 == (0.0, 1.0, 0.0):
+            if len(wbs_a) == 1:
+                ba0 = wbs_a[0]
+                ua_lo, ua_hi = float(ba0.xmin) - rx_m, float(ba0.xmax) - rx_m
+                va_lo, va_hi = float(ba0.ymin) - ry_m, float(ba0.ymax) - ry_m
+            else:
+                ua_lo = float(min(b.xmin for b in wbs_a)) - rx_m
+                ua_hi = float(max(b.xmax for b in wbs_a)) - rx_m
+                va_lo = float(min(b.ymin for b in wbs_a)) - ry_m
+                va_hi = float(max(b.ymax for b in wbs_a)) - ry_m
+            if len(wbs_b) == 1:
+                bb0 = wbs_b[0]
+                ub_lo, ub_hi = float(bb0.xmin) - rx_m, float(bb0.xmax) - rx_m
+                vb_lo, vb_hi = float(bb0.ymin) - ry_m, float(bb0.ymax) - ry_m
+            else:
+                ub_lo = float(min(b.xmin for b in wbs_b)) - rx_m
+                ub_hi = float(max(b.xmax for b in wbs_b)) - rx_m
+                vb_lo = float(min(b.ymin for b in wbs_b)) - ry_m
+                vb_hi = float(max(b.ymax for b in wbs_b)) - ry_m
+        else:
+            def _proj_span(wbs: Any, axis: Tuple[float, float, float]) -> Tuple[float, float]:
+                lo = float("inf")
+                hi = -float("inf")
+                ax, ay, az = axis
+                for b in wbs:
+                    for x in (float(b.xmin), float(b.xmax)):
+                        for y in (float(b.ymin), float(b.ymax)):
+                            for z in (float(b.zmin), float(b.zmax)):
+                                val = (x - rx_m) * ax + (y - ry_m) * ay + (z - rz_m) * az
+                                if val < lo:
+                                    lo = val
+                                if val > hi:
+                                    hi = val
+                return lo, hi
 
-        ua_lo, ua_hi = _proj_span(wbs_a, t1_0)
-        ub_lo, ub_hi = _proj_span(wbs_b, t1_0)
-        va_lo, va_hi = _proj_span(wbs_a, t2_0)
-        vb_lo, vb_hi = _proj_span(wbs_b, t2_0)
+            ua_lo, ua_hi = _proj_span(wbs_a, t1_0)
+            ub_lo, ub_hi = _proj_span(wbs_b, t1_0)
+            va_lo, va_hi = _proj_span(wbs_a, t2_0)
+            vb_lo, vb_hi = _proj_span(wbs_b, t2_0)
         inter_u_lo = max(ua_lo, ub_lo)
         inter_u_hi = min(ua_hi, ub_hi)
         inter_v_lo = max(va_lo, vb_lo)
@@ -420,16 +463,40 @@ class SparseStaticEquilibriumValidator:
         cap_mn = k_p_eff * m_max + max(h_u, h_v) * k_p_eff * f_shear_max
         return h_u, h_v, cap_m1, cap_m2, cap_mn
 
-    def verify_against_cold_rebuild(self, state: AssemblyState) -> bool:
+    def verify_against_cold_rebuild(
+        self,
+        state: AssemblyState,
+        foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
+        ground_plane_z_ldu: Optional[float] = None,
+        deadline_monotonic_s: Optional[float] = None,
+    ) -> bool:
         """
         Verify that evaluating `state` produces the exact same equilibrium result and
         peak utilization as evaluating a fresh cold rebuild of `state` without component cache.
         """
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return False
         if not state.verify_state_integrity():
             return False
-        res_warm = self.evaluate(state, use_component_cache=True)
+        res_warm = self.evaluate(
+            state,
+            use_component_cache=True,
+            foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
+        )
+        if res_warm.budget_exceeded:
+            return False
         cold_state = state.clone_cold_rebuild()
-        res_cold = self.evaluate(cold_state, use_component_cache=False)
+        res_cold = self.evaluate(
+            cold_state,
+            use_component_cache=False,
+            foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
+        )
+        if res_cold.budget_exceeded:
+            return False
         if res_warm.is_stable != res_cold.is_stable:
             return False
         if np.isinf(res_warm.peak_utilization) and np.isinf(res_cold.peak_utilization):
@@ -452,6 +519,8 @@ class SparseStaticEquilibriumValidator:
             ]
         ],
         lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
+        deadline_monotonic_s: Optional[float] = None,
+        force_scipy_backend: bool = False,
     ) -> Tuple[
         bool,
         float,
@@ -953,8 +1022,12 @@ class SparseStaticEquilibriumValidator:
             b_ub=b_ub,
             var_lb=var_lb,
             var_ub=var_ub,
+            deadline_monotonic_s=deadline_monotonic_s,
+            force_scipy_backend=force_scipy_backend,
         )
         if not ok or sol is None:
+            if msg == "BUDGET_EXCEEDED":
+                return False, float("inf"), {}, {}, None, "BUDGET_EXCEEDED", None
             return False, float("inf"), {}, {}, None, f"Static equilibrium LP infeasible: {msg}", None
 
         max_eq_res = (
@@ -1099,18 +1172,39 @@ class SparseStaticEquilibriumValidator:
         use_component_cache: bool = True,
         foundation_policy: FoundationPolicy | str = FoundationPolicy.CLUTCHED_BASEPLATE,
         lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
+        ground_plane_z_ldu: Optional[float] = None,
+        deadline_monotonic_s: Optional[float] = None,
+        _force_scipy_backend: bool = False,
     ) -> EquilibriumResult:
         """
         Solve the coupled 6-DoF static equilibrium LP for `state` across all connected
-        subassemblies under the declared `foundation_policy` and `lateral_accel_xy`.
+        subassemblies under the declared `foundation_policy`, `ground_plane_z_ldu`, and
+        optional `deadline_monotonic_s`.
         """
         t0 = time.perf_counter()
+        eff_ground_z = float(self.ground_plane_z_ldu if ground_plane_z_ldu is None else ground_plane_z_ldu)
         fp_enum = (
             foundation_policy
             if isinstance(foundation_policy, FoundationPolicy)
             else FoundationPolicy(str(foundation_policy))
         )
         fp_str = fp_enum.value
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return EquilibriumResult(
+                is_stable=False,
+                peak_utilization=float("inf"),
+                safety_margin=-float("inf"),
+                contact_utilizations={},
+                weakest_contact=None,
+                solve_time_ms=(time.perf_counter() - t0) * 1000.0,
+                status_message="BUDGET_EXCEEDED",
+                patch_utilizations={},
+                asymmetric_bearing_active=self.asymmetric_bearing_mode,
+                foundation_policy=fp_str,
+                interface_model=self.patch_interface_model,
+                budget_exceeded=True,
+                ground_plane_z_ldu=eff_ground_z,
+            )
         parts = state.placed_parts
         if not parts:
             return EquilibriumResult(
@@ -1125,6 +1219,7 @@ class SparseStaticEquilibriumValidator:
                 asymmetric_bearing_active=self.asymmetric_bearing_mode,
                 foundation_policy=fp_str,
                 interface_model=self.patch_interface_model,
+                ground_plane_z_ldu=eff_ground_z,
             )
 
         depths = state.compute_support_depths()
@@ -1248,6 +1343,8 @@ class SparseStaticEquilibriumValidator:
                 )
                 self._last_state_version = state.state_version
                 self._last_result = fast_res
+                self._last_plumb_state_version = state.state_version
+                self._last_plumb_hop_cache = plumb_hop_cache
                 return fast_res
 
         free_set = set(free_insts)
@@ -1279,7 +1376,7 @@ class SparseStaticEquilibriumValidator:
                 ymin = float(min(b.ymin for b in gp.world_boxes))
                 ymax = float(max(b.ymax for b in gp.world_boxes))
                 zmin = float(min(b.zmin for b in gp.world_boxes))
-                if abs(zmin) > 0.25:
+                if abs(zmin - eff_ground_z) > 0.25:
                     return EquilibriumResult(
                         is_stable=False,
                         peak_utilization=float("inf"),
@@ -1287,11 +1384,15 @@ class SparseStaticEquilibriumValidator:
                         contact_utilizations={},
                         weakest_contact=None,
                         solve_time_ms=(time.perf_counter() - t0) * 1000.0,
-                        status_message=f"Grounded part {gid} (zmin={zmin:.2f}) does not contact z=0 table under TABLE_FRICTION_ONLY.",
+                        status_message=(
+                            f"Grounded part {gid} (zmin={zmin:.2f}) does not contact "
+                            f"ground_plane_z_ldu={eff_ground_z:.2f} table under TABLE_FRICTION_ONLY."
+                        ),
                         patch_utilizations={},
                         asymmetric_bearing_active=self.asymmetric_bearing_mode,
                         foundation_policy=fp_str,
                         interface_model=self.patch_interface_model,
+                        ground_plane_z_ldu=eff_ground_z,
                     )
                 corners = (
                     (xmin, ymin, zmin),
@@ -1449,14 +1550,24 @@ class SparseStaticEquilibriumValidator:
             else:
                 cached_entry = None
 
-            if cached_entry is not None:
+            if cached_entry is not None and not _force_scipy_backend:
                 self.component_cache_hits += 1
                 c_ok, c_eta, c_utils, c_patches, c_weak, c_msg, c_wit = cached_entry
             else:
                 c_ok, c_eta, c_utils, c_patches, c_weak, c_msg, c_wit = self._solve_subassembly_component(
-                    parts, comp_nodes, comp_contacts, lateral_accel_xy=lateral_accel_xy
+                    parts,
+                    comp_nodes,
+                    comp_contacts,
+                    lateral_accel_xy=lateral_accel_xy,
+                    deadline_monotonic_s=deadline_monotonic_s,
+                    force_scipy_backend=_force_scipy_backend,
                 )
-                if cache_key is not None and len(self._component_cache) < 4096:
+                if (
+                    cache_key is not None
+                    and not _force_scipy_backend
+                    and c_msg != "BUDGET_EXCEEDED"
+                    and len(self._component_cache) < 4096
+                ):
                     self._component_cache[cache_key] = (
                         c_ok,
                         c_eta,
@@ -1481,6 +1592,8 @@ class SparseStaticEquilibriumValidator:
                     asymmetric_bearing_active=self.asymmetric_bearing_mode,
                     foundation_policy=fp_str,
                     interface_model=self.patch_interface_model,
+                    budget_exceeded=(c_msg == "BUDGET_EXCEEDED"),
+                    ground_plane_z_ldu=eff_ground_z,
                 )
 
             merged_utils.update(c_utils)
@@ -1525,6 +1638,7 @@ class SparseStaticEquilibriumValidator:
             foundation_policy=fp_str,
             interface_model=self.patch_interface_model,
             primal_witness=merged_witness,
+            ground_plane_z_ldu=eff_ground_z,
         )
         self._last_state_version = state.state_version
         self._last_result = result
@@ -1539,6 +1653,7 @@ class SparseStaticEquilibriumValidator:
         out_patch_utils: Optional[Dict[Tuple[int, int], float]] = None,
         hop_cache: Optional[Dict[int, Any]] = None,
         foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
+        ground_plane_z_ldu: Optional[float] = None,
     ) -> Tuple[bool, float]:
         """
         Extend an exact non-negative 6-DoF primal LP solution vector (`R9-WS3` §5.5 residual-checked)
@@ -1553,6 +1668,7 @@ class SparseStaticEquilibriumValidator:
         If any residual exceeds `1e-7` or any inequality exceeds `1.0 - 1e-5`, returns `(False, inf)`
         so the caller solves the full `highspy` LP.
         """
+        eff_ground_z = float(self.ground_plane_z_ldu if ground_plane_z_ldu is None else ground_plane_z_ldu)
         parts = state._parts
         new_p = parts.get(new_inst_id)
         if new_p is None:
@@ -1561,12 +1677,14 @@ class SparseStaticEquilibriumValidator:
         if new_p.is_grounded:
             if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
                 # Under TABLE_FRICTION_ONLY, a grounded brick rests with zero tension iff its CoM lies
-                # strictly inside its own z=0 table contact rectangle!
+                # strictly inside its own ground_plane_z_ldu table contact rectangle!
                 tv_g = sum(float(b.volume_ldu3) for b in new_p.world_boxes)
                 gx_c = sum(float(b.volume_ldu3) * 0.5 * (b.xmin + b.xmax) for b in new_p.world_boxes) / max(tv_g, 1.0)
                 gy_c = sum(float(b.volume_ldu3) * 0.5 * (b.ymin + b.ymax) for b in new_p.world_boxes) / max(tv_g, 1.0)
                 if not any(
-                    b.zmin <= 0 and (b.xmin + 0.5) <= gx_c <= (b.xmax - 0.5) and (b.ymin + 0.5) <= gy_c <= (b.ymax - 0.5)
+                    abs(float(b.zmin) - eff_ground_z) <= 0.25
+                    and (b.xmin + 0.5) <= gx_c <= (b.xmax - 0.5)
+                    and (b.ymin + 0.5) <= gy_c <= (b.ymax - 0.5)
                     for b in new_p.world_boxes
                 ):
                     self.witness_fallback_count += 1
@@ -1602,7 +1720,9 @@ class SparseStaticEquilibriumValidator:
                 return c_hops
             cp = parts[cid]
             cur_zmin = min(b.zmin for b in cp.world_boxes)
+            cur_zmax = max(b.zmax for b in cp.world_boxes)
             by_nbr: Dict[int, List[Tuple[float, float, float]]] = {}
+            nbr_is_tens: Dict[int, bool] = {}
             from topo_brick.interface.port_manifold import _get_placed_world_ports
 
             for pid_loc, wf, _, ctype_c in _get_placed_world_ports(cp.part_id, cp.pose):
@@ -1615,7 +1735,13 @@ class SparseStaticEquilibriumValidator:
                     continue
                 nbr_id = other[0]
                 nbr_p = parts[nbr_id]
-                if max(b.zmax for b in nbr_p.world_boxes) > cur_zmin:
+                nbr_zmax = max(b.zmax for b in nbr_p.world_boxes)
+                nbr_zmin = min(b.zmin for b in nbr_p.world_boxes)
+                if nbr_zmax <= cur_zmin:
+                    nbr_is_tens[nbr_id] = False
+                elif nbr_zmin >= cur_zmax:
+                    nbr_is_tens[nbr_id] = True
+                else:
                     continue
                 by_nbr.setdefault(nbr_id, []).append(
                     (float(wf.pos[0]), float(wf.pos[1]), float(wf.pos[2]))
@@ -1670,12 +1796,96 @@ class SparseStaticEquilibriumValidator:
                         ymin_p,
                         ymax_p,
                         t_key,
+                        nbr_is_tens[nbr_id],
                     )
                 )
             c_hops = tuple(built_hops)
             if hop_cache is not None:
                 hop_cache[cid] = c_hops
             return c_hops
+
+        def _eval_table_grounding(
+            g_id: int,
+            ray_w: float,
+            ray_x: float,
+            ray_y: float,
+            extra_loads: Dict[Tuple[int, int], Tuple[float, float, float]],
+        ) -> Optional[List[Tuple[Tuple[int, int], Tuple[float, float, float], float]]]:
+            if foundation_policy != FoundationPolicy.TABLE_FRICTION_ONLY:
+                return []
+            gp = parts[g_id]
+            gr_bxs = [b for b in gp.world_boxes if abs(float(b.zmin) - eff_ground_z) <= 0.25]
+            if not gr_bxs:
+                return None
+            if any(
+                (b.xmin + 1.0) <= ray_x <= (b.xmax - 1.0) and (b.ymin + 1.0) <= ray_y <= (b.ymax - 1.0)
+                for b in gr_bxs
+            ):
+                if base_witness is None:
+                    return []
+            elif base_witness is None:
+                return None
+
+            xmin_g = float(min(b.xmin for b in gp.world_boxes))
+            xmax_g = float(max(b.xmax for b in gp.world_boxes))
+            ymin_g = float(min(b.ymin for b in gp.world_boxes))
+            ymax_g = float(max(b.ymax for b in gp.world_boxes))
+            dx_g = xmax_g - xmin_g
+            dy_g = ymax_g - ymin_g
+            if dx_g <= 1e-6 or dy_g <= 1e-6:
+                return None
+            crn_xy = (
+                (xmin_g, ymin_g),
+                (xmax_g, ymin_g),
+                (xmin_g, ymax_g),
+                (xmax_g, ymax_g),
+            )
+            base_cps: List[float] = []
+            cur_cps: List[float] = []
+            f_prev = 0.0
+            wx_prev = 0.0
+            wy_prev = 0.0
+            for c_k in range(4):
+                pk_t = (-1 - c_k, g_id)
+                b_cp = base_witness.patch_net_loads.get(pk_t, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))[2]
+                p_dc = (
+                    extra_loads[pk_t][0]
+                    if pk_t in extra_loads
+                    else patch_comp_loads.get(pk_t, (0.0, 0.0, 0.0))[0]
+                )
+                c_tot = b_cp + p_dc
+                base_cps.append(b_cp)
+                cur_cps.append(c_tot)
+                f_prev += c_tot
+                wx_prev += c_tot * crn_xy[c_k][0]
+                wy_prev += c_tot * crn_xy[c_k][1]
+            f_new = f_prev + ray_w
+            if f_new <= 1e-9:
+                return None
+            cpx_new = (wx_prev + ray_w * ray_x) / f_new
+            cpy_new = (wy_prev + ray_w * ray_y) / f_new
+            if not ((xmin_g + 0.25) <= cpx_new <= (xmax_g - 0.25) and (ymin_g + 0.25) <= cpy_new <= (ymax_g - 0.25)):
+                return None
+            alpha_g = (cpx_new - xmin_g) / dx_g
+            beta_g = (cpy_new - ymin_g) / dy_g
+            ws = (
+                (1.0 - alpha_g) * (1.0 - beta_g),
+                alpha_g * (1.0 - beta_g),
+                (1.0 - alpha_g) * beta_g,
+                alpha_g * beta_g,
+            )
+            tbl_updates: List[Tuple[Tuple[int, int], Tuple[float, float, float], float]] = []
+            for c_k in range(4):
+                pk_t = (-1 - c_k, g_id)
+                tot_cp_t = f_new * ws[c_k]
+                if tot_cp_t < -1e-9:
+                    return None
+                u_t = max(0.0, tot_cp_t) / f_comp_max
+                if u_t > 1.0 - 1e-5:
+                    return None
+                new_dc = tot_cp_t - base_cps[c_k]
+                tbl_updates.append((pk_t, (new_dc, 0.0, 0.0), u_t))
+            return tbl_updates
 
         def _eval_hop_step(
             hop_entry: Any,
@@ -1686,6 +1896,9 @@ class SparseStaticEquilibriumValidator:
             inc_ref: Tuple[float, float, float],
             extra_loads: Optional[Dict[Tuple[int, int], Tuple[float, float, float]]] = None,
         ) -> Optional[Tuple[Tuple[int, int], Tuple[float, float, float], float, float]]:
+            is_tens_h = bool(hop_entry[18]) if len(hop_entry) > 18 else False
+            if (is_tens_h or ray_w < 0.0) and base_witness is None:
+                return None
             (
                 _,
                 pkey_h,
@@ -1701,12 +1914,12 @@ class SparseStaticEquilibriumValidator:
                 ccx_h,
                 ccy_h,
             ) = hop_entry[:13]
-            d_comp = ray_w
+            d_up = ray_w
             d_mx = (ray_y - ry_h) * ray_w
             d_my = -(ray_x - rx_h) * ray_w
-            fz_res = abs(inc_fz + d_comp)
-            tx_res = abs((inc_ref[1] - ccy_h) * inc_fz + (ry_h - ccy_h) * d_comp + d_mx)
-            ty_res = abs(-(inc_ref[0] - ccx_h) * inc_fz - (rx_h - ccx_h) * d_comp + d_my)
+            fz_res = abs(inc_fz + d_up)
+            tx_res = abs((inc_ref[1] - ccy_h) * inc_fz + (ry_h - ccy_h) * d_up + d_mx)
+            ty_res = abs(-(inc_ref[0] - ccx_h) * inc_fz - (rx_h - ccx_h) * d_up + d_my)
             if max(fz_res, tx_res, ty_res) > 1e-6:
                 return None
             base_nl = (
@@ -1714,16 +1927,25 @@ class SparseStaticEquilibriumValidator:
                 if base_witness is not None
                 else (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             )
+            tkey_h = (-1000000 - pkey_h[0], pkey_h[1])
             if extra_loads is not None and pkey_h in extra_loads:
                 prev_dc, prev_dmx, prev_dmy = extra_loads[pkey_h]
             else:
                 prev_dc, prev_dmx, prev_dmy = patch_comp_loads.get(pkey_h, (0.0, 0.0, 0.0))
-            acc_dc = prev_dc + d_comp
+            if extra_loads is not None and tkey_h in extra_loads:
+                prev_dt = extra_loads[tkey_h][0]
+            else:
+                prev_dt = patch_comp_loads.get(tkey_h, (0.0, 0.0, 0.0))[0]
+            delta_c = -d_up if is_tens_h else d_up
+            net_prev = (base_nl[2] - base_nl[1]) + (prev_dc - prev_dt)
+            net_new = net_prev + delta_c
+            tot_cp = max(0.0, net_new)
+            tot_tn = max(0.0, -net_new)
+            acc_dc = tot_cp - base_nl[2]
+            acc_dt = tot_tn - base_nl[1]
             acc_dmx = prev_dmx + d_mx
             acc_dmy = prev_dmy + d_my
             tot_sh = base_nl[0]
-            tot_tn = base_nl[1]
-            tot_cp = base_nl[2] + acc_dc
             tot_abs_m1 = abs(base_nl[3]) + abs(acc_dmx)
             tot_abs_m2 = abs(base_nl[4]) + abs(acc_dmy)
             tot_abs_mn = abs(base_nl[5])
@@ -1742,12 +1964,14 @@ class SparseStaticEquilibriumValidator:
                     (tot_sh - self.coulomb_friction_coeff * max(0.0, tot_cp - tot_tn))
                     / (k_p_eff * f_shear_max),
                 )
-                u_t1 = max(0.0, (tot_abs_m1 - hb_v_h * tot_cp) / cap_m1_h)
-                u_t2 = max(0.0, (tot_abs_m2 - hb_u_h * tot_cp) / cap_m2_h)
+                u_t1 = max(0.0, (tot_abs_m1 - hb_v_h * max(0.0, tot_cp - tot_tn)) / cap_m1_h)
+                u_t2 = max(0.0, (tot_abs_m2 - hb_u_h * max(0.0, tot_cp - tot_tn)) / cap_m2_h)
                 u_tn = tot_abs_mn / cap_mn_h
                 u_p = max(u_force, u_sh, u_t1, u_t2, u_tn)
             if u_p > 1.0 - 1e-5:
                 return None
+            if abs(acc_dt) > 1e-12 and extra_loads is not None:
+                extra_loads[tkey_h] = (acc_dt, 0.0, 0.0)
             return pkey_h, (acc_dc, acc_dmx, acc_dmy), u_p, rz_h
 
         def _trace_vertical_ray(
@@ -1770,45 +1994,50 @@ class SparseStaticEquilibriumValidator:
             while not parts[cur_r].is_grounded:
                 c_hops_r = _get_or_build_hops(cur_r)
                 best_hop_r = None
-                best_sc_r: Optional[Tuple[float, float, Tuple[Tuple[int, int, int], int, str]]] = None
+                ranked_hops_r: List[Tuple[Any, Any]] = []
                 for h_ent in c_hops_r:
                     nbr_id_r = h_ent[0]
                     if nbr_id_r in vis_r or nbr_id_r not in parts:
                         continue
                     rx_r, ry_r = h_ent[3], h_ent[4]
                     xmin_p, xmax_p, ymin_p, ymax_p, t_key = h_ent[13:18]
+                    is_tens_r = 1 if (len(h_ent) > 18 and h_ent[18]) else 0
                     dx = max(xmin_p - ray_x, 0.0, ray_x - xmax_p)
                     dy = max(ymin_p - ray_y, 0.0, ray_y - ymax_p)
-                    sc_k = (round(dx * dx + dy * dy, 6), round((ray_x - rx_r) ** 2 + (ray_y - ry_r) ** 2, 6), t_key)
-                    if best_sc_r is None or sc_k < best_sc_r:
-                        best_sc_r = sc_k
-                        best_hop_r = h_ent
+                    sc_k = (is_tens_r, round(dx * dx + dy * dy, 6), round((ray_x - rx_r) ** 2 + (ray_y - ry_r) ** 2, 6), t_key)
+                    ranked_hops_r.append((sc_k, h_ent))
+                ranked_hops_r.sort(key=lambda item: item[0])
+                best_hop_r = ranked_hops_r[0][1] if ranked_hops_r else None
                 single_ok = False
-                if best_hop_r is not None:
-                    ev = _eval_hop_step(best_hop_r, ray_w, ray_x, ray_y, inc_fz_r, inc_ref_r, local_extra)
+                for _, cand_hop_r in ranked_hops_r[:4]:
+                    hop_extra = dict(local_extra)
+                    ev = _eval_hop_step(cand_hop_r, ray_w, ray_x, ray_y, inc_fz_r, inc_ref_r, hop_extra)
                     if ev is not None:
-                        nxt_id = best_hop_r[0]
-                        table_ok = True
+                        nxt_id = cand_hop_r[0]
+                        tbl_upd: Optional[List[Tuple[Tuple[int, int], Tuple[float, float, float], float]]] = []
                         if parts[nxt_id].is_grounded and foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
-                            gr_bxs = [b for b in parts[nxt_id].world_boxes if b.zmin <= 0]
-                            table_ok = any(
-                                (b.xmin + 1.0) <= ray_x <= (b.xmax - 1.0) and (b.ymin + 1.0) <= ray_y <= (b.ymax - 1.0)
-                                for b in gr_bxs
-                            )
-                        if table_ok:
+                            tbl_upd = _eval_table_grounding(nxt_id, ray_w, ray_x, ray_y, hop_extra)
+                        if tbl_upd is not None:
                             pkey_r, state_r, u_r, rz_r = ev
                             if not parts[nxt_id].is_grounded and splits_left > 0:
-                                tail_extra = dict(local_extra)
+                                tail_extra = dict(hop_extra)
                                 tail_extra[pkey_r] = state_r
                                 tail_single = _trace_vertical_ray(
                                     nxt_id, ray_w, ray_x, ray_y, rz_r, tail_extra, splits_left=0
                                 )
                                 if tail_single is not None:
                                     merged_t: Dict[Tuple[int, int], Tuple[Tuple[float, float, float], float]] = {}
+                                    for k_he, v_he in hop_extra.items():
+                                        if k_he not in local_extra or local_extra[k_he] != v_he:
+                                            merged_t[k_he] = (v_he, 0.0)
                                     for pk_t, st_t, u_t in ray_updates + [(pkey_r, state_r, u_r)] + tail_single:
                                         merged_t[pk_t] = (st_t, u_t)
                                     return [(pk_t, vm[0], vm[1]) for pk_t, vm in merged_t.items()]
                                 if len(c_hops_r) < 2:
+                                    local_extra.update(hop_extra)
+                                    for k_he, v_he in hop_extra.items():
+                                        if k_he[0] <= -1000000:
+                                            ray_updates.append((k_he, v_he, 0.0))
                                     ray_updates.append((pkey_r, state_r, u_r))
                                     local_extra[pkey_r] = state_r
                                     inc_fz_r = -ray_w
@@ -1816,14 +2045,23 @@ class SparseStaticEquilibriumValidator:
                                     vis_r.add(nxt_id)
                                     cur_r = nxt_id
                                     single_ok = True
+                                    break
                             else:
+                                local_extra.update(hop_extra)
+                                for k_he, v_he in hop_extra.items():
+                                    if k_he[0] <= -1000000:
+                                        ray_updates.append((k_he, v_he, 0.0))
                                 ray_updates.append((pkey_r, state_r, u_r))
                                 local_extra[pkey_r] = state_r
+                                for pk_tb, st_tb, u_tb in tbl_upd:
+                                    ray_updates.append((pk_tb, st_tb, u_tb))
+                                    local_extra[pk_tb] = st_tb
                                 inc_fz_r = -ray_w
                                 inc_ref_r = (ray_x, ray_y, rz_r)
                                 vis_r.add(nxt_id)
                                 cur_r = nxt_id
                                 single_ok = True
+                                break
                 if single_ok:
                     continue
                 if splits_left > 0 and len(c_hops_r) >= 2:
@@ -1842,7 +2080,13 @@ class SparseStaticEquilibriumValidator:
                             denom = abx * abx + aby * aby
                             if denom < 1e-6:
                                 continue
-                            t_s = max(0.05, min(0.95, ((ray_x - ax) * abx + (ray_y - ay) * aby) / denom))
+                            t_raw = ((ray_x - ax) * abx + (ray_y - ay) * aby) / denom
+                            if 0.05 <= t_raw <= 0.95:
+                                t_s = t_raw
+                            elif base_witness is not None and -4.5 <= t_raw <= 5.5:
+                                t_s = t_raw
+                            else:
+                                continue
                             rx_res = ray_x - (ax + t_s * abx)
                             ry_res = ray_y - (ay + t_s * aby)
                             if abs(rx_res) > 7.5 or abs(ry_res) > 7.5:
@@ -1851,28 +2095,43 @@ class SparseStaticEquilibriumValidator:
                             fb = t_s * ray_w
                             qax, qay = ax + rx_res, ay + ry_res
                             qbx, qby = bx + rx_res, by + ry_res
-                            eva = _eval_hop_step(ha, fa, qax, qay, -fa, (qax, qay, inc_ref_r[2]), local_extra)
+                            split_extra = dict(local_extra)
+                            eva = _eval_hop_step(ha, fa, qax, qay, -fa, (qax, qay, inc_ref_r[2]), split_extra)
                             if eva is None:
                                 continue
-                            split_extra = dict(local_extra)
                             split_extra[eva[0]] = eva[1]
                             evb = _eval_hop_step(hb, fb, qbx, qby, -fb, (qbx, qby, inc_ref_r[2]), split_extra)
                             if evb is None:
                                 continue
                             split_extra[evb[0]] = evb[1]
-                            ray_a = _trace_vertical_ray(
-                                ha[0], fa, qax, qay, az, split_extra, splits_left=splits_left - 1
-                            )
+                            if parts[ha[0]].is_grounded:
+                                tbl_a = _eval_table_grounding(ha[0], fa, qax, qay, split_extra)
+                                if tbl_a is None:
+                                    continue
+                                ray_a: Optional[List[Tuple[Tuple[int, int], Tuple[float, float, float], float]]] = tbl_a
+                            else:
+                                ray_a = _trace_vertical_ray(
+                                    ha[0], fa, qax, qay, az, split_extra, splits_left=splits_left - 1
+                                )
                             if ray_a is None:
                                 continue
                             for pk_a, st_a, _ in ray_a:
                                 split_extra[pk_a] = st_a
-                            ray_b = _trace_vertical_ray(
-                                hb[0], fb, qbx, qby, bz, split_extra, splits_left=splits_left - 1
-                            )
+                            if parts[hb[0]].is_grounded:
+                                tbl_b = _eval_table_grounding(hb[0], fb, qbx, qby, split_extra)
+                                if tbl_b is None:
+                                    continue
+                                ray_b: Optional[List[Tuple[Tuple[int, int], Tuple[float, float, float], float]]] = tbl_b
+                            else:
+                                ray_b = _trace_vertical_ray(
+                                    hb[0], fb, qbx, qby, bz, split_extra, splits_left=splits_left - 1
+                                )
                             if ray_b is None:
                                 continue
                             merged_u_map: Dict[Tuple[int, int], Tuple[Tuple[float, float, float], float]] = {}
+                            for k_se, v_se in split_extra.items():
+                                if k_se[0] <= -1000000 and (k_se not in local_extra or local_extra[k_se] != v_se):
+                                    merged_u_map[k_se] = (v_se, 0.0)
                             for pk_m, st_m, u_m in (
                                 ray_updates
                                 + [(eva[0], eva[1], eva[2]), (evb[0], evb[1], evb[2])]
@@ -1894,13 +2153,11 @@ class SparseStaticEquilibriumValidator:
                             continue
                 return None
 
-            if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
-                gr_boxes = [b for b in parts[cur_r].world_boxes if b.zmin <= 0]
-                if not any(
-                    (b.xmin + 1.0) <= ray_x <= (b.xmax - 1.0) and (b.ymin + 1.0) <= ray_y <= (b.ymax - 1.0)
-                    for b in gr_boxes
-                ):
+            if start_id == cur_r and foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY:
+                tbl_start = _eval_table_grounding(cur_r, ray_w, ray_x, ray_y, local_extra)
+                if tbl_start is None:
                     return None
+                ray_updates.extend(tbl_start)
             return ray_updates
 
         chain_updates_opt = _trace_vertical_ray(
@@ -1909,7 +2166,7 @@ class SparseStaticEquilibriumValidator:
             cx,
             cy,
             cz,
-            splits_left=(3 if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY else 0),
+            splits_left=(2 if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY else 0),
         )
         if chain_updates_opt is None:
             self.witness_fallback_count += 1
@@ -1934,6 +2191,7 @@ class SparseStaticEquilibriumValidator:
         self,
         state: AssemblyState,
         foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
+        ground_plane_z_ldu: Optional[float] = None,
     ) -> Tuple[bool, float]:
         """
         Exact O(N) top-down 1-or-2-pier zero-tension bearing compression witness (`0.0` force & torque residual)
@@ -1941,6 +2199,7 @@ class SparseStaticEquilibriumValidator:
         """
         from topo_brick.interface.port_manifold import _get_placed_world_ports
 
+        eff_ground_z = float(self.ground_plane_z_ldu if ground_plane_z_ldu is None else ground_plane_z_ldu)
         parts = state._parts
         if not parts:
             return True, 0.0
@@ -1980,7 +2239,9 @@ class SparseStaticEquilibriumValidator:
             if pl_u.is_grounded:
                 if is_table:
                     if not any(
-                        b.zmin <= 0 and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5) and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
+                        abs(float(b.zmin) - eff_ground_z) <= 0.25
+                        and (b.xmin + 0.5) <= qx <= (b.xmax - 0.5)
+                        and (b.ymin + 0.5) <= qy <= (b.ymax - 0.5)
                         for b in pl_u.world_boxes
                     ):
                         return False, float("inf")

@@ -16,7 +16,6 @@ Implements:
 from __future__ import annotations
 
 from dataclasses import asdict
-import hashlib
 from pathlib import Path
 import time
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -35,7 +34,7 @@ from topo_chess.data.lichess_phase_c import (
     build_or_load_phase_c_lichess_datasets,
     canonicalize_8x8_state,
 )
-from topo_chess.data.pipeline import StockfishDistiller
+from topo_chess.data.pipeline import StockfishDistiller, StockfishProtocolError
 from topo_chess.diffusion.d3pm_planner import D3PMHorizonPlanner
 from topo_chess.domains.boards import Standard8x8State
 from topo_chess.domains.move_graph import BLACK, Move, STANDARD_8X8_GRAPH, WHITE
@@ -52,6 +51,69 @@ from topo_chess.models.ablation_configs import (
     ChessFormerTokenShawEncoder,
 )
 from topo_chess.models.ipa_encoder import TopographicalIPAEncoder
+from topo_chess.security.checkpoint_io import (
+    create_private_checkpoint_dir,
+    safe_load_authenticated_checkpoint,
+    safe_save_checkpoint,
+    validate_phase_c_checkpoint_schema,
+)
+
+
+def reload_phase_c_checkpoint_agent(
+    ckpt_path: Path,
+    expected_sha256: str,
+    *,
+    device: torch.device = torch.device("cpu"),
+    max_bytes: int = 512 * 1024 * 1024,
+) -> Tuple[AblationConfigAgent, Dict[str, object]]:
+    """
+    Authenticate `ckpt_path` against `expected_sha256`, deserialize with `weights_only=True`
+    on CPU, validate hyperparameter & tensor bounds BEFORE allocating `nn.Module`s, and return
+    `(fresh_agent, validated_metadata)`.
+    """
+    raw_loaded, actual_sha = safe_load_authenticated_checkpoint(
+        ckpt_path,
+        expected_sha256=expected_sha256,
+        max_bytes=max_bytes,
+        map_location="cpu",
+    )
+    validated = validate_phase_c_checkpoint_schema(raw_loaded)
+    cfg_n = str(validated["config_name"])
+    d_m = int(validated["d_model"])
+    n_l = int(validated["num_layers"])
+    n_h = int(validated["n_heads"])
+    if cfg_n == "Config_A":
+        fresh_enc: nn.Module = BitboardGlobalTransformer(
+            8, 8, d_m, n_l, n_h, int(round(d_m * 3.25))
+        )
+    elif cfg_n == "Config_B":
+        fresh_enc = ChessFormerTokenShawEncoder(
+            8, 8, d_m, n_l, n_h, int(round(d_m * 3.25))
+        )
+    else:
+        fresh_enc = TopographicalIPAEncoder(8, 8, d_m, n_l, n_h, d_m * 3)
+    fresh_enc.load_state_dict(validated["encoder_state_dict"], strict=True)
+    fresh_enc = fresh_enc.to(device).eval()
+
+    fresh_pl: Optional[D3PMHorizonPlanner] = None
+    if validated["planner_state_dict"] is not None:
+        fresh_pl = D3PMHorizonPlanner(
+            8, 8, 6, d_m, 4, n_h, d_m * 3, 32, enable_legality_head=True
+        )
+        fresh_pl.load_state_dict(validated["planner_state_dict"], strict=True)
+        fresh_pl = fresh_pl.to(device).eval()
+
+    fresh_ag = AblationConfigAgent(cfg_n, int(validated["seed"]), fresh_enc, fresh_pl)
+    meta = {
+        "config_name": cfg_n,
+        "seed": int(validated["seed"]),
+        "d_model": d_m,
+        "num_layers": n_l,
+        "n_heads": n_h,
+        "sha256": actual_sha,
+        "external_10k_solve_accuracy": float(validated["external_10k_solve_accuracy"]),
+    }
+    return fresh_ag, meta
 
 
 def train_phase_c_spatial_encoder(
@@ -563,6 +625,21 @@ class PureStockfishUCIAgent:
         self._configured = False
         self._edge_cache: Dict[int, int] = {}
         self.uci_calls: int = 0
+        self.uci_failures: int = 0
+        self.static_fallback_calls: int = 0
+
+    def __enter__(self) -> "PureStockfishUCIAgent":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
+    def telemetry_summary(self) -> Dict[str, int]:
+        return {
+            "uci_calls": int(self.uci_calls),
+            "uci_failures": int(self.uci_failures),
+            "static_fallback_calls": int(self.static_fallback_calls),
+        }
 
     def _ensure_configured(self) -> None:
         self.distiller._ensure_proc()
@@ -588,12 +665,20 @@ class PureStockfishUCIAgent:
         zh = st.zobrist_hash()
         if zh in self._edge_cache:
             return self._edge_cache[zh]
+        leg_py = list(st.board.legal_moves)
+        if not leg_py:
+            return 0
         if self.uci_calls < self.max_live_uci_queries:
-            self._ensure_configured()
-            self.distiller._send(f"position fen {st.to_fen()}")
-            self.distiller._send(f"go nodes {self.node_budget}")
-            lines = self.distiller._wait_for("bestmove")
-            self.uci_calls += 1
+            try:
+                self._ensure_configured()
+                self.distiller._send(f"position fen {st.to_fen()}")
+                self.distiller._send(f"go nodes {self.node_budget}")
+                lines = self.distiller._wait_for("bestmove")
+                self.uci_calls += 1
+            except StockfishProtocolError:
+                self.uci_failures += 1
+                self._configured = False
+                raise
             for line in reversed(lines):
                 if line.startswith("bestmove "):
                     parts = line.split()
@@ -603,11 +688,16 @@ class PureStockfishUCIAgent:
                             e_id = st.graph.move_to_edge_id(mv, st.side_to_move)
                             self._edge_cache[zh] = e_id
                             return e_id
-                        except Exception:
-                            break
-        leg_py = list(st.board.legal_moves)
-        if not leg_py:
-            return 0
+                        except Exception as exc:
+                            self.uci_failures += 1
+                            raise StockfishProtocolError(
+                                f"Stockfish returned invalid bestmove token {parts[1]!r}"
+                            ) from exc
+            self.uci_failures += 1
+            raise StockfishProtocolError(
+                "Stockfish bestmove exchange produced no parseable move for non-terminal state"
+            )
+        self.static_fallback_calls += 1
         e_ids, q_sc = _fast_board_move_scores(st.board, leg_py)
         best_e = int(e_ids[int(np.argmax(q_sc))])
         self._edge_cache[zh] = best_e
@@ -994,7 +1084,7 @@ def run_phase_c_tier_full(
     if device is None:
         device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    private_ckpt_dir = create_private_checkpoint_dir(checkpoint_dir)
 
     print(
         "[Phase C Tier C-Full] Starting WP1-C Lichess Ingestion & 10-Worker Stockfish 19 Distillation...",
@@ -1145,28 +1235,27 @@ def run_phase_c_tier_full(
             )
             external_10k_evals[cfg_name].append(ext_res)
 
-            # Save checkpoint & compute SHA-256 digest (WP5-C)
-            ckpt_path = checkpoint_dir / f"{cfg_name}_seed{seed}.pt"
+            # Save checkpoint into private per-run directory & compute SHA-256 digest (WP5-C)
+            ckpt_path = private_ckpt_dir / f"{cfg_name}_seed{seed}.pt"
             payload = {
-                "config_name": cfg_name,
-                "seed": seed,
-                "d_model": d_model,
-                "num_layers": num_layers,
-                "n_heads": n_heads,
+                "config_name": str(cfg_name),
+                "seed": int(seed),
+                "d_model": int(d_model),
+                "num_layers": int(num_layers),
+                "n_heads": int(n_heads),
                 "encoder_state_dict": ag_obj.encoder.state_dict(),
                 "planner_state_dict": (
                     ag_obj.d3pm_planner.state_dict() if ag_obj.d3pm_planner is not None else None
                 ),
-                "external_10k_solve_accuracy": ext_res["solve_accuracy"],
+                "external_10k_solve_accuracy": float(ext_res["solve_accuracy"]),
             }
-            torch.save(payload, ckpt_path)
-            sha256_hex = hashlib.sha256(ckpt_path.read_bytes()).hexdigest()
+            sha256_hex, size_bytes = safe_save_checkpoint(payload, ckpt_path)
             checkpoint_manifest.append(
                 {
-                    "config_name": cfg_name,
-                    "seed": seed,
+                    "config_name": str(cfg_name),
+                    "seed": int(seed),
                     "path": str(ckpt_path),
-                    "size_bytes": ckpt_path.stat().st_size,
+                    "size_bytes": int(size_bytes),
                     "sha256": sha256_hex,
                     "parameters": ag_obj.count_total_parameters(),
                 }
@@ -1361,50 +1450,44 @@ def run_phase_c_tier_full(
     )
     wp4_elapsed = round(time.perf_counter() - t_wp4, 2)
 
-    # WP5-C: Clean-Room Checkpoint Reload & SHA-256 Verification
+    # WP5-C: Clean-Room Checkpoint Reload & SHA-256 Verification across ALL manifest entries (`S1`, `S7`)
     print("[Phase C WP5-C] Executing Clean-Room Checkpoint Reload & SHA-256 Verification...", flush=True)
     t_wp5 = time.perf_counter()
     max_repro_dev_pct = 0.0
-    for item in checkpoint_manifest[:4]:
+    matched_digest_count = 0
+    reloaded_repro_count = 0
+    for item in checkpoint_manifest:
         ckpt_p = Path(str(item["path"]))
-        actual_sha = hashlib.sha256(ckpt_p.read_bytes()).hexdigest()
-        assert actual_sha == item["sha256"], f"SHA-256 mismatch on {ckpt_p}"
-        loaded = torch.load(ckpt_p, map_location=device, weights_only=False)
-        cfg_n = str(loaded["config_name"])
-        d_m = int(loaded["d_model"])
-        n_l = int(loaded["num_layers"])
-        n_h = int(loaded["n_heads"])
-        if cfg_n == "Config_A":
-            fresh_enc: nn.Module = BitboardGlobalTransformer(
-                8, 8, d_m, n_l, n_h, int(round(d_m * 3.25))
-            ).to(device)
-        elif cfg_n == "Config_B":
-            fresh_enc = ChessFormerTokenShawEncoder(
-                8, 8, d_m, n_l, n_h, int(round(d_m * 3.25))
-            ).to(device)
-        else:
-            fresh_enc = TopographicalIPAEncoder(8, 8, d_m, n_l, n_h, d_m * 3).to(device)
-        fresh_enc.load_state_dict(loaded["encoder_state_dict"])
-        fresh_pl: Optional[D3PMHorizonPlanner] = None
-        if loaded["planner_state_dict"] is not None:
-            fresh_pl = D3PMHorizonPlanner(
-                8, 8, 6, d_m, 4, n_h, d_m * 3, 32, enable_legality_head=True
-            ).to(device)
-            fresh_pl.load_state_dict(loaded["planner_state_dict"])
-        fresh_ag = AblationConfigAgent(cfg_n, int(loaded["seed"]), fresh_enc, fresh_pl)
+        expected_sha = str(item["sha256"])
+        fresh_ag, meta = reload_phase_c_checkpoint_agent(
+            ckpt_p, expected_sha, device=device
+        )
+        matched_digest_count += 1
+        cfg_n = str(meta["config_name"])
+        seed_n = int(meta["seed"])
         sub_eval = evaluate_external_10k_lichess_puzzles(
             fresh_ag, external_puzzles[:256], batched_topo, device=device
         )
         orig_eval = evaluate_external_10k_lichess_puzzles(
-            trained_agents[int(loaded["seed"])][cfg_n],
+            trained_agents[seed_n][cfg_n],
             external_puzzles[:256],
             batched_topo,
             device=device,
         )
         dev_pct = abs(sub_eval["solve_accuracy"] - orig_eval["solve_accuracy"]) * 100.0
         max_repro_dev_pct = max(max_repro_dev_pct, dev_pct)
+        item["matched_expected_digest"] = True
+        item["reloaded_weights_only"] = True
+        item["repro_deviation_pct"] = round(dev_pct, 4)
+        reloaded_repro_count += 1
 
-    sg5_c_pass = max_repro_dev_pct <= 0.5 and len(checkpoint_manifest) == 4 * len(seeds)
+    expected_total_ckpts = 4 * len(seeds)
+    sg5_c_pass = (
+        max_repro_dev_pct <= 0.5
+        and len(checkpoint_manifest) == expected_total_ckpts
+        and matched_digest_count == expected_total_ckpts
+        and reloaded_repro_count == expected_total_ckpts
+    )
     wp5_elapsed = round(time.perf_counter() - t_wp5, 2)
     total_elapsed = round(time.perf_counter() - t_start, 2)
 
@@ -1492,7 +1575,12 @@ def run_phase_c_tier_full(
             "wp4_elapsed_sec": wp4_elapsed,
         },
         "wp5_c": {
-            "checkpoints_verified": len(checkpoint_manifest),
+            "private_checkpoint_dir": str(private_ckpt_dir),
+            "checkpoints_produced": len(checkpoint_manifest),
+            "checkpoints_hashed": len(checkpoint_manifest),
+            "checkpoints_matched_expected_digest": matched_digest_count,
+            "checkpoints_reloaded_and_reproduced": reloaded_repro_count,
+            "checkpoints_verified": reloaded_repro_count,
             "max_repro_deviation_pct": round(max_repro_dev_pct, 4),
             "checkpoint_manifest": checkpoint_manifest,
             "sg5_c_pass": sg5_c_pass,

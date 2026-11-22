@@ -1669,6 +1669,7 @@ LDRAW_PART_ALIASES: Dict[str, str] = {
     "57877": "60592",
     "73129": "3941",
     "3326b": "3937",
+    "60897": "4085d",
 }
 
 _PRINT_SUFFIX_RE = re.compile(r"^([0-9]+[a-z]?)(?:p[a-z0-9]+|d[0-9]+)$")

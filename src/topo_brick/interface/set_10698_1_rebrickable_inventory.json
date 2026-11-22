@@ -12,7 +12,7 @@
     "inventories.csv.gz": "80850b9d0556742b75848e8ce1c34364ce86845b3f4e9d0e74140fb457d014c6",
     "inventory_parts.csv.gz": "e8b4146cb6bbf91d698c50792c3a53c9f4ff8ff35082e5407c7881310c53c26c"
   },
-  "color_id_mapping_notes": "Rebrickable color_id 158 (Yellowish Green, #DFEEA5) mapped to official LDraw LDConfig.ldr color_id 326; all other 32 color IDs match LDraw LDConfig.ldr 1-to-1.",
+  "color_id_mapping_notes": "Rebrickable color_id 158 (Yellowish Green, #DFEEA5) mapped to official LDraw LDConfig.ldr color_id 326, and Rebrickable color_id 182 (Trans-Orange, #F08F1C, ALPHA 128) mapped to official LDraw LDConfig.ldr color_id 57; all other 31 color IDs match LDraw LDConfig.ldr 1-to-1.",
   "spare_piece_policy": "Excluded from SET_10698_COLORED_INVENTORY (790 non-spare pieces); 14 spare pieces recorded separately in spare_items.",
   "summary": {
     "non_spare_rows": 225,
@@ -210,6 +210,17 @@
       ],
       "is_trans": true
     },
+    "57": {
+      "ldraw_color_id": 57,
+      "rebrickable_color_id": 182,
+      "name": "Trans_Orange",
+      "rgb_u8": [
+        240,
+        143,
+        28
+      ],
+      "is_trans": true
+    },
     "70": {
       "ldraw_color_id": 70,
       "rebrickable_color_id": 70,
@@ -264,17 +275,6 @@
         145
       ],
       "is_trans": false
-    },
-    "182": {
-      "ldraw_color_id": 182,
-      "rebrickable_color_id": 182,
-      "name": "Trans-Orange",
-      "rgb_u8": [
-        240,
-        143,
-        28
-      ],
-      "is_trans": true
     },
     "191": {
       "ldraw_color_id": 191,
@@ -1702,7 +1702,7 @@
       "part_num": "59900",
       "canonical_ldraw_part_id": "59900",
       "rebrickable_color_id": 182,
-      "ldraw_color_id": 182,
+      "ldraw_color_id": 57,
       "color_name": "Trans-Orange",
       "rgb_hex": "F08F1C",
       "is_trans": true,
@@ -1752,7 +1752,7 @@
       "part_num": "6141",
       "canonical_ldraw_part_id": "6141",
       "rebrickable_color_id": 182,
-      "ldraw_color_id": 182,
+      "ldraw_color_id": 57,
       "color_name": "Trans-Orange",
       "rgb_hex": "F08F1C",
       "is_trans": true,
@@ -2202,7 +2202,7 @@
       "part_num": "3941",
       "canonical_ldraw_part_id": "3941",
       "rebrickable_color_id": 182,
-      "ldraw_color_id": 182,
+      "ldraw_color_id": 57,
       "color_name": "Trans-Orange",
       "rgb_hex": "F08F1C",
       "is_trans": true,
@@ -2754,7 +2754,7 @@
       "part_num": "6141",
       "canonical_ldraw_part_id": "6141",
       "rebrickable_color_id": 182,
-      "ldraw_color_id": 182,
+      "ldraw_color_id": 57,
       "color_name": "Trans-Orange",
       "rgb_hex": "F08F1C",
       "is_trans": true,

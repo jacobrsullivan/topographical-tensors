@@ -6,9 +6,13 @@ from dataclasses import dataclass, field
 import hashlib
 import math
 import os
+from pathlib import Path
+import selectors
 import shutil
+import stat
 import subprocess
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+import time
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 from topo_chess.domains.boards import ChessState, Gardner5x5State, Standard8x8State
@@ -235,14 +239,33 @@ class Gardner5x5Evaluator:
         return q_dict, (w_prob, d_prob, l_prob, norm_ply)
 
 
+class StockfishProtocolError(RuntimeError):
+    """Raised when a Stockfish UCI child process stalls, exits prematurely, or exceeds output bounds (`S6`)."""
+
+
 class StockfishDistiller:
-    """Deterministic Fixed-Node Stockfish MultiPV Q-Value Distiller for 8x8 Chess (ALT-004)."""
+    """
+    Deterministic Fixed-Node Stockfish MultiPV Q-Value Distiller for 8x8 Chess (`ALT-004` + `Phase 13 S6`).
+
+    Hardening controls:
+    - Validates `binary_path` resolves to an existing executable regular file.
+    - Spawns child with a minimal sanitized environment (`PATH`, `HOME=/tmp`, `LANG=C.UTF-8`), never leaking
+      parent credentials or environment variables.
+    - Enforces per-exchange deadlines (`exchange_timeout_sec`), line-count caps (`max_exchange_lines`), and
+      byte caps (`max_exchange_bytes`) via non-blocking `selectors.DefaultSelector`.
+    - Treats premature EOF before the expected UCI token as a hard `StockfishProtocolError`, immediately
+      terminating and reaping the child process, and records explicit static-fallback move counts.
+    """
 
     def __init__(
         self,
         binary_path: Optional[str] = None,
         nodes_per_legal_move: int = 500,
         min_nodes_per_position: int = 4000,
+        *,
+        exchange_timeout_sec: float = 15.0,
+        max_exchange_lines: int = 4_096,
+        max_exchange_bytes: int = 524_288,
     ) -> None:
         self.binary_path = (
             binary_path
@@ -250,20 +273,99 @@ class StockfishDistiller:
             or shutil.which("stockfish")
             or "/opt/homebrew/bin/stockfish"
         )
-        self.nodes_per_legal_move = nodes_per_legal_move
-        self.min_nodes_per_position = min_nodes_per_position
-        self._proc: Optional[subprocess.Popen[str]] = None
+        self.nodes_per_legal_move = int(nodes_per_legal_move)
+        self.min_nodes_per_position = int(min_nodes_per_position)
+        self.exchange_timeout_sec = float(exchange_timeout_sec)
+        self.max_exchange_lines = int(max_exchange_lines)
+        self.max_exchange_bytes = int(max_exchange_bytes)
+        self._proc: Optional[subprocess.Popen[bytes]] = None
+        self._rx_buf = bytearray()
+        self.evaluated_positions_count: int = 0
+        self.engine_failure_count: int = 0
+        self.static_fallback_move_count: int = 0
 
-    def _ensure_proc(self) -> subprocess.Popen[str]:
+    def __enter__(self) -> "StockfishDistiller":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+    def telemetry_summary(self) -> Dict[str, int]:
+        return {
+            "evaluated_positions_count": self.evaluated_positions_count,
+            "engine_failure_count": self.engine_failure_count,
+            "static_fallback_move_count": self.static_fallback_move_count,
+        }
+
+    def _validate_executable_path(self) -> str:
+        raw_p = Path(str(self.binary_path))
+        if not raw_p.exists():
+            raise FileNotFoundError(f"Stockfish binary not found: {raw_p}")
+        resolved = raw_p.resolve(strict=True)
+        st = resolved.stat()
+        if not stat.S_ISREG(st.st_mode):
+            raise StockfishProtocolError(f"Stockfish path is not a regular file: {resolved}")
+        if not os.access(resolved, os.X_OK):
+            raise StockfishProtocolError(f"Stockfish path is not executable: {resolved}")
+        return str(resolved)
+
+    def _terminate_and_reap(self) -> None:
+        proc = self._proc
+        self._proc = None
+        self._rx_buf.clear()
+        if proc is None:
+            return
+        for stream in (proc.stdin, proc.stdout):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+        else:
+            try:
+                proc.wait(timeout=0.5)
+            except Exception:
+                pass
+
+    def _ensure_proc(self) -> subprocess.Popen[bytes]:
         if self._proc is None or self._proc.poll() is not None:
+            self._terminate_and_reap()
+            exe_path = self._validate_executable_path()
+            clean_env = {
+                "PATH": "/usr/bin:/bin:/usr/games:/opt/homebrew/bin",
+                "HOME": "/tmp",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+            }
             self._proc = subprocess.Popen(
-                [self.binary_path],
+                [exe_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
+                text=False,
+                bufsize=0,
+                env=clean_env,
+                close_fds=True,
+                start_new_session=True,
             )
+            if self._proc.stdout is None:
+                self._terminate_and_reap()
+                raise StockfishProtocolError("Failed to open Stockfish stdout pipe")
+            os.set_blocking(self._proc.stdout.fileno(), False)
+            self._rx_buf.clear()
             self._send("uci")
             self._wait_for("uciok")
             self._send("setoption name Threads value 1")
@@ -273,27 +375,102 @@ class StockfishDistiller:
         return self._proc
 
     def _send(self, cmd: str) -> None:
-        assert self._proc is not None and self._proc.stdin is not None
-        self._proc.stdin.write(cmd + "\n")
-        self._proc.stdin.flush()
+        if self._proc is None or self._proc.stdin is None or self._proc.poll() is not None:
+            self.engine_failure_count += 1
+            self._terminate_and_reap()
+            raise StockfishProtocolError(f"Stockfish process not running before sending {cmd!r}")
+        if "\n" in cmd or "\r" in cmd:
+            raise ValueError("UCI command must not contain embedded newlines")
+        try:
+            self._proc.stdin.write((cmd + "\n").encode("utf-8"))
+            self._proc.stdin.flush()
+        except Exception as exc:
+            self.engine_failure_count += 1
+            self._terminate_and_reap()
+            raise StockfishProtocolError(f"Failed writing UCI command {cmd!r}: {exc}") from exc
 
-    def _wait_for(self, token: str) -> List[str]:
-        assert self._proc is not None and self._proc.stdout is not None
+    def _wait_for(self, token: str, *, timeout_sec: Optional[float] = None) -> List[str]:
+        if self._proc is None or self._proc.stdout is None:
+            self.engine_failure_count += 1
+            raise StockfishProtocolError(f"Stockfish stdout unavailable while waiting for {token!r}")
+
+        eff_timeout = self.exchange_timeout_sec if timeout_sec is None else float(timeout_sec)
+        deadline = time.monotonic() + max(0.02, eff_timeout)
+        stdout_fd = self._proc.stdout.fileno()
         lines: List[str] = []
-        while True:
-            line = self._proc.stdout.readline()
-            if not line:
-                break
-            s = line.strip()
-            lines.append(s)
-            if s.startswith(token):
-                break
-        return lines
+        bytes_seen = len(self._rx_buf)
+
+        def _drain_complete_lines() -> Optional[List[str]]:
+            while True:
+                nl_idx = self._rx_buf.find(b"\n")
+                if nl_idx < 0:
+                    return None
+                raw_ln = bytes(self._rx_buf[:nl_idx])
+                del self._rx_buf[: nl_idx + 1]
+                s = raw_ln.decode("utf-8", errors="replace").strip()
+                lines.append(s)
+                if len(lines) > self.max_exchange_lines:
+                    self.engine_failure_count += 1
+                    self._terminate_and_reap()
+                    raise StockfishProtocolError(
+                        f"Stockfish output exceeded max_exchange_lines={self.max_exchange_lines} waiting for {token!r}"
+                    )
+                if s.startswith(token):
+                    return lines
+
+        ready_now = _drain_complete_lines()
+        if ready_now is not None:
+            return ready_now
+
+        sel = selectors.DefaultSelector()
+        sel.register(stdout_fd, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    self.engine_failure_count += 1
+                    self._terminate_and_reap()
+                    raise StockfishProtocolError(
+                        f"Stockfish timed out after {eff_timeout:.2f}s waiting for {token!r}"
+                    )
+                events = sel.select(timeout=min(remaining, 0.25))
+                if not events:
+                    if self._proc.poll() is not None:
+                        self.engine_failure_count += 1
+                        self._terminate_and_reap()
+                        raise StockfishProtocolError(
+                            f"Stockfish exited prematurely before emitting {token!r}"
+                        )
+                    continue
+                try:
+                    chunk = os.read(stdout_fd, 4096)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    # Premature EOF before expected token!
+                    self.engine_failure_count += 1
+                    self._terminate_and_reap()
+                    raise StockfishProtocolError(
+                        f"Stockfish closed stdout (premature EOF) before {token!r}"
+                    )
+                bytes_seen += len(chunk)
+                if bytes_seen > self.max_exchange_bytes:
+                    self.engine_failure_count += 1
+                    self._terminate_and_reap()
+                    raise StockfishProtocolError(
+                        f"Stockfish output exceeded max_exchange_bytes={self.max_exchange_bytes} waiting for {token!r}"
+                    )
+                self._rx_buf.extend(chunk)
+                done_lines = _drain_complete_lines()
+                if done_lines is not None:
+                    return done_lines
+        finally:
+            sel.close()
 
     def evaluate_state(
         self, state: Standard8x8State
     ) -> Tuple[Dict[int, float], Tuple[float, float, float, float]]:
-        """Evaluate all legal moves deterministically via fixed-node MultiPV search."""
+        """Evaluate all legal moves deterministically via supervised fixed-node MultiPV search (`S6`)."""
         legal_moves = state.legal_moves()
         m_count = len(legal_moves)
         if m_count == 0:
@@ -306,6 +483,10 @@ class StockfishDistiller:
         self._send(f"position fen {state.to_fen()}")
         self._send(f"go nodes {node_budget}")
         lines = self._wait_for("bestmove")
+        if not lines or not lines[-1].startswith("bestmove"):
+            self.engine_failure_count += 1
+            self._terminate_and_reap()
+            raise StockfishProtocolError("Stockfish search completed without bestmove token")
 
         uci_to_q: Dict[str, float] = {}
         for line in lines:
@@ -339,8 +520,10 @@ class StockfishDistiller:
             if uci_str in uci_to_q:
                 q_dict[edge_id] = float(0.25 * uci_to_q[uci_str] + 0.75 * q_geom)
             else:
+                self.static_fallback_move_count += 1
                 q_dict[edge_id] = float(q_geom)
 
+        self.evaluated_positions_count += 1
         best_q = max(q_dict.values()) if q_dict else 0.5
         w_prob = best_q
         l_prob = max(0.0, 1.0 - best_q - 0.1 * (1.0 - abs(2.0 * best_q - 1.0)))
@@ -349,13 +532,14 @@ class StockfishDistiller:
         return q_dict, (w_prob, d_prob, l_prob, norm_ply)
 
     def close(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
+        if self._proc is not None and self._proc.poll() is None and self._proc.stdin is not None:
             try:
-                self._send("quit")
-                self._proc.wait(timeout=2)
+                self._proc.stdin.write(b"quit\n")
+                self._proc.stdin.flush()
+                self._proc.wait(timeout=1.5)
             except Exception:
-                self._proc.kill()
-        self._proc = None
+                pass
+        self._terminate_and_reap()
 
 
 def generate_synthetic_gardner_games(

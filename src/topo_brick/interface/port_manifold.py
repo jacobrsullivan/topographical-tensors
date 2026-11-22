@@ -450,6 +450,27 @@ def get_admissible_socket_pocket_ldu(connector_type: ConnectorType) -> LDUBox:
     return LDUBox(-8, -8, -8, 8, 8, 8)
 
 
+@lru_cache(maxsize=16384)
+def _get_rel_hull_box_offsets(part_id: str, rot_id: int) -> Tuple[Tuple[int, int, int, int, int, int], ...]:
+    """Return origin-centered rotated hull box bounds `(xmin, ymin, zmin, xmax, ymax, zmax)` for `(part_id, rot_id)`."""
+    prim = get_brick_primitive(part_id)
+    rot_f = LDUFrame(rot_id, (0, 0, 0))
+    res: List[Tuple[int, int, int, int, int, int]] = []
+    for hb in prim.hull_boxes:
+        rb = hb.transform(rot_f)
+        res.append((rb.xmin, rb.ymin, rb.zmin, rb.xmax, rb.ymax, rb.zmax))
+    return tuple(res)
+
+
+@lru_cache(maxsize=16384)
+def _get_rel_socket_pocket_bounds(part_id: str, rot_id: int, local_pid: int) -> Tuple[int, int, int, int, int, int]:
+    """Return origin-centered rotated female socket pocket bounds `(xmin, ymin, zmin, xmax, ymax, zmax)`."""
+    pspec = get_brick_primitive(part_id).ports[local_pid]
+    rf = LDUFrame(rot_id, (0, 0, 0)).compose(pspec.local_frame)
+    sb = get_admissible_socket_pocket_ldu(pspec.connector_type).transform(rf)
+    return (sb.xmin, sb.ymin, sb.zmin, sb.xmax, sb.ymax, sb.zmax)
+
+
 def _intersection_contained_in_pocket(
     prot_box: LDUBox, hull_box: LDUBox, pocket_box: LDUBox
 ) -> bool:
@@ -760,11 +781,11 @@ class AssemblyState:
             w_socket: Optional[LDUBox] = None
             if mated_gpid is not None and mated_inst in self._parts:
                 p_other = self._parts[mated_inst]
-                other_spec = get_brick_primitive(p_other.part_id).ports[mated_gpid[1]]
-                w_sock_frame = p_other.pose.compose(other_spec.local_frame)
-                w_socket = get_admissible_socket_pocket_ldu(other_spec.connector_type).transform(
-                    w_sock_frame
+                ox, oy, oz = p_other.pose.pos
+                sx0, sy0, sz0, sx1, sy1, sz1 = _get_rel_socket_pocket_bounds(
+                    p_other.part_id, p_other.pose.rot_id, mated_gpid[1]
                 )
+                w_socket = LDUBox(sx0 + ox, sy0 + oy, sz0 + oz, sx1 + ox, sy1 + oy, sz1 + oz)
             for cell in SpatialBoxHashIndex.box_cells(w_prot):
                 hull_bucket = self._spatial_hash._cells.get(cell)
                 if hull_bucket:
@@ -787,12 +808,13 @@ class AssemblyState:
         # 2. Check existing parts' protrusion boxes (both unmated AND already-mated to other parts!)
         #    against new part's hull boxes via exact CSG socket-pocket subtraction
         consumed_to_local_socket: Dict[GlobalPortId, LDUBox] = {}
+        px_l, py_l, pz_l = pose.pos
+        rid_l = pose.rot_id
         for local_pid, gpid in matched_pairs:
-            loc_spec = prim.ports[local_pid]
-            w_loc_frame = pose.compose(loc_spec.local_frame)
-            consumed_to_local_socket[gpid] = get_admissible_socket_pocket_ldu(
-                loc_spec.connector_type
-            ).transform(w_loc_frame)
+            sx0, sy0, sz0, sx1, sy1, sz1 = _get_rel_socket_pocket_bounds(prim.part_id, rid_l, local_pid)
+            consumed_to_local_socket[gpid] = LDUBox(
+                sx0 + px_l, sy0 + py_l, sz0 + pz_l, sx1 + px_l, sy1 + py_l, sz1 + pz_l
+            )
 
         for wb in world_boxes:
             for cell in SpatialBoxHashIndex.box_cells(wb):
@@ -823,7 +845,11 @@ class AssemblyState:
         (both solid body hull and unmated side-stud / protrusion colliders).
         """
         prim = get_brick_primitive(part_id)
-        world_boxes = tuple(b.transform(pose) for b in prim.hull_boxes)
+        tx, ty, tz = pose.pos
+        world_boxes = tuple(
+            LDUBox(tx + bx0, ty + by0, tz + bz0, tx + bx1, ty + by1, tz + bz1)
+            for bx0, by0, bz0, bx1, by1, bz1 in _get_rel_hull_box_offsets(part_id, pose.rot_id)
+        )
         if self.check_boxes_collision(world_boxes):
             raise ValueError(f"Root placement of {part_id} at {pose} collides with existing parts.")
 
@@ -885,7 +911,11 @@ class AssemblyState:
         returning a `TrialPartRollbackToken` that `pop_trial_part` reverses bit-for-bit.
         """
         prim = get_brick_primitive(part_id)
-        world_boxes = tuple(b.transform(pose) for b in prim.hull_boxes)
+        tx, ty, tz = pose.pos
+        world_boxes = tuple(
+            LDUBox(tx + bx0, ty + by0, tz + bz0, tx + bx1, ty + by1, tz + bz1)
+            for bx0, by0, bz0, bx1, by1, bz1 in _get_rel_hull_box_offsets(part_id, pose.rot_id)
+        )
         if self.check_boxes_collision(world_boxes):
             raise ValueError(f"Trial placement of {part_id} at {pose} collides with existing parts.")
 

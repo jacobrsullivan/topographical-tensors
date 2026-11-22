@@ -25,6 +25,7 @@ from topo_brick.interface.brick_catalog import (
     PortPolarity,
     are_connectors_compatible,
     get_brick_primitive,
+    is_known_part_id,
 )
 from topo_brick.interface.ldu_frames import (
     LDUBox,
@@ -636,6 +637,78 @@ class ContinuousAssemblyState:
             self.matched_port_pairs[gp_ex] = gp_new
         return new_id
 
+    @classmethod
+    def from_ldr_text(
+        cls,
+        ldr_or_mpd_text: str,
+        *,
+        ground_plane_z_ldu: float = 0.0,
+        check_collision: bool = False,
+        catalog: Optional[Any] = None,
+    ) -> "ContinuousAssemblyState":
+        """
+        Import an LDraw `.ldr` or `.mpd` document into `ContinuousAssemblyState` using calibrated
+        per-part `.dat` SE(3) frames (`TB-FIX-01`) and `ground_plane_z_ldu` (`TB-FIX-05`) without
+        shifting part coordinates (`0.000 LDU` pose preservation on `to_ldr_text()`).
+        """
+        eff_cat = catalog
+        if eff_cat is None:
+            from topo_brick.evaluation.phase9_compiler_and_hierarchical_gates import (
+                COMBINED_BRICK_CATALOG,
+            )
+
+            eff_cat = COMBINED_BRICK_CATALOG
+        flat = flatten_omr_mpd_to_se3(ldr_or_mpd_text, catalog=eff_cat)
+        st = cls()
+        gz_ref = float(ground_plane_z_ldu)
+        signs = np.array(
+            [
+                [-1.0, -1.0, -1.0],
+                [-1.0, -1.0, 1.0],
+                [-1.0, 1.0, -1.0],
+                [-1.0, 1.0, 1.0],
+                [1.0, -1.0, -1.0],
+                [1.0, -1.0, 1.0],
+                [1.0, 1.0, -1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        for fp in flat:
+            if fp.continuous_pose is None or not is_known_part_id(fp.canonical_part_id):
+                continue
+            prim = get_brick_primitive(fp.canonical_part_id)
+            min_z = float("inf")
+            for bx in prim.hull_boxes:
+                ob = box_to_obb(bx, fp.continuous_pose)
+                crn = np.asarray(ob.center, dtype=np.float64) + (
+                    signs * np.asarray(ob.half_extents, dtype=np.float64)
+                ) @ np.asarray(ob.axes_rows, dtype=np.float64)
+                min_z = min(min_z, float(np.min(crn[:, 2])))
+            is_g = abs(min_z - gz_ref) <= 0.50
+            st.place_part(
+                fp.canonical_part_id,
+                fp.continuous_pose,
+                is_grounded=is_g,
+                check_collision=check_collision,
+                color_id=int(fp.color_code),
+            )
+        return st
+
+    @property
+    def num_parts(self) -> int:
+        """Number of placed SE(3) part instances."""
+        return len(self.placed_parts)
+
+    def to_ldr_text(self, model_name: str = "assembly.ldr") -> str:
+        """Export `ContinuousAssemblyState` to LDraw `.ldr` preserving calibrated SE(3) poses (`0.000 LDU` drift)."""
+        lines = [f"0 {model_name}", f"0 Name: {model_name}"]
+        for iid in self.placement_order:
+            cp = self.placed_parts[iid]
+            lines.append(_topo_brick_se3_to_ldraw_line(cp.part_id, cp.continuous_pose, cp.color_id))
+        lines.append("0 STEP")
+        return "\n".join(lines) + "\n"
+
     def attach_articulated_part(
         self,
         parent_instance_id: int,
@@ -751,13 +824,16 @@ class ContinuousAssemblyState:
         lateral_accel_xy: Tuple[float, float] = (0.0, 0.0),
         foundation_policy: Any = "clutched_baseplate",
         gravity_unit: Tuple[float, float, float] = (0.0, 0.0, -1.0),
+        ground_plane_z_ldu: float = 0.0,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> EquilibriumResult:
         """
         Solve the coupled 6-DoF static equilibrium LP in continuous SE(3) coordinates with
         explicit joint-DoF wrench projections and `foundation_policy` enforcement (`F2`):
-          - `TABLE_FRICTION_ONLY`: every `is_grounded` part must touch `z = 0` (`|min_z| <= 0.25 LDU`)
+          - `TABLE_FRICTION_ONLY`: every `is_grounded` part must touch `z = ground_plane_z_ldu`
+            (`|min_z - ground_plane_z_ldu| <= 0.25 LDU`)
             and remains an active 6-DoF body supported only by unilateral (`f_tens = 0`), pure
-            Coulomb-friction (`|f_t1| + |f_t2| <= mu * f_comp`) OBB contact vertices at `z = 0`.
+            Coulomb-friction (`|f_t1| + |f_t2| <= mu * f_comp`) OBB contact vertices at `z = ground_plane_z_ldu`.
           - `CLUTCHED_BASEPLATE`: `is_grounded` parts are clamped to a horizontal baseplate.
           - `FIXED_ANCHOR`: `is_grounded` parts are rigidly clamped to an immovable frame.
         """
@@ -767,6 +843,7 @@ class ContinuousAssemblyState:
             _solve_lp_highspy_or_scipy,
         )
 
+        g_z = float(ground_plane_z_ldu)
         fp_enum = (
             foundation_policy
             if isinstance(foundation_policy, FoundationPolicy)
@@ -776,13 +853,23 @@ class ContinuousAssemblyState:
 
         parts = self.placed_parts
         if not parts:
-            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "Empty", foundation_policy=fp_str)
+            return EquilibriumResult(
+                True, 0.0, 1.0, {}, None, 0.0, "Empty", foundation_policy=fp_str, ground_plane_z_ldu=g_z
+            )
 
         # BFS ground connectivity
         grounded_ids = [i for i, p in parts.items() if p.is_grounded]
         if not grounded_ids:
             return EquilibriumResult(
-                False, float("inf"), -float("inf"), {}, None, 0.0, "No grounded parts", foundation_policy=fp_str
+                False,
+                float("inf"),
+                -float("inf"),
+                {},
+                None,
+                0.0,
+                "No grounded parts",
+                foundation_policy=fp_str,
+                ground_plane_z_ldu=g_z,
             )
         visited = set(grounded_ids)
         adj: Dict[int, Set[int]] = {i: set() for i in parts}
@@ -806,6 +893,7 @@ class ContinuousAssemblyState:
                 0.0,
                 "Disconnected floating part",
                 foundation_policy=fp_str,
+                ground_plane_z_ldu=g_z,
             )
 
         is_table = fp_enum == FoundationPolicy.TABLE_FRICTION_ONLY
@@ -836,10 +924,10 @@ class ContinuousAssemblyState:
                     for pt in crn:
                         z_v = float(pt[2])
                         all_z.append(z_v)
-                        if z_v <= 0.25:
-                            low_pts.append(np.array([float(pt[0]), float(pt[1]), 0.0], dtype=np.float64))
+                        if z_v <= g_z + 0.25:
+                            low_pts.append(np.array([float(pt[0]), float(pt[1]), g_z], dtype=np.float64))
                 min_z_g = min(all_z) if all_z else float("inf")
-                if abs(min_z_g) > 0.25 or not low_pts:
+                if abs(min_z_g - g_z) > 0.25 or not low_pts:
                     return EquilibriumResult(
                         False,
                         float("inf"),
@@ -847,8 +935,9 @@ class ContinuousAssemblyState:
                         {},
                         None,
                         0.0,
-                        f"Grounded part {gid} (min_z={min_z_g:.2f}) does not contact z=0 table under TABLE_FRICTION_ONLY",
+                        f"Grounded part {gid} (min_z={min_z_g:.2f}) does not contact z={g_z:.2f} table under TABLE_FRICTION_ONLY",
                         foundation_policy=fp_str,
+                        ground_plane_z_ldu=g_z,
                     )
                 # Deduplicate XY table vertices
                 uniq_xy: Dict[Tuple[int, int], np.ndarray] = {}
@@ -858,7 +947,9 @@ class ContinuousAssemblyState:
 
         free_insts = sorted(parts.keys()) if is_table else sorted(i for i, p in parts.items() if not p.is_grounded)
         if not free_insts:
-            return EquilibriumResult(True, 0.0, 1.0, {}, None, 0.0, "All grounded", foundation_policy=fp_str)
+            return EquilibriumResult(
+                True, 0.0, 1.0, {}, None, 0.0, "All grounded", foundation_policy=fp_str, ground_plane_z_ldu=g_z
+            )
         free_idx_map = {iid: idx for idx, iid in enumerate(free_insts)}
 
         # Collect unique active contacts
@@ -1084,10 +1175,28 @@ class ContinuousAssemblyState:
         c_obj[:eta_col] = 1e-7
 
         ok, sol, msg = _solve_lp_highspy_or_scipy(
-            c_obj, a_eq_csc, b_eq, a_ub_csc, b_ub, var_lb, var_ub
+            c_obj,
+            a_eq_csc,
+            b_eq,
+            a_ub_csc,
+            b_ub,
+            var_lb,
+            var_ub,
+            deadline_monotonic_s=deadline_monotonic_s,
         )
         if not ok or sol is None:
-            return EquilibriumResult(False, float("inf"), -float("inf"), {}, None, 0.0, msg, foundation_policy=fp_str)
+            return EquilibriumResult(
+                False,
+                float("inf"),
+                -float("inf"),
+                {},
+                None,
+                0.0,
+                msg,
+                foundation_policy=fp_str,
+                budget_exceeded=(msg == "BUDGET_EXCEEDED"),
+                ground_plane_z_ldu=g_z,
+            )
         eta = float(sol[eta_col])
         return EquilibriumResult(
             is_stable=(eta <= 1.0 + 1e-6),
@@ -1098,6 +1207,7 @@ class ContinuousAssemblyState:
             solve_time_ms=0.0,
             status_message=msg,
             foundation_policy=fp_str,
+            ground_plane_z_ldu=g_z,
         )
 
     def evaluate_perturbation_stability(
@@ -1111,6 +1221,8 @@ class ContinuousAssemblyState:
         locking_hinge_detent_moment_ldu_g: float = 380.0,
         ball_joint_friction_moment_ldu_g: float = 220.0,
         foundation_policy: Any = "clutched_baseplate",
+        ground_plane_z_ldu: float = 0.0,
+        deadline_monotonic_s: Optional[float] = None,
     ) -> "PerturbationStabilityResult":
         """
         Round 8 R8-WS1 (§7 & §9B Case #5):
@@ -1132,6 +1244,8 @@ class ContinuousAssemblyState:
             locking_hinge_detent_moment_ldu_g=locking_hinge_detent_moment_ldu_g,
             ball_joint_friction_moment_ldu_g=ball_joint_friction_moment_ldu_g,
             foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
         )
         if not eq0.is_stable:
             return PerturbationStabilityResult(
@@ -1378,6 +1492,8 @@ class ContinuousAssemblyState:
                     ball_joint_friction_moment_ldu_g=ball_joint_friction_moment_ldu_g,
                     lateral_accel_xy=(lx, ly),
                     foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=deadline_monotonic_s,
                 )
                 if not eq_lat.is_stable:
                     return PerturbationStabilityResult(
@@ -1595,10 +1711,18 @@ def _ldraw_pose_to_topo_brick_se3(
     part_id: str, r_ldraw_world: np.ndarray, t_ldraw_world: np.ndarray
 ) -> ContinuousSE3Pose:
     """
-    Map an official LDraw (`-Y` up, top-center origin) world transform `(R_ld, t_ld)` into
-    `topo_brick`'s (`+Z` up, stud-(0,0)-bottom origin) `ContinuousSE3Pose`.
+    Map an official LDraw (`-Y` up) world transform `(R_ld, t_ld)` into `topo_brick`'s (`+Z` up)
+    `ContinuousSE3Pose`, using calibrated per-part `.dat` SE(3) frames (`TB-FIX-01`) when present.
     """
     prim = get_brick_primitive(part_id)
+    if prim.ldraw_export_rot_ld is not None and prim.ldraw_export_pos_ld is not None:
+        r0_ld = np.asarray(prim.ldraw_export_rot_ld, dtype=np.float64)
+        t0_ld = np.asarray(prim.ldraw_export_pos_ld, dtype=np.float64)
+        r_c = r_ldraw_world @ r0_ld.T
+        r_tb_cal = _C_LDRAW_TO_ZUP @ r_c @ _C_LDRAW_TO_ZUP.T
+        t_tb_cal = _C_LDRAW_TO_ZUP @ (t_ldraw_world - r_c @ t0_ld)
+        return ContinuousSE3Pose.from_matrix_and_pos(r_tb_cal, t_tb_cal, orthonormalize=True)
+
     r_w = _C_LDRAW_TO_ZUP @ r_ldraw_world @ _C_LDRAW_TO_ZUP.T
     t_w = _C_LDRAW_TO_ZUP @ t_ldraw_world
     if getattr(prim, "is_ldraw_native_frame", False):
@@ -1635,10 +1759,18 @@ def _ldraw_pose_to_topo_brick_se3(
 def _topo_brick_se3_to_ldraw_line(
     part_id: str, pose: ContinuousSE3Pose, color_code: int = 15
 ) -> str:
-    """Export a `ContinuousSE3Pose` back to an official LDraw (`-Y` up) type-1 line."""
+    """Export a `ContinuousSE3Pose` back to an official LDraw (`-Y` up) type-1 line (`TB-FIX-01`)."""
     prim = get_brick_primitive(part_id)
     r_tb = pose.R
     t_tb = pose.t
+    if prim.ldraw_export_rot_ld is not None and prim.ldraw_export_pos_ld is not None:
+        r0_ld = np.asarray(prim.ldraw_export_rot_ld, dtype=np.float64)
+        t0_ld = np.asarray(prim.ldraw_export_pos_ld, dtype=np.float64)
+        r_c = _C_LDRAW_TO_ZUP.T @ r_tb @ _C_LDRAW_TO_ZUP
+        r_ld_cal = r_c @ r0_ld
+        t_ld_cal = r_c @ t0_ld + _C_LDRAW_TO_ZUP.T @ t_tb
+        r_str_cal = " ".join(f"{float(v):.6g}" for v in r_ld_cal.reshape(-1))
+        return f"1 {color_code} {t_ld_cal[0]:.6g} {t_ld_cal[1]:.6g} {t_ld_cal[2]:.6g} {r_str_cal} {part_id}.dat"
     if getattr(prim, "is_ldraw_native_frame", False):
         r_ld = _C_LDRAW_TO_ZUP.T @ r_tb @ _C_LDRAW_TO_ZUP
         t_ld = _C_LDRAW_TO_ZUP.T @ t_tb
@@ -1843,7 +1975,13 @@ def extract_se3_port_connections(
                         if inst_b == inst_a or u_b in used_ports or pol_b != PortPolarity.ANTI_STUD:
                             continue
                         d = float(np.linalg.norm(wp_a - wp_b))
-                        if d <= best_d and float(np.dot(wz_a, wz_b)) >= 0.45:
+                        dot_z = float(np.dot(wz_a, wz_b))
+                        axis_ok = (
+                            dot_z >= 0.45
+                            if ct_a in (ConnectorType.STANDARD_STUD, ConnectorType.HOLLOW_STUD)
+                            else abs(dot_z) >= 0.45
+                        )
+                        if d <= best_d and axis_ok:
                             best_d = d
                             best_u = u_b
                             best_ct_b = ct_b

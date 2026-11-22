@@ -1387,11 +1387,15 @@ class HierarchicalMacroBlockPlanner:
         support_policy: str = "none",
         foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
         forbidden_support_boxes: Tuple[LDUBox, ...] = (),
+        deadline_monotonic_s: Optional[float] = None,
+        ground_plane_z_ldu: float = 0.0,
     ) -> Tuple[Optional[AssemblyState], int, int]:
         """
         Execute hierarchical phase-shifted macro-block decomposition on `target_field`.
         Returns `(assembly_or_none_if_fallback_needed, candidates_considered, macro_blocks_solved)`.
         """
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return None, 0, 0
         xmin, ymin, zmin, xmax, ymax, zmax = target_field.occupied_bounds_ldu()
         if xmax <= xmin or ymax <= ymin or zmax <= zmin:
             return AssemblyState(), 0, 0
@@ -1405,6 +1409,8 @@ class HierarchicalMacroBlockPlanner:
         templates_24 = _rect_templates_for_height(allowed_part_ids, 24)
         if not templates_24:
             return None, 0, 0
+        max_brick_span = max((max(int(t[3]), int(t[4])) for t in templates_24), default=1)
+        max_single_step = min(max(1, max_brick_span - 1), 4)
 
         # Rasterize `target_field.boxes` onto exact `(nx, ny, nz)` brick grid in O(|boxes|)
         occ = np.zeros((nx, ny, nz), dtype=bool)
@@ -1427,15 +1433,70 @@ class HierarchicalMacroBlockPlanner:
             iz1 = min(nz, (b.zmax - zmin) // 24)
             occ[ix0:ix1, iy0:iy1, iz0:iz1] = True
 
-        # Optional minimal permanent support pillars for ungrounded upper overhangs when requested
-        if support_policy == "minimal_permanent_pillars" and "3005" in allowed_part_ids:
-            # Ensure any disconnected floating island in `occ` has at least minimal `1x1` support columns
+        # Optional minimal permanent support pillars for ungrounded islands AND cantilevered / tipping
+        # overhangs (`TB-FIX-02`), strictly preserving `forbidden_support_boxes` and open interplane wing gaps!
+        if support_policy == "minimal_permanent_pillars" and templates_24:
+            def _try_drop_column_range(px_c: int, py_c: int, c_lo: int, c_hi: int) -> bool:
+                if c_hi <= c_lo or not (0 <= px_c < nx and 0 <= py_c < ny):
+                    return False
+                col_box = LDUBox(
+                    xmin + px_c * 20,
+                    ymin + py_c * 20,
+                    zmin + c_lo * 24,
+                    xmin + (px_c + 1) * 20,
+                    ymin + (py_c + 1) * 20,
+                    zmin + c_hi * 24,
+                )
+                if _box_hits_forbidden(col_box, forbidden_support_boxes):
+                    return False
+                occ[px_c, py_c, c_lo:c_hi] = True
+                return True
+
+            def _bfs_course_dist(c_idx: int) -> np.ndarray:
+                lay = occ[:, :, c_idx]
+                bel = occ[:, :, c_idx - 1]
+                d_arr = np.full((nx, ny), 999, dtype=np.int32)
+                q_b: List[Tuple[int, int]] = []
+                for ix_b in range(nx):
+                    for iy_b in range(ny):
+                        if lay[ix_b, iy_b] and bel[ix_b, iy_b]:
+                            d_arr[ix_b, iy_b] = 0
+                            q_b.append((ix_b, iy_b))
+                qi_b = 0
+                while qi_b < len(q_b):
+                    ux_b, uy_b = q_b[qi_b]
+                    qi_b += 1
+                    du_b = int(d_arr[ux_b, uy_b])
+                    for dx_b, dy_b in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        vx_b, vy_b = ux_b + dx_b, uy_b + dy_b
+                        if 0 <= vx_b < nx and 0 <= vy_b < ny and lay[vx_b, vy_b] and d_arr[vx_b, vy_b] > du_b + 1:
+                            d_arr[vx_b, vy_b] = du_b + 1
+                            q_b.append((vx_b, vy_b))
+                return d_arr
+
+            def _table_com_inside_base(upto_c: int) -> bool:
+                if foundation_policy != FoundationPolicy.TABLE_FRICTION_ONLY:
+                    return True
+                base_xy = np.argwhere(occ[:, :, 0])
+                if base_xy.shape[0] == 0:
+                    return False
+                bx_min = float(np.min(base_xy[:, 0])) + 0.25
+                bx_max = float(np.max(base_xy[:, 0]) + 1) - 0.25
+                by_min = float(np.min(base_xy[:, 1])) + 0.25
+                by_max = float(np.max(base_xy[:, 1]) + 1) - 0.25
+                pts_all = np.argwhere(occ[:, :, : upto_c + 1])
+                if pts_all.shape[0] == 0:
+                    return True
+                cx_m = float(np.mean(pts_all[:, 0]) + 0.5)
+                cy_m = float(np.mean(pts_all[:, 1]) + 0.5)
+                return (bx_min <= cx_m <= bx_max) and (by_min <= cy_m <= by_max)
+
             for c in range(1, nz):
                 layer = occ[:, :, c]
                 if not np.any(layer):
                     continue
                 below = occ[:, :, c - 1]
-                # Connected 4-neighbor components of `layer` that have ZERO overlap with `below`
+                # 1. Disconnected floating islands (`has_sup == False`)
                 visited_l = np.zeros((nx, ny), dtype=bool)
                 for ix in range(nx):
                     for iy in range(ny):
@@ -1456,19 +1517,119 @@ class HierarchicalMacroBlockPlanner:
                                     if below[jx, jy]:
                                         has_sup = True
                         if not has_sup:
-                            # Drop a 1x1 pillar at the first cell outside `forbidden_support_boxes`
+                            # Prefer extending existing underlying pedestals (`low_c > 0`, e.g. central base skids)
+                            # near the component centroid BEFORE dropping new ground legs (`low_c == 0`)!
+                            ccx_f = sum(p[0] for p in comp) / float(len(comp))
+                            ccy_f = sum(p[1] for p in comp) / float(len(comp))
+                            scored_comp: List[Tuple[int, float, int, int, int]] = []
                             for px_i, py_i in comp:
-                                col_box = LDUBox(
-                                    xmin + px_i * 20,
-                                    ymin + py_i * 20,
-                                    zmin,
-                                    xmin + (px_i + 1) * 20,
-                                    ymin + (py_i + 1) * 20,
-                                    zmin + c * 24,
+                                low_c = 0
+                                for cb_k in range(c - 1, -1, -1):
+                                    if occ[px_i, py_i, cb_k]:
+                                        low_c = cb_k + 1
+                                        break
+                                scored_comp.append(
+                                    (-low_c, (px_i - ccx_f) ** 2 + (py_i - ccy_f) ** 2, px_i, py_i, low_c)
                                 )
-                                if not _box_hits_forbidden(col_box, forbidden_support_boxes):
-                                    occ[px_i, py_i, :c] = True
+                            scored_comp.sort()
+                            for _, _, px_i, py_i, low_c in scored_comp:
+                                if _try_drop_column_range(px_i, py_i, low_c, c):
+                                    # Expand to 2x2 pedestal tie when matching `low_c` exists on adjacent cells
+                                    for dx_t, dy_t in ((0, 1), (1, 0), (1, 1)):
+                                        qx_t, qy_t = px_i + dx_t, py_i + dy_t
+                                        if 0 <= qx_t < nx and 0 <= qy_t < ny and layer[qx_t, qy_t]:
+                                            if (low_c == 0 and not np.any(occ[qx_t, qy_t, :c])) or (
+                                                low_c > 0 and occ[qx_t, qy_t, low_c - 1] and not np.any(occ[qx_t, qy_t, low_c:c])
+                                            ):
+                                                _try_drop_column_range(qx_t, qy_t, low_c, c)
                                     break
+
+                # 2. Connected cantilevers exceeding single-course brick reach (`d > max_single_step`)
+                #    or tipping `TABLE_FRICTION_ONLY` CoM:
+                #    - For lowest overhanging shelves (`not any(occ[px, py, :c])`), drop symmetric outrigger
+                #      landing struts strictly in `0..c` (NEVER touching upper interplane wing gaps!).
+                #    - For upper decks bridging across a wide central span (`any(occ[px, py, :c])`), drop at
+                #      most a narrow spine cabane strut onto the highest underlying fuselage shelf (`low_c..c`)
+                #      at the exact midpoint of the unbridged span, preserving lateral interplane wing windows!
+                low_shelf_max_d = min(max_single_step, 3)
+                for _guard in range(24):
+                    d_arr = _bfs_course_dist(c)
+                    over_upper = [
+                        (int(d_arr[ix_o, iy_o]), ix_o, iy_o)
+                        for ix_o in range(nx)
+                        for iy_o in range(ny)
+                        if layer[ix_o, iy_o] and np.any(occ[ix_o, iy_o, :c]) and d_arr[ix_o, iy_o] > max_single_step
+                    ]
+                    low_shelf_cands = [
+                        (int(d_arr[ix_o, iy_o]), ix_o, iy_o)
+                        for ix_o in range(nx)
+                        for iy_o in range(ny)
+                        if layer[ix_o, iy_o] and not np.any(occ[ix_o, iy_o, :c]) and d_arr[ix_o, iy_o] > 0
+                    ]
+                    over_low = [it for it in low_shelf_cands if it[0] > low_shelf_max_d]
+                    com_ok = _table_com_inside_base(c)
+                    if not over_low and not over_upper and com_ok:
+                        break
+                    placed_sup = False
+                    if low_shelf_cands and (not com_ok or bool(over_low)):
+                        low_shelf_cands.sort(key=lambda it: (-it[0], abs(it[2] - ny // 2), abs(it[1] - nx // 2)))
+                        for _, px_s, py_s in low_shelf_cands:
+                            if _try_drop_column_range(px_s, py_s, 0, c):
+                                step_x_p = 1 if px_s < nx // 2 else -1
+                                step_y_p = 1 if py_s < ny // 2 else -1
+                                for dx_p, dy_p in ((0, step_y_p), (step_x_p, 0), (step_x_p, step_y_p)):
+                                    qx_s, qy_s = px_s + dx_p, py_s + dy_p
+                                    if 0 <= qx_s < nx and 0 <= qy_s < ny and layer[qx_s, qy_s] and not np.any(occ[qx_s, qy_s, :c]):
+                                        _try_drop_column_range(qx_s, qy_s, 0, c)
+                                # Mirror symmetrically across X and/or Y when occupied so table CoM stays centered!
+                                for mx_s, my_s in ((nx - 1 - px_s, py_s), (px_s, ny - 1 - py_s), (nx - 1 - px_s, ny - 1 - py_s)):
+                                    if (mx_s, my_s) == (px_s, py_s):
+                                        continue
+                                    if 0 <= mx_s < nx and 0 <= my_s < ny and layer[mx_s, my_s] and not np.any(occ[mx_s, my_s, :c]):
+                                        if _try_drop_column_range(mx_s, my_s, 0, c):
+                                            msx = 1 if mx_s < nx // 2 else -1
+                                            msy = 1 if my_s < ny // 2 else -1
+                                            for dx_m, dy_m in ((0, msy), (msx, 0), (msx, msy)):
+                                                qmx, qmy = mx_s + dx_m, my_s + dy_m
+                                                if 0 <= qmx < nx and 0 <= qmy < ny and layer[qmx, qmy] and not np.any(occ[qmx, qmy, :c]):
+                                                    _try_drop_column_range(qmx, qmy, 0, c)
+                                placed_sup = True
+                                break
+                    if not placed_sup and over_upper:
+                        # Upper-deck span > max_single_step: prefer resting onto highest underlying shelf
+                        # near center (`nx // 2`) so lateral biplane interplane wing gaps stay wide open!
+                        upper_cands: List[Tuple[int, int, int, int]] = []
+                        for d_v, ux_o, uy_o in over_upper:
+                            low_c_u = -1
+                            for cb_u in range(c - 1, -1, -1):
+                                if occ[ux_o, uy_o, cb_u]:
+                                    low_c_u = cb_u + 1
+                                    break
+                            has_underlying_body = 1 if low_c_u > 0 else 0
+                            upper_cands.append(
+                                (-has_underlying_body, -(low_c_u if low_c_u > 0 else 0), abs(ux_o - nx // 2), ux_o * ny + uy_o)
+                            )
+                        upper_cands.sort()
+                        for _, _, _, enc_xy in upper_cands:
+                            ux_p, uy_p = divmod(enc_xy, ny)
+                            low_c_p = 0
+                            for cb_p in range(c - 1, -1, -1):
+                                if occ[ux_p, uy_p, cb_p]:
+                                    low_c_p = cb_p + 1
+                                    break
+                            if _try_drop_column_range(ux_p, uy_p, low_c_p, c):
+                                if uy_p + 1 < ny and layer[ux_p, uy_p + 1]:
+                                    low_c_p2 = 0
+                                    for cb_p2 in range(c - 1, -1, -1):
+                                        if occ[ux_p, uy_p + 1, cb_p2]:
+                                            low_c_p2 = cb_p2 + 1
+                                            break
+                                    if low_c_p2 == low_c_p:
+                                        _try_drop_column_range(ux_p, uy_p + 1, low_c_p, c)
+                                placed_sup = True
+                                break
+                    if not placed_sup:
+                        break
 
         rem_inv = dict(inventory_counts) if inventory_counts is not None else None
         state = AssemblyState()
@@ -1481,8 +1642,22 @@ class HierarchicalMacroBlockPlanner:
         ts = cls.MACRO_TILE_STUDS
         ps = cls.PHASE_SHIFT_STUDS
 
+        tot_mass = 0.0
+        tot_mx = 0.0
+        tot_my = 0.0
+        gx_cent = float(xmin) + 10.0 * float(nx)
+        gy_cent = float(ymin) + 10.0 * float(ny)
+        deferred_underhang: List[Tuple[str, LDUFrame]] = []
+        base_wit_m: Any = None
+        base_eta_m = 0.0
+        p_deltas_m: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+        h_cache_m: Dict[int, Any] = {}
+
         for c in range(nz):
+            if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                return None, cands_total, blocks_solved
             z0 = zmin + c * 24
+            is_gr_course = (c == 0) and (abs(float(z0) - float(ground_plane_z_ldu)) <= 0.25 or zmin == 0)
             layer = occ[:, :, c].copy()
             if not np.any(layer):
                 supported_top[:] = False
@@ -1546,7 +1721,23 @@ class HierarchicalMacroBlockPlanner:
                                     if min_d_in != 0:
                                         continue
                                     anchor_cnt = int(np.count_nonzero(d_sub == 0))
-                                    sc = float(anchor_cnt * 15 + area * 5)
+                                    if max(wx, wy) >= 6 and anchor_cnt < 2:
+                                        continue
+                                    anc_xy = np.argwhere(d_sub == 0)
+                                    ax_span = int(np.max(anc_xy[:, 0]) - np.min(anc_xy[:, 0])) + 1
+                                    ay_span = int(np.max(anc_xy[:, 1]) - np.min(anc_xy[:, 1])) + 1
+                                    # Check if anchor cells span across non-supported interior cells (true 2-pier arch!)
+                                    bridges_two_piers = (
+                                        (ax_span > int(np.count_nonzero(np.any(d_sub == 0, axis=1))))
+                                        or (ay_span > int(np.count_nonzero(np.any(d_sub == 0, axis=0))))
+                                    )
+                                    is_centered_on_anc = (
+                                        float(np.min(anc_xy[:, 0])) <= 0.5 * float(wx - 1) <= float(np.max(anc_xy[:, 0]))
+                                        and float(np.min(anc_xy[:, 1])) <= 0.5 * float(wy - 1) <= float(np.max(anc_xy[:, 1]))
+                                    )
+                                    eff_wave = -1 if bridges_two_piers else (0 if is_centered_on_anc else 2)
+                                    two_pier_bonus = 500.0 if bridges_two_piers else 0.0
+                                    sc = two_pier_bonus + float(anchor_cnt * 15 + area * 5)
                                     cands_total += 1
                                     if best_bridge is None or sc > best_bridge[0]:
                                         px = xmin + sx * 20 - b_xmin
@@ -1559,7 +1750,7 @@ class HierarchicalMacroBlockPlanner:
                                             sy,
                                             wx,
                                             wy,
-                                            min_d_in + 1,
+                                            eff_wave,
                                         )
                         if best_bridge is not None:
                             _, pid_b, pose_b, sx, sy, wx, wy, wave_ord = best_bridge
@@ -1612,18 +1803,206 @@ class HierarchicalMacroBlockPlanner:
                             layer[tx0 + lx : tx0 + lx + wx, ty0 + ly : ty0 + ly + wy] = False
                             course_part_grid[tx0 + lx : tx0 + lx + wx, ty0 + ly : ty0 + ly + wy] = p_counter
                             p_counter += 1
-                            # Supported core tiles execute at wave_ord = 0 BEFORE cantilevered bridges!
-                            course_placements_wave.append((0, pid_t, pose_t))
+                            t_wave = 0
+                            if c > 0:
+                                s_sl = sup_here[tx0 + lx : tx0 + lx + wx, ty0 + ly : ty0 + ly + wy]
+                                if not s_sl.all():
+                                    s_xy = np.argwhere(s_sl)
+                                    if s_xy.shape[0] > 0:
+                                        sx_sp = int(np.max(s_xy[:, 0]) - np.min(s_xy[:, 0])) + 1
+                                        sy_sp = int(np.max(s_xy[:, 1]) - np.min(s_xy[:, 1])) + 1
+                                        if sx_sp > int(np.count_nonzero(np.any(s_sl, axis=1))) or sy_sp > int(
+                                            np.count_nonzero(np.any(s_sl, axis=0))
+                                        ):
+                                            t_wave = -1
+                                        elif not (
+                                            float(np.min(s_xy[:, 0])) <= 0.5 * float(wx - 1) <= float(np.max(s_xy[:, 0]))
+                                            and float(np.min(s_xy[:, 1])) <= 0.5 * float(wy - 1) <= float(np.max(s_xy[:, 1]))
+                                        ):
+                                            t_wave = 1
+                            course_placements_wave.append((t_wave, pid_t, pose_t))
                     ty_start += ts
                 tx_start += ts
 
-            # Commit course placements ordered by `wave_ord` (`0` = supported piers first, then `1, 2, ...` bridges!)
-            course_placements_wave.sort(key=lambda item: item[0])
-            for _, pid_w, pose_w in course_placements_wave:
-                try:
-                    state.place_root_part(pid_w, pose_w, is_grounded=(c == 0))
-                except ValueError:
-                    return None, cands_total, blocks_solved
+            # Step B2: If any boundary-straddling cantilevered cell remained across an 8x8 tile seam, pack globally!
+            if c > 0 and np.any(layer):
+                rem_pls, _, _ = _pack_2d_boolean_mask_into_placements(
+                    layer,
+                    z0=z0,
+                    origin_xy_ldu=(xmin, ymin),
+                    templates=templates_24,
+                    lower_seam_after_x=prev_seam_x,
+                    lower_seam_after_y=prev_seam_y,
+                    supported_below=sup_here,
+                    course_parity=c,
+                    inventory_counts=rem_inv,
+                )
+                for pid_r, pose_r, lx_r, ly_r, wx_r, wy_r in rem_pls:
+                    layer[lx_r : lx_r + wx_r, ly_r : ly_r + wy_r] = False
+                    course_part_grid[lx_r : lx_r + wx_r, ly_r : ly_r + wy_r] = p_counter
+                    p_counter += 1
+                    course_placements_wave.append((1, pid_r, pose_r))
+
+            # Commit course placements ordered by `wave_ord` AND greedy cumulative CoM balance
+            # toward `(gx_cent, gy_cent)`, enforcing certified step-by-step prefix stability!
+            actual_placed_grid = np.full((nx, ny), -1, dtype=np.int32)
+            ap_cnt = 0
+            if foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY and c > 0 and hasattr(kernel, "validator"):
+                from topo_brick.kernel.construction_kernel import check_monotone_insertion_corridor
+
+                def _try_commit_macro_part(pid_mc: str, pose_mc: LDUFrame, check_corr: bool, wit_only: bool) -> bool:
+                    nonlocal base_wit_m, base_eta_m, tot_mass, tot_mx, tot_my
+                    if check_corr and not check_monotone_insertion_corridor(state, pid_mc, pose_mc):
+                        return False
+                    tok_mc = None
+                    try:
+                        tok_mc = state.push_trial_part(pid_mc, pose_mc, is_grounded=False)
+                        if len(tok_mc.added_adj_other_insts) == 0:
+                            state.pop_trial_part(tok_mc)
+                            return False
+                        can_e_m, pk_d_m = kernel.validator.can_extend_plumb_primal_witness(  # type: ignore[attr-defined]
+                            state,
+                            tok_mc.inst_id,
+                            p_deltas_m,
+                            base_witness=base_wit_m,
+                            hop_cache=h_cache_m,
+                            foundation_policy=foundation_policy,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                        )
+                        ok_mc = can_e_m and max(base_eta_m, pk_d_m) <= 1.0 - 1e-5
+                        if not ok_mc:
+                            if wit_only:
+                                h_cache_m.pop(tok_mc.inst_id, None)
+                                state.pop_trial_part(tok_mc)
+                                return False
+                            eq_mc = kernel.validator.evaluate(  # type: ignore[attr-defined]
+                                state,
+                                foundation_policy=foundation_policy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=deadline_monotonic_s,
+                            )
+                            if not eq_mc.is_stable:
+                                h_cache_m.pop(tok_mc.inst_id, None)
+                                state.pop_trial_part(tok_mc)
+                                return False
+                            base_wit_m = eq_mc.primal_witness
+                            base_eta_m = float(eq_mc.peak_utilization)
+                            p_deltas_m.clear()
+                        state.pop_trial_part(tok_mc)
+                        tok_mc = None
+                        state.place_root_part(pid_mc, pose_mc, is_grounded=False)
+                        pr_mc = get_brick_primitive(pid_mc)
+                        wb_mc = pr_mc.hull_boxes[0].transform(pose_mc)
+                        m_mc = float(pr_mc.mass_grams)
+                        tot_mass += m_mc
+                        tot_mx += m_mc * 0.5 * float(wb_mc.xmin + wb_mc.xmax)
+                        tot_my += m_mc * 0.5 * float(wb_mc.ymin + wb_mc.ymax)
+                        return True
+                    except ValueError:
+                        if tok_mc is not None:
+                            h_cache_m.pop(tok_mc.inst_id, None)
+                            state.pop_trial_part(tok_mc)
+                        return False
+
+                by_wave: Dict[int, List[Tuple[str, LDUFrame, float, float, float]]] = {}
+                for w_o, pid_w, pose_w in course_placements_wave:
+                    pr_w = get_brick_primitive(pid_w)
+                    wb_w = pr_w.hull_boxes[0].transform(pose_w)
+                    m_w = float(pr_w.mass_grams)
+                    cx_w = 0.5 * float(wb_w.xmin + wb_w.xmax)
+                    cy_w = 0.5 * float(wb_w.ymin + wb_w.ymax)
+                    by_wave.setdefault(w_o, []).append((pid_w, pose_w, m_w, cx_w, cy_w))
+                ordered_emit: List[Tuple[str, LDUFrame]] = []
+                sim_m, sim_mx, sim_my = tot_mass, tot_mx, tot_my
+                for w_k in sorted(by_wave.keys()):
+                    rem_w = by_wave[w_k]
+                    while rem_w:
+                        best_i = 0
+                        best_d2 = float("inf")
+                        for idx_w, (_, _, mw, cxw, cyw) in enumerate(rem_w):
+                            nm = max(1e-9, sim_m + mw)
+                            ncx = (sim_mx + mw * cxw) / nm
+                            ncy = (sim_my + mw * cyw) / nm
+                            d2 = (ncx - gx_cent) ** 2 + (ncy - gy_cent) ** 2
+                            if d2 < best_d2:
+                                best_d2 = d2
+                                best_i = idx_w
+                        chosen = rem_w.pop(best_i)
+                        sim_m += chosen[2]
+                        sim_mx += chosen[2] * chosen[3]
+                        sim_my += chosen[2] * chosen[4]
+                        ordered_emit.append((chosen[0], chosen[1]))
+
+                pend_c = list(ordered_emit)
+                for wit_flag in (True, False, False):
+                    if not pend_c or (deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s):
+                        break
+                    still_c: List[Tuple[str, LDUFrame]] = []
+                    prog_mc = False
+                    for pid_w, pose_w in pend_c:
+                        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                            still_c.append((pid_w, pose_w))
+                            continue
+                        if _try_commit_macro_part(pid_w, pose_w, check_corr=False, wit_only=wit_flag):
+                            prog_mc = True
+                            wb_ok = get_brick_primitive(pid_w).hull_boxes[0].transform(pose_w)
+                            ix0_a = max(0, (wb_ok.xmin - xmin) // 20)
+                            ix1_a = min(nx, (wb_ok.xmax - xmin) // 20)
+                            iy0_a = max(0, (wb_ok.ymin - ymin) // 20)
+                            iy1_a = min(ny, (wb_ok.ymax - ymin) // 20)
+                            actual_placed_grid[ix0_a:ix1_a, iy0_a:iy1_a] = ap_cnt
+                            ap_cnt += 1
+                            if deferred_underhang and not wit_flag:
+                                still_def: List[Tuple[str, LDUFrame]] = []
+                                for pid_d, pose_d in deferred_underhang:
+                                    if not _try_commit_macro_part(pid_d, pose_d, check_corr=True, wit_only=False):
+                                        still_def.append((pid_d, pose_d))
+                                deferred_underhang = still_def
+                        else:
+                            still_c.append((pid_w, pose_w))
+                    pend_c = still_c
+                    if not wit_flag and not prog_mc:
+                        break
+                if pend_c:
+                    deferred_underhang.extend(pend_c)
+                course_part_grid = actual_placed_grid
+            else:
+                course_placements_wave.sort(
+                    key=lambda item: (
+                        item[0],
+                        (float(item[2].pos[0]) - gx_cent) ** 2 + (float(item[2].pos[1]) - gy_cent) ** 2,
+                    )
+                )
+                g_xs: List[float] = []
+                g_ys: List[float] = []
+                for _, pid_w, pose_w in course_placements_wave:
+                    try:
+                        state.place_root_part(pid_w, pose_w, is_grounded=is_gr_course)
+                    except ValueError:
+                        return None, cands_total, blocks_solved
+                    pr_w = get_brick_primitive(pid_w)
+                    wb_w = pr_w.hull_boxes[0].transform(pose_w)
+                    m_w = float(pr_w.mass_grams)
+                    cx_w = 0.5 * float(wb_w.xmin + wb_w.xmax)
+                    cy_w = 0.5 * float(wb_w.ymin + wb_w.ymax)
+                    tot_mass += m_w
+                    tot_mx += m_w * cx_w
+                    tot_my += m_w * cy_w
+                    if is_gr_course:
+                        g_xs.extend((float(wb_w.xmin), float(wb_w.xmax)))
+                        g_ys.extend((float(wb_w.ymin), float(wb_w.ymax)))
+                if is_gr_course and g_xs:
+                    gx_cent = 0.5 * (min(g_xs) + max(g_xs))
+                    gy_cent = 0.5 * (min(g_ys) + max(g_ys))
+                if is_gr_course and foundation_policy == FoundationPolicy.TABLE_FRICTION_ONLY and hasattr(kernel, "validator"):
+                    eq_g0 = kernel.validator.evaluate(  # type: ignore[attr-defined]
+                        state,
+                        foundation_policy=foundation_policy,
+                        ground_plane_z_ldu=ground_plane_z_ldu,
+                        deadline_monotonic_s=deadline_monotonic_s,
+                    )
+                    base_wit_m = eq_g0.primal_witness
+                    base_eta_m = float(eq_g0.peak_utilization) if eq_g0.is_stable else float("inf")
 
             # Update `supported_top` and seam maps for course `c + 1`
             supported_top = course_part_grid >= 0

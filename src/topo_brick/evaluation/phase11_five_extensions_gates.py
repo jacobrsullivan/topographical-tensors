@@ -543,7 +543,7 @@ def run_gate9a_colored_finite_inventory_and_sparse_kit_benchmark(
             colored_inventory=SET_10698_COLORED_INVENTORY,
         )
         iv_rep = verify_certificate_independently(art)
-        if iv_rep.verified and art.schema_version == "1.1.0":
+        if iv_rep.verified and art.schema_version == CERTIFICATE_SCHEMA_VERSION:
             s10698_iv += 1
             if len(sample_valid_artifacts) < 10:
                 sample_valid_artifacts.append(art)

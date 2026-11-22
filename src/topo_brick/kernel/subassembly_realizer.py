@@ -49,6 +49,7 @@ class SubmodelNodeSpec:
     semantic_style_hint: Optional[str] = None
     vertex_colors_rgb: Optional[np.ndarray] = None
     verts_ldu: Optional[np.ndarray] = None
+    world_rot_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,8 @@ class SubmodelRealizationRecord:
     submodel_name: str
     world_offset_ldu: Tuple[int, int, int]
     local_part_entries: Tuple[Tuple[int, str, LDUFrame, int], ...]  # (world_iid, part_id, local_pose, color_id)
+    world_rot_id: int = 0
+    parent_submodel: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +132,7 @@ def attach_semantic_landmarks(
     allowed_part_ids: Optional[Sequence[str]] = None,
     rem_inv: Optional[Dict[str, int]] = None,
     foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
+    ground_plane_z_ldu: float = 0.0,
 ) -> List[Tuple[int, str, LDUFrame, bool]]:
     """
     Attach non-flush architectural & functional landmarks (`Phase 11 Extension 4B`) onto exposed
@@ -166,6 +170,9 @@ def attach_semantic_landmarks(
             req.anchor_box_ldu.zmax + 12,
         )
 
+        cx_anchor = 0.5 * float(req.anchor_box_ldu.xmin + req.anchor_box_ldu.xmax)
+        cy_anchor = 0.5 * float(req.anchor_box_ldu.ymin + req.anchor_box_ldu.ymax)
+
         placed_for_req = 0
         for _attempt in range(req.count):
             frontier = state.get_active_frontier()
@@ -178,8 +185,9 @@ def attach_semantic_landmarks(
                 and abox.ymin <= ep.world_frame.pos[1] <= abox.ymax
                 and abox.zmin <= ep.world_frame.pos[2] <= abox.zmax
             ]
-            # Prefer non-stud specialty ports (`BAR_3_18MM`, `HINGE_SOCKET`, `CLIP_3_18MM`) when matching role!
-            def _port_sort_key(ep: Any) -> Tuple[int, int, int, int]:
+            # Prefer non-stud specialty ports (`BAR_3_18MM`, `HINGE_SOCKET`, `CLIP_3_18MM`) when matching role,
+            # and tie-break equal-Z ports by proximity to `req.anchor_box_ldu` XY center (`TB-FIX-04`)!
+            def _port_sort_key(ep: Any) -> Tuple[int, int, float, float, float, int, int]:
                 is_spec = (
                     0
                     if (
@@ -197,13 +205,27 @@ def attach_semantic_landmarks(
                     )
                     else 1
                 )
-                return (is_spec, -ep.world_frame.pos[2], ep.world_frame.pos[0], ep.world_frame.pos[1])
+                px_e = float(ep.world_frame.pos[0])
+                py_e = float(ep.world_frame.pos[1])
+                dx_a = abs(px_e - cx_anchor)
+                dy_a = abs(py_e - cy_anchor)
+                d2_xy = round(dx_a * dx_a + dy_a * dy_a, 4)
+                return (
+                    is_spec,
+                    -int(ep.world_frame.pos[2]),
+                    d2_xy,
+                    round(dx_a, 4),
+                    round(dy_a, 4),
+                    int(ep.world_frame.pos[0]),
+                    int(ep.world_frame.pos[1]),
+                )
 
             cand_ports.sort(key=_port_sort_key)
             attached_one = False
 
             for ep in cand_ports:
                 ux, uy, uz = ep.world_frame.pos
+                ep_is_upward = ep.world_frame.z_axis == (0, 0, 1)
                 for rec in role_records:
                     pid = rec.part_id
                     if rem_inv is not None and rem_inv.get(pid, 0) <= 0:
@@ -213,21 +235,27 @@ def attach_semantic_landmarks(
                     )
                     for tmpl in tmpls:
                         rid_c, dx_c, dy_c, dz_c, rboxes_c, _, _, _ = tmpl
-                        # Keep architectural spires, domes, windows, doors, and masonry upright (`+Z` up)
+                        # Keep architectural spires, domes, windows, doors, masonry, and upward-mounted
+                        # antennas/masts (`BAR_POLE_ANTENNA`, `TB-FIX-04`) upright (`+Z` up)
                         pose_c = LDUFrame(rid_c, (ux + dx_c, uy + dy_c, uz + dz_c))
-                        if req.role in (
-                            "FINIAL_SPIRE_CONE",
-                            "DOME_ROOF_CAP",
-                            "WINDOW_FRAME_LATTICE",
-                            "DOOR_PORTCULLIS",
-                            "TEXTURED_MASONRY_BRICK",
+                        if (
+                            req.role
+                            in (
+                                "FINIAL_SPIRE_CONE",
+                                "DOME_ROOF_CAP",
+                                "WINDOW_FRAME_LATTICE",
+                                "DOOR_PORTCULLIS",
+                                "TEXTURED_MASONRY_BRICK",
+                            )
+                            or (req.role == "BAR_POLE_ANTENNA" and ep_is_upward)
                         ) and pose_c.z_axis != (0, 0, 1):
                             continue
                         wbs_c = tuple(
                             LDUBox(b[0] + ux, b[1] + uy, b[2] + uz, b[3] + ux, b[4] + uy, b[5] + uz)
                             for b in rboxes_c
                         )
-                        if min(b.zmin for b in wbs_c) < 0:
+                        min_wb_z = float(min(b.zmin for b in wbs_c))
+                        if min_wb_z < float(ground_plane_z_ldu) - 0.25:
                             continue
                         if state.check_boxes_collision(wbs_c):
                             continue
@@ -236,7 +264,11 @@ def attach_semantic_landmarks(
 
                         tok = None
                         try:
-                            tok = state.push_trial_part(pid, pose_c, is_grounded=(min(b.zmin for b in wbs_c) == 0))
+                            tok = state.push_trial_part(
+                                pid,
+                                pose_c,
+                                is_grounded=(abs(min_wb_z - float(ground_plane_z_ldu)) <= 0.25),
+                            )
                             if len(tok.added_adj_other_insts) == 0:
                                 state.pop_trial_part(tok)
                                 continue
@@ -272,7 +304,7 @@ def attach_semantic_landmarks(
                                 state.pop_trial_part(tok)
                             continue
 
-                        is_g = min(b.zmin for b in wbs_c) == 0
+                        is_g = abs(min_wb_z - float(ground_plane_z_ldu)) <= 0.25
                         nid = state.place_root_part(
                             pid,
                             pose_c,
@@ -301,22 +333,41 @@ def export_compositional_mpd(
     main_model_name: str = "main.ldr",
 ) -> str:
     """
-    Export a true multi-block LDraw `.mpd` document (`0 FILE main.ldr` + Type-1 submodel references
+    Export a true multi-block LDraw `.mpd` document (`0 FILE main.ldr` + nested Type-1 submodel
+    references supporting non-identity `world_rot_id` & `parent_submodel` hierarchies, `TB-FIX-01`
     + `0 FILE <submodel_name> ... 0 STEP ... 0 NOFILE` blocks) guaranteed to round-trip `100%`
-    bit-identically through `flatten_omr_mpd_to_se3(..., catalog=COMBINED_BRICK_CATALOG)`.
+    through `flatten_omr_mpd_to_se3(..., catalog=COMBINED_BRICK_CATALOG)`.
     """
+    rec_by_name: Dict[str, SubmodelRealizationRecord] = {
+        rec.submodel_name: rec for rec in submodel_records
+    }
+    world_pose_by_name: Dict[str, ContinuousSE3Pose] = {
+        rec.submodel_name: ContinuousSE3Pose.from_ldu_frame(
+            LDUFrame(int(rec.world_rot_id), tuple(int(c) for c in rec.world_offset_ldu))
+        )
+        for rec in submodel_records
+    }
+    nested_children: Dict[str, List[SubmodelRealizationRecord]] = {}
+    root_records: List[SubmodelRealizationRecord] = []
+    for rec in submodel_records:
+        if rec.parent_submodel is not None and rec.parent_submodel in rec_by_name:
+            nested_children.setdefault(rec.parent_submodel, []).append(rec)
+        else:
+            root_records.append(rec)
+
+    def _format_submodel_type1_line(pose_se3: ContinuousSE3Pose, ref_name: str) -> str:
+        r_ld = _C_LDRAW_TO_ZUP.T @ pose_se3.R @ _C_LDRAW_TO_ZUP
+        t_ld = _C_LDRAW_TO_ZUP.T @ pose_se3.t
+        r_str = " ".join(f"{float(v):.6g}" for v in r_ld.reshape(-1))
+        return f"1 16 {t_ld[0]:.6g} {t_ld[1]:.6g} {t_ld[2]:.6g} {r_str} {ref_name}"
+
     lines: List[str] = [
         f"0 FILE {main_model_name}",
         "0 Name: Topo-Brick Compositional MPD Assembly",
         "0 !LDRAW_ORG Model",
     ]
-    for rec in submodel_records:
-        ox, oy, oz = rec.world_offset_ldu
-        t_tb = np.array([float(ox), float(oy), float(oz)], dtype=np.float64)
-        t_ld = _C_LDRAW_TO_ZUP.T @ t_tb
-        lines.append(
-            f"1 16 {t_ld[0]:.6g} {t_ld[1]:.6g} {t_ld[2]:.6g} 1 0 0 0 1 0 0 0 1 {rec.submodel_name}"
-        )
+    for rec in root_records:
+        lines.append(_format_submodel_type1_line(world_pose_by_name[rec.submodel_name], rec.submodel_name))
 
     for iid in extra_root_instance_ids:
         if iid in state.placed_parts:
@@ -340,6 +391,11 @@ def export_compositional_mpd(
                     pid, ContinuousSE3Pose.from_ldu_frame(loc_pose), color_code=eff_color
                 )
             )
+            lines.append("0 STEP")
+        parent_pose = world_pose_by_name[rec.submodel_name]
+        for child_rec in nested_children.get(rec.submodel_name, ()):
+            rel_pose = parent_pose.inverse().compose(world_pose_by_name[child_rec.submodel_name])
+            lines.append(_format_submodel_type1_line(rel_pose, child_rec.submodel_name))
             lines.append("0 STEP")
         lines.append("0 NOFILE")
 
@@ -409,6 +465,9 @@ def realize_compositional_mpd(
 
     for node in ordered_nodes:
         ox, oy, oz = (int(node.world_offset_ldu[0]), int(node.world_offset_ldu[1]), int(node.world_offset_ldu[2]))
+        node_rot_id = int(node.world_rot_id)
+        node_world_frame = LDUFrame(node_rot_id, (ox, oy, oz))
+        node_inv_frame = node_world_frame.inverse()
 
         # Apply optional HollowShellPolicy on node's AdaptiveSurfaceTarget if not already applied
         ad_node = node.adaptive_target
@@ -438,14 +497,17 @@ def realize_compositional_mpd(
         # Compute child attachment footprints in `node`'s local coordinates to suppress smooth tiles!
         suppress_boxes_local: List[LDUBox] = []
         for ch in children_by_parent.get(node.submodel_name, ()):
-            cox, coy, coz = (int(ch.world_offset_ldu[0]), int(ch.world_offset_ldu[1]), int(ch.world_offset_ldu[2]))
-            lx0 = cox - ox - 4
-            ly0 = coy - oy - 4
-            lz0 = coz - oz - 16
-            lx1 = cox - ox + ch.adaptive_target.nx_studs * 20 + 4
-            ly1 = coy - oy + ch.adaptive_target.ny_studs * 20 + 4
-            lz1 = coz - oz + 16
-            suppress_boxes_local.append(LDUBox(lx0, ly0, lz0, lx1, ly1, lz1))
+            ch_frame = LDUFrame(int(ch.world_rot_id), tuple(int(c) for c in ch.world_offset_ldu))
+            ch_box_local = LDUBox(
+                -4,
+                -4,
+                -16,
+                ch.adaptive_target.nx_studs * 20 + 4,
+                ch.adaptive_target.ny_studs * 20 + 4,
+                16,
+            )
+            ch_box_in_parent = ch_box_local.transform(node_inv_frame.compose(ch_frame))
+            suppress_boxes_local.append(ch_box_in_parent)
 
         eff_style = node.semantic_style_hint if node.semantic_style_hint is not None else semantic_style_hint
         # Realize subassembly in its local frame (`z_local >= 0`)
@@ -474,11 +536,9 @@ def realize_compositional_mpd(
             for p_sub in sub_state.placed_parts.values():
                 rem_inv[p_sub.part_id] = max(0, rem_inv.get(p_sub.part_id, 0) - 1)
 
-        # Translate `sub_fine_tf` boxes into world space
+        # Transform `sub_fine_tf` boxes into world space
         for b_tf in sub_fine_tf.boxes:
-            combined_boxes.append(
-                LDUBox(b_tf.xmin + ox, b_tf.ymin + oy, b_tf.zmin + oz, b_tf.xmax + ox, b_tf.ymax + oy, b_tf.zmax + oz)
-            )
+            combined_boxes.append(b_tf.transform(node_world_frame))
 
         # Build local step order (preserving `sub_state.recorded_step_ids`)
         step_order_local = (
@@ -493,7 +553,7 @@ def realize_compositional_mpd(
             loc_entries: List[Tuple[int, str, LDUFrame, int]] = []
             for lid in step_order_local:
                 pl_l = sub_state.placed_parts[lid]
-                w_pose = LDUFrame(pl_l.pose.rot_id, (pl_l.pose.pos[0] + ox, pl_l.pose.pos[1] + oy, pl_l.pose.pos[2] + oz))
+                w_pose = node_world_frame.compose(pl_l.pose)
                 w_iid = merged_state.place_root_part(
                     pl_l.part_id, w_pose, is_grounded=pl_l.is_grounded, color_id=pl_l.color_id
                 )
@@ -512,6 +572,8 @@ def realize_compositional_mpd(
                     submodel_name=node.submodel_name,
                     world_offset_ldu=(ox, oy, oz),
                     local_part_entries=tuple(loc_entries),
+                    world_rot_id=node_rot_id,
+                    parent_submodel=node.parent_submodel,
                 )
             )
             continue
@@ -556,9 +618,7 @@ def realize_compositional_mpd(
                 is_loc_gr = bool(pl_l.is_grounded or min(b.zmin for b in pl_l.world_boxes) <= comp_min_z)
                 sim_local.place_root_part(pl_l.part_id, pl_l.pose, is_grounded=is_loc_gr)
                 for b_l in pl_l.world_boxes:
-                    world_grp_boxes.append(
-                        LDUBox(b_l.xmin + ox, b_l.ymin + oy, b_l.zmin + oz, b_l.xmax + ox, b_l.ymax + oy, b_l.zmax + oz)
-                    )
+                    world_grp_boxes.append(b_l.transform(node_world_frame))
 
             if merged_state.num_parts > 0:
                 if not check_rigid_group_insertion_corridor(merged_state, tuple(world_grp_boxes)):
@@ -569,7 +629,7 @@ def realize_compositional_mpd(
             comp_world_iids: List[int] = []
             for lid in comp_order:
                 pl_l = sub_state.placed_parts[lid]
-                w_pose = LDUFrame(pl_l.pose.rot_id, (pl_l.pose.pos[0] + ox, pl_l.pose.pos[1] + oy, pl_l.pose.pos[2] + oz))
+                w_pose = node_world_frame.compose(pl_l.pose)
                 w_grounded = bool(oz == 0 and pl_l.is_grounded)
                 w_iid = merged_state.place_root_part(
                     pl_l.part_id, w_pose, is_grounded=w_grounded, color_id=pl_l.color_id
@@ -605,7 +665,7 @@ def realize_compositional_mpd(
                         op_type=AtomicOpType.PLACE_SUBASSEMBLY,
                         instance_ids=tuple(comp_world_iids),
                         part_id=sub_tag,
-                        pose=LDUFrame(0, (ox, oy, oz)),
+                        pose=node_world_frame,
                         is_grounded=(oz == 0),
                         subtrace=tuple(local_subtrace_steps),
                     )
@@ -615,6 +675,8 @@ def realize_compositional_mpd(
                 submodel_name=node.submodel_name,
                 world_offset_ldu=(ox, oy, oz),
                 local_part_entries=tuple(loc_entries_m),
+                world_rot_id=node_rot_id,
+                parent_submodel=node.parent_submodel,
             )
         )
 

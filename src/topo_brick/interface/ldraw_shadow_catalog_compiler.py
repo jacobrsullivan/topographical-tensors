@@ -143,10 +143,66 @@ def _parse_ldcad_props(line: str) -> Dict[str, str]:
     return props
 
 
-def _expand_ldcad_grid(grid_str: Optional[str]) -> List[Tuple[float, float, float]]:
+from topo_brick.interface.release_provenance import (
+    CatalogProvenanceError,
+    validate_compiled_manifest_dict,
+)
+
+MAX_LDRAW_FILE_BYTES: int = 8 * 1024 * 1024  # 8 MiB per .dat/.ldr source file
+MAX_GRID_AXIS_COUNT: int = 64  # Covers largest official 48x48 baseplates
+MAX_GRID_TOTAL_POINTS: int = 4_096  # Hard ceiling on expanded LDCad [grid=...] points
+MAX_DAG_NODES_VISITED: int = 25_000
+MAX_EXPANDED_TRIANGLES: int = 250_000
+MAX_EXPANDED_SNAPS: int = 10_000
+
+
+class CatalogResourceLimitError(ValueError):
+    """Raised when an external LDraw/Shadow source exceeds compiler resource budgets (`S5`)."""
+
+
+@dataclass
+class _ExpansionBudget:
+    """Mutable per-part resource counter preventing exponential LDraw/Shadow DAG blowup (`S5`)."""
+
+    max_nodes: int = MAX_DAG_NODES_VISITED
+    max_triangles: int = MAX_EXPANDED_TRIANGLES
+    max_snaps: int = MAX_EXPANDED_SNAPS
+    nodes_visited: int = 0
+    triangles_emitted: int = 0
+    snaps_emitted: int = 0
+
+    def record_node(self) -> None:
+        self.nodes_visited += 1
+        if self.nodes_visited > self.max_nodes:
+            raise CatalogResourceLimitError(
+                f"LDraw DAG traversal exceeded max_nodes={self.max_nodes}"
+            )
+
+    def record_triangles(self, count: int) -> None:
+        self.triangles_emitted += int(count)
+        if self.triangles_emitted > self.max_triangles:
+            raise CatalogResourceLimitError(
+                f"Expanded LDraw geometry exceeded max_triangles={self.max_triangles}"
+            )
+
+    def record_snaps(self, count: int) -> None:
+        self.snaps_emitted += int(count)
+        if self.snaps_emitted > self.max_snaps:
+            raise CatalogResourceLimitError(
+                f"Expanded Shadow snaps exceeded max_snaps={self.max_snaps}"
+            )
+
+
+def _expand_ldcad_grid(
+    grid_str: Optional[str],
+    *,
+    max_axis_count: int = MAX_GRID_AXIS_COUNT,
+    max_total_points: int = MAX_GRID_TOTAL_POINTS,
+) -> List[Tuple[float, float, float]]:
     """
     Expand LDCad `[grid=...]` specification into local LDraw `(dx, dy, dz)` offsets.
-    Supports both 2D XZ (`[C] nx [C] nz sx sz`) and 3D XYZ (`[C] nx [C] ny [C] nz sx sy sz`).
+    Supports both 2D XZ (`[C] nx [C] nz sx sz`) and 3D XYZ (`[C] nx [C] ny [C] nz sx sy sz`),
+    enforcing finite step bounds and `max_total_points` BEFORE allocating offset tuples (`S5`).
     """
     if not grid_str:
         return [(0.0, 0.0, 0.0)]
@@ -158,15 +214,31 @@ def _expand_ldcad_grid(grid_str: Optional[str]) -> List[Tuple[float, float, floa
 
     counts: List[Tuple[bool, int]] = []
     idx = 0
+    total_pts = 1
     for _ in range(ndim):
         centered = False
         if idx < len(toks) and toks[idx].upper() == "C":
             centered = True
             idx += 1
-        cnt = max(1, int(float(toks[idx])))
+        raw_cnt = float(toks[idx])
+        if not math.isfinite(raw_cnt) or raw_cnt < 1.0 or raw_cnt > float(max_axis_count):
+            raise CatalogResourceLimitError(
+                f"LDCad grid axis count {toks[idx]!r} outside [1, {max_axis_count}]"
+            )
+        cnt = int(raw_cnt)
+        total_pts *= cnt
+        if total_pts > max_total_points:
+            raise CatalogResourceLimitError(
+                f"LDCad grid total point count {total_pts} exceeds limit {max_total_points}"
+            )
         idx += 1
         counts.append((centered, cnt))
-    steps = [float(toks[idx + k]) for k in range(ndim)]
+    steps: List[float] = []
+    for k in range(ndim):
+        st_val = float(toks[idx + k])
+        if not math.isfinite(st_val) or abs(st_val) > 10_000.0:
+            raise CatalogResourceLimitError(f"Invalid LDCad grid step {toks[idx + k]!r}")
+        steps.append(st_val)
 
     axes_vals: List[List[float]] = []
     for (centered, cnt), step in zip(counts, steps):
@@ -702,6 +774,11 @@ class LDrawShadowCatalogCompiler:
         fp = self._ld_index.get(key)
         if fp is None:
             return None
+        st_ld = fp.stat()
+        if st_ld.st_size > MAX_LDRAW_FILE_BYTES:
+            raise CatalogResourceLimitError(
+                f"LDraw file {fp} size {st_ld.st_size} exceeds {MAX_LDRAW_FILE_BYTES} bytes"
+            )
         raw = fp.read_bytes()
         text = raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
@@ -756,6 +833,11 @@ class LDrawShadowCatalogCompiler:
                     break
         if sp is None:
             return None
+        st_sh = sp.stat()
+        if st_sh.st_size > MAX_LDRAW_FILE_BYTES:
+            raise CatalogResourceLimitError(
+                f"Shadow file {sp} size {st_sh.st_size} exceeds {MAX_LDRAW_FILE_BYTES} bytes"
+            )
 
         clear_all = False
         clear_id: Optional[str] = None
@@ -832,15 +914,19 @@ class LDrawShadowCatalogCompiler:
         m_parent: np.ndarray,
         t_parent: np.ndarray,
         depth: int = 0,
+        budget: Optional[_ExpansionBudget] = None,
     ) -> Tuple[List[np.ndarray], List[Tuple[RawShadowSnap, np.ndarray, np.ndarray]], List[Tuple[str, np.ndarray, np.ndarray]]]:
         """
-        Recursively traverse LDraw DAG + LDCad Shadow hierarchy, returning:
+        Recursively traverse LDraw DAG + LDCad Shadow hierarchy with bounded node/triangle/snap
+        expansion (`S5`), returning:
           - `world_tris_ld`: list of `(N_i, 3, 3)` triangle arrays in root LDraw coordinates,
           - `world_snaps_ld`: list of `(RawShadowSnap, M_world_3x3, t_world_3)` from Shadow metas,
           - `prim_hits_ld`: list of `(primitive_basename, M_world_3x3, t_world_3)` for Tier-C fallback.
         """
         if depth > 12:
             return [], [], []
+        eff_budget = _ExpansionBudget() if budget is None else budget
+        eff_budget.record_node()
         parsed = self._parse_ldraw_file(key)
         tris_out: List[np.ndarray] = []
         snaps_out: List[Tuple[RawShadowSnap, np.ndarray, np.ndarray]] = []
@@ -867,13 +953,14 @@ class LDrawShadowCatalogCompiler:
         if parsed is not None:
             _, _, refs, local_tris = parsed
             if local_tris.shape[0] > 0:
+                eff_budget.record_triangles(int(local_tris.shape[0]))
                 # Transform (N, 3, 3) vertices: v_w = v @ M^T + t
                 tris_out.append(local_tris @ m_parent.T + t_parent)
             for m_c, t_c, ref_k in refs:
                 m_w = m_parent @ m_c
                 t_w = m_parent @ t_c + t_parent
                 c_tris, c_snaps, c_prims = self._collect_geometry_and_snaps_ld(
-                    ref_k, m_w, t_w, depth + 1
+                    ref_k, m_w, t_w, depth + 1, eff_budget
                 )
                 tris_out.extend(c_tris)
                 snaps_out.extend(c_snaps)
@@ -904,9 +991,11 @@ class LDrawShadowCatalogCompiler:
                 for goff in _expand_ldcad_grid(inc_props.get("grid")):
                     t_g = p_inc + np.asarray(goff, dtype=np.float64)
                     _, inc_snaps, _ = self._collect_geometry_and_snaps_ld(
-                        ref_inc, m_parent @ m_inc, m_parent @ t_g + t_parent, depth + 1
+                        ref_inc, m_parent @ m_inc, m_parent @ t_g + t_parent, depth + 1, eff_budget
                     )
                     snaps_out.extend(inc_snaps)
+            if local_snaps:
+                eff_budget.record_snaps(len(local_snaps))
             for sn in local_snaps:
                 snaps_out.append((sn, m_parent, t_parent))
 
@@ -1605,10 +1694,14 @@ class CompiledLDrawCatalog:
         catalog_gz_path: Path = DEFAULT_COMPILED_CATALOG_GZ,
         coacd_npz_path: Path = DEFAULT_COMPILED_COACD_NPZ,
         manifest_path: Path = DEFAULT_COMPILED_MANIFEST_JSON,
+        *,
+        allow_unverified_dev_catalog: bool = False,
     ) -> None:
         self._catalog_gz_path = catalog_gz_path
         self._coacd_npz_path = coacd_npz_path
         self._manifest_path = manifest_path
+        self._allow_unverified_dev_catalog = bool(allow_unverified_dev_catalog)
+        self.provenance_verified: bool = False
         self._loaded: bool = False
         self._raw_parts: Dict[str, Dict[str, Any]] = {}
         self._moved_aliases: Dict[str, str] = {}
@@ -1629,21 +1722,31 @@ class CompiledLDrawCatalog:
 
     @property
     def manifest(self) -> Dict[str, Any]:
-        if self._manifest_path.exists():
+        if self._manifest_path.is_file():
             st = self._manifest_path.stat()
             sk = (int(st.st_mtime_ns), int(st.st_size))
             if self._manifest_cache is None or self._manifest_stat_key != sk:
-                self._manifest_cache = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+                raw_m = json.loads(self._manifest_path.read_text(encoding="utf-8"))
+                if not self._allow_unverified_dev_catalog:
+                    raw_m = validate_compiled_manifest_dict(
+                        raw_m, require_coacd_sha256=self._coacd_npz_path.is_file()
+                    )
+                self._manifest_cache = raw_m
                 self._manifest_stat_key = sk
-        elif self._manifest_cache is None:
-            self._manifest_cache = {}
-        return self._manifest_cache
+            return self._manifest_cache
+        if self._allow_unverified_dev_catalog:
+            if self._manifest_cache is None:
+                self._manifest_cache = {}
+            return self._manifest_cache
+        raise CatalogProvenanceError(
+            f"Missing required compiled catalog manifest: {self._manifest_path}"
+        )
 
     @property
     def archive_sha256(self) -> str:
         """
-        Compute and return the actual SHA-256 of `compiled_ldraw_catalog.json.gz` bytes on disk
-        (cached by `(mtime_ns, st_size)`), verifying agreement against `manifest['catalog_gz_sha256']`.
+        Compute and return the actual SHA-256 of `compiled_ldraw_catalog.json.gz` bytes on disk,
+        requiring valid `manifest['catalog_gz_sha256']` unless `allow_unverified_dev_catalog=True` (`S8`).
         """
         if not self._catalog_gz_path.is_file():
             return "not_compiled"
@@ -1651,9 +1754,19 @@ class CompiledLDrawCatalog:
         sk = (int(st.st_mtime_ns), int(st.st_size))
         if self._catalog_sha256_cache is None or self._catalog_stat_key != sk:
             actual_sha = hashlib.sha256(self._catalog_gz_path.read_bytes()).hexdigest()
-            exp_sha = self.manifest.get("catalog_gz_sha256")
-            if exp_sha and str(exp_sha) != actual_sha:
-                raise ValueError(
+            manifest_d = self.manifest
+            exp_sha = manifest_d.get("catalog_gz_sha256")
+            if not self._allow_unverified_dev_catalog:
+                if not exp_sha:
+                    raise CatalogProvenanceError(
+                        "Manifest missing required 'catalog_gz_sha256'"
+                    )
+                if str(exp_sha).strip().lower() != actual_sha:
+                    raise CatalogProvenanceError(
+                        f"Compiled catalog SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
+                    )
+            elif exp_sha and str(exp_sha).strip().lower() != actual_sha:
+                raise CatalogProvenanceError(
                     f"Compiled catalog SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
                 )
             self._catalog_sha256_cache = actual_sha
@@ -1663,8 +1776,8 @@ class CompiledLDrawCatalog:
     @property
     def coacd_sha256(self) -> str:
         """
-        Compute and return the actual SHA-256 of `compiled_coacd_hulls.npz` bytes on disk
-        (cached by `(mtime_ns, st_size)`), verifying agreement against `manifest['coacd_npz_sha256']`.
+        Compute and return the actual SHA-256 of `compiled_coacd_hulls.npz` bytes on disk,
+        requiring valid `manifest['coacd_npz_sha256']` unless `allow_unverified_dev_catalog=True` (`S8`).
         """
         if not self._coacd_npz_path.is_file():
             return "no_coacd"
@@ -1672,9 +1785,19 @@ class CompiledLDrawCatalog:
         sk = (int(st.st_mtime_ns), int(st.st_size))
         if self._coacd_sha256_cache is None or self._coacd_stat_key != sk:
             actual_sha = hashlib.sha256(self._coacd_npz_path.read_bytes()).hexdigest()
-            exp_sha = self.manifest.get("coacd_npz_sha256")
-            if exp_sha and str(exp_sha) != actual_sha:
-                raise ValueError(
+            manifest_d = self.manifest
+            exp_sha = manifest_d.get("coacd_npz_sha256")
+            if not self._allow_unverified_dev_catalog:
+                if not exp_sha:
+                    raise CatalogProvenanceError(
+                        "Manifest missing required 'coacd_npz_sha256'"
+                    )
+                if str(exp_sha).strip().lower() != actual_sha:
+                    raise CatalogProvenanceError(
+                        f"Compiled CoACD archive SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
+                    )
+            elif exp_sha and str(exp_sha).strip().lower() != actual_sha:
+                raise CatalogProvenanceError(
                     f"Compiled CoACD archive SHA-256 mismatch: file={actual_sha} vs manifest={exp_sha}"
                 )
             self._coacd_sha256_cache = actual_sha
@@ -1688,11 +1811,29 @@ class CompiledLDrawCatalog:
         sk = (int(st.st_mtime_ns), int(st.st_size))
         if self._loaded and self._catalog_stat_key == sk:
             return
-        # Always verify archive byte digest against manifest before parsing JSON (`F7`)
+        # Always verify archive & CoACD byte digests against required manifest before parsing JSON (`F7` + `S8`)
         _ = self.archive_sha256
+        if self._coacd_npz_path.is_file():
+            _ = self.coacd_sha256
+        if not self._allow_unverified_dev_catalog:
+            validate_compiled_manifest_dict(
+                self.manifest,
+                require_coacd_sha256=self._coacd_npz_path.is_file(),
+                require_structural_metadata=True,
+            )
         with gzip.open(self._catalog_gz_path, "rt", encoding="utf-8") as gz:
             data = json.load(gz)
-        self._raw_parts = data.get("parts", {})
+        raw_parts = data.get("parts", {})
+        if not self._allow_unverified_dev_catalog:
+            exp_cnt = int(self.manifest["total_compiled_parts"])
+            if len(raw_parts) != exp_cnt:
+                raise CatalogProvenanceError(
+                    f"Compiled catalog part count {len(raw_parts)} != manifest total_compiled_parts {exp_cnt}"
+                )
+            self.provenance_verified = True
+        else:
+            self.provenance_verified = False
+        self._raw_parts = raw_parts
         self._moved_aliases = data.get("moved_aliases", {})
         self._prim_cache.clear()
         self._spec_cache.clear()

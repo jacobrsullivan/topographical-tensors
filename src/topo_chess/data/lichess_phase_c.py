@@ -15,10 +15,11 @@ Implements:
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
+from collections import deque
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Sequence, Set, Tuple
+from typing import Deque, Dict, Iterator, List, Sequence, Set, TextIO, Tuple
 import chess
 import numpy as np
 
@@ -32,6 +33,53 @@ from topo_chess.domains.boards import Standard8x8State
 from topo_chess.domains.move_graph import Move, STANDARD_8X8_GRAPH, WHITE
 
 MAX_LEGAL_K = 24
+MAX_CSV_LINE_BYTES: int = 65_536
+MAX_TARGET_TOTAL_STATES: int = 5_000_000
+MAX_TARGET_TRAJECTORIES: int = 2_000_000
+MAX_TARGET_TEST_PUZZLES: int = 500_000
+
+
+def _read_bounded_csv_line(
+    stream: TextIO,
+    max_bytes: int = MAX_CSV_LINE_BYTES,
+) -> str:
+    """Read a single CSV line while enforcing a hard per-line UTF-8 byte ceiling."""
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    line = stream.readline(max_bytes + 1)
+    if not line:
+        return ""
+    raw_len = len(line.encode("utf-8", errors="replace"))
+    if raw_len > max_bytes or (len(line) > max_bytes and not line.endswith("\n")):
+        raise ValueError(
+            f"Lichess CSV line exceeds maximum byte limit ({max_bytes} bytes)"
+        )
+    return line
+
+
+def _iter_bounded_csv_chunks(
+    stream: TextIO,
+    rows_to_read: int,
+    chunk_sz: int = 2_000,
+    max_line_bytes: int = MAX_CSV_LINE_BYTES,
+) -> Iterator[List[str]]:
+    """Stream bounded CSV line batches without materializing the full CSV in memory."""
+    if chunk_sz <= 0:
+        raise ValueError("chunk_sz must be positive")
+    header = _read_bounded_csv_line(stream, max_bytes=max_line_bytes)
+    if not header:
+        return
+    buf: List[str] = []
+    for _ in range(rows_to_read):
+        line = _read_bounded_csv_line(stream, max_bytes=max_line_bytes)
+        if not line:
+            break
+        buf.append(line)
+        if len(buf) >= chunk_sz:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
 
 PRIMARY_MOTIFS = (
     "mateIn3",
@@ -450,22 +498,28 @@ def build_or_load_phase_c_lichess_datasets(
     Dict[str, object],
 ]:
     """Ingest Lichess CSV across 10 P-cores, enforce 0% Zobrist overlap, and cache compact binary shards."""
+    if target_total_states <= 0 or target_total_states > MAX_TARGET_TOTAL_STATES:
+        raise ValueError(
+            f"target_total_states={target_total_states} outside [1, {MAX_TARGET_TOTAL_STATES}]"
+        )
+    if target_trajectories < 0 or target_trajectories > MAX_TARGET_TRAJECTORIES:
+        raise ValueError(
+            f"target_trajectories={target_trajectories} outside [0, {MAX_TARGET_TRAJECTORIES}]"
+        )
+    if target_test_puzzles < 0 or target_test_puzzles > MAX_TARGET_TEST_PUZZLES:
+        raise ValueError(
+            f"target_test_puzzles={target_test_puzzles} outside [0, {MAX_TARGET_TEST_PUZZLES}]"
+        )
+    if num_workers <= 0 or num_workers > 64:
+        raise ValueError(f"num_workers={num_workers} outside [1, 64]")
+
     cache_dir.mkdir(parents=True, exist_ok=True)
     meta_path = cache_dir / f"phase_c_manifest_{target_total_states}.npz"
 
     # Estimate rows needed: each valid row yields ~2.8 unique states
     rows_to_read = int(target_total_states * 0.42) + 60_000
-    raw_lines: List[str] = []
-    with csv_path.open("r", encoding="utf-8") as f:
-        _header = f.readline()
-        for _ in range(rows_to_read):
-            line = f.readline()
-            if not line:
-                break
-            raw_lines.append(line)
-
-    chunk_sz = max(500, len(raw_lines) // (num_workers * 4))
-    chunks = [raw_lines[i : i + chunk_sz] for i in range(0, len(raw_lines), chunk_sz)]
+    chunk_sz = 2_000
+    max_in_flight = max(2, 2 * num_workers)
 
     split_buckets: Dict[str, List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]]] = {
         "train": [],
@@ -478,39 +532,60 @@ def build_or_load_phase_c_lichess_datasets(
     traj_list: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     candidate_puzzles: List[LichessBenchmarkPuzzle] = []
 
-    with ProcessPoolExecutor(max_workers=num_workers) as pool:
-        for st_batch, tr_batch, pz_batch in pool.map(_parse_lichess_csv_chunk, chunks):
-            # First register test puzzles so their Zobrist & mirror-Zobrist hashes are strictly reserved for 'test'
-            for pz in pz_batch:
-                if pz.zobrist_hash not in global_seen_hashes:
-                    global_seen_hashes.add(pz.zobrist_hash)
-                    split_hashes["test"].add(pz.zobrist_hash)
-                    candidate_puzzles.append(pz)
+    def _consume_chunk_result(
+        st_batch: Sequence[Tuple[str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int, int]],
+        tr_batch: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+        pz_batch: Sequence[LichessBenchmarkPuzzle],
+    ) -> None:
+        # First register test puzzles so their Zobrist & mirror-Zobrist hashes are strictly reserved for 'test'
+        for pz in pz_batch:
+            if pz.zobrist_hash not in global_seen_hashes:
+                global_seen_hashes.add(pz.zobrist_hash)
+                split_hashes["test"].add(pz.zobrist_hash)
+                candidate_puzzles.append(pz)
 
-            for (
-                sp_name,
-                pt_c,
-                pc_c,
-                rule_c,
-                pad_e,
-                pad_q,
-                wdlp,
-                zh_cur,
-                zh_mirr,
-                motif_code,
-            ) in st_batch:
-                if zh_cur in global_seen_hashes or zh_mirr in global_seen_hashes:
-                    continue
-                global_seen_hashes.add(zh_cur)
-                global_seen_hashes.add(zh_mirr)
-                split_hashes[sp_name].add(zh_cur)
-                split_buckets[sp_name].append(
-                    (pt_c, pc_c, rule_c, pad_e, pad_q, wdlp, zh_cur, motif_code)
-                )
+        for (
+            sp_name,
+            pt_c,
+            pc_c,
+            rule_c,
+            pad_e,
+            pad_q,
+            wdlp,
+            zh_cur,
+            zh_mirr,
+            motif_code,
+        ) in st_batch:
+            if zh_cur in global_seen_hashes or zh_mirr in global_seen_hashes:
+                continue
+            global_seen_hashes.add(zh_cur)
+            global_seen_hashes.add(zh_mirr)
+            split_hashes[sp_name].add(zh_cur)
+            split_buckets[sp_name].append(
+                (pt_c, pc_c, rule_c, pad_e, pad_q, wdlp, zh_cur, motif_code)
+            )
 
-            for tr_item in tr_batch:
-                if len(traj_list) < target_trajectories:
-                    traj_list.append(tr_item)
+        for tr_item in tr_batch:
+            if len(traj_list) < target_trajectories:
+                traj_list.append(tr_item)
+
+    with csv_path.open("r", encoding="utf-8") as f, ProcessPoolExecutor(
+        max_workers=num_workers
+    ) as pool:
+        pending_futures: Deque[Future] = deque()
+        for chunk in _iter_bounded_csv_chunks(
+            f,
+            rows_to_read=rows_to_read,
+            chunk_sz=chunk_sz,
+            max_line_bytes=MAX_CSV_LINE_BYTES,
+        ):
+            pending_futures.append(pool.submit(_parse_lichess_csv_chunk, chunk))
+            while len(pending_futures) >= max_in_flight:
+                st_b, tr_b, pz_b = pending_futures.popleft().result()
+                _consume_chunk_result(st_b, tr_b, pz_b)
+        while pending_futures:
+            st_b, tr_b, pz_b = pending_futures.popleft().result()
+            _consume_chunk_result(st_b, tr_b, pz_b)
 
     # If we need additional unique variations to reach exact target_total_states (e.g. 1,000,000),
     # generate deterministic ply-shifted / clock-varied Zobrist-disjoint Lichess states

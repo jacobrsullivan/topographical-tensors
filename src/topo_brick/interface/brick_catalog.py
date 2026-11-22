@@ -15,7 +15,7 @@ Insertion-Normal Convention for Port Frames F_p:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum
 import hashlib
 from typing import Dict, Optional, Tuple
@@ -172,6 +172,8 @@ class BrickPrimitive:
     is_snot: bool = False
     is_ldraw_native_frame: bool = False
     coacd_shell_id: Optional[str] = None
+    ldraw_export_rot_ld: Optional[Tuple[Tuple[float, float, float], ...]] = None
+    ldraw_export_pos_ld: Optional[Tuple[float, float, float]] = None
 
     @property
     def stud_ports(self) -> Tuple[PortSpec, ...]:
@@ -920,7 +922,28 @@ from topo_brick.interface.tier_a_catalog import (  # noqa: E402
     normalize_ldraw_part_id,
 )
 
+from topo_brick.interface.ldraw_calibrated_frames import (  # noqa: E402
+    LDRAW_CALIBRATED_TIER_A_FRAMES,
+)
+
+for _pid_seed, _prim_seed in list(BRICK_CATALOG.items()):
+    _cal = LDRAW_CALIBRATED_TIER_A_FRAMES.get(_pid_seed)
+    if _cal is not None:
+        BRICK_CATALOG[_pid_seed] = replace(
+            _prim_seed,
+            ldraw_export_rot_ld=_cal[0],
+            ldraw_export_pos_ld=_cal[1],
+        )
+
 TIER_A_CATALOG: Dict[str, BrickPrimitive] = build_tier_a_catalog(EXTENDED_BRICK_CATALOG)
+for _pid_ta, _prim_ta in list(TIER_A_CATALOG.items()):
+    _cal_ta = LDRAW_CALIBRATED_TIER_A_FRAMES.get(_pid_ta)
+    if _cal_ta is not None:
+        TIER_A_CATALOG[_pid_ta] = replace(
+            _prim_ta,
+            ldraw_export_rot_ld=_cal_ta[0],
+            ldraw_export_pos_ld=_cal_ta[1],
+        )
 EXTENDED_BRICK_CATALOG.update(TIER_A_CATALOG)
 TIER_A_CATALOG_IDS: Tuple[str, ...] = tuple(TIER_A_CATALOG.keys())
 SET_10698_KIT_IDS: Tuple[str, ...] = tuple(SET_10698_OFFICIAL_INVENTORY.keys())
@@ -942,6 +965,9 @@ class ColoredInventorySpec:
     allow_hidden_color_substitution: bool = True
     allow_same_footprint_split: bool = True
     seam_coherence_weight: float = 0.75
+    enable_translucency: bool = False
+    trans_substitution_penalty_de00: float = 12.0
+    pearl_metallic_penalty_de00: float = 4.0
 
     def marginal_mold_counts(self) -> Dict[str, int]:
         """Aggregate `sum_c counts[(part_id, c)]` per part ID for geometric solvers."""

@@ -274,8 +274,18 @@ def evaluate_stage_gate_3(
             legal_count += sum(1 for pr in preds if pr.is_fully_legal)
     legal_rate = float(legal_count) / float(max(len(legality_test_states), 1))
 
-    # 2. Mate-in-3 puzzle evaluation & D3PM latency timing
+    # 2. Mate-in-3 puzzle evaluation & D3PM latency timing (warm up shape on MPS before timing)
     puzzle_states = [p.initial_state for p in puzzles]
+    if puzzle_states and device.type == "mps":
+        rng_snap = torch.get_rng_state()
+        with torch.no_grad():
+            w_in = encoder.encode_states_to_tensor(puzzle_states, device=device)
+            w_enc = encoder(w_in)
+            _ = planner.sample_trajectories_batch(
+                puzzle_states, w_enc.spatial_tokens, w_enc.q_logits, num_steps=2
+            )
+        torch.mps.synchronize()
+        torch.set_rng_state(rng_snap)
     t0 = time.perf_counter()
     with torch.no_grad():
         p_in = encoder.encode_states_to_tensor(puzzle_states, device=device)
@@ -283,6 +293,8 @@ def evaluate_stage_gate_3(
         puzzle_preds = planner.sample_trajectories_batch(
             puzzle_states, p_enc.spatial_tokens, p_enc.q_logits, num_steps=num_steps
         )
+    if device.type == "mps":
+        torch.mps.synchronize()
     d3pm_elapsed = max(time.perf_counter() - t0, 1e-6)
 
     solved = 0
@@ -309,8 +321,13 @@ def evaluate_stage_gate_3(
 
     # 3. Autoregressive Beam Search Baseline latency timing on the same puzzle batch
     beam_baseline = AutoregressiveBeamBaseline(encoder=encoder, beam_width=4)
+    if puzzle_states and device.type == "mps":
+        beam_baseline.rollout_beam_search(puzzle_states, horizon_plies=1, device=device)
+        torch.mps.synchronize()
     t1 = time.perf_counter()
     beam_baseline.rollout_beam_search(puzzle_states, horizon_plies=6, device=device)
+    if device.type == "mps":
+        torch.mps.synchronize()
     beam_elapsed = max(time.perf_counter() - t1, 1e-6)
 
     return StageGate3Metrics(
