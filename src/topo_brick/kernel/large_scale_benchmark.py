@@ -30,12 +30,13 @@ import json
 from pathlib import Path
 import random
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.stats import beta as scipy_beta
-import torch
-from torch import nn
+
+if TYPE_CHECKING:
+    import torch
 
 from topo_brick.evaluation.physical_validation import (
     ModelAgreementReport,
@@ -54,7 +55,6 @@ from topo_brick.interface.port_manifold import (
 )
 from topo_brick.kernel.construction_kernel import (
     KernelResultStatus,
-    LearnedCatalogAndPortFilter,
     LegolizationBaseline,
     PromotionGateVerdict,
     TopoBrickKernel,
@@ -63,14 +63,12 @@ from topo_brick.kernel.construction_kernel import (
     parse_external_record_specs,
 )
 from topo_brick.kernel.untouched_external_corpus import (
+    LOCKED_STABLETEXT2BRICK_MANIFEST,
     UNTOUCHED_STABLETEXT2BRICK_21_MANIFEST,
 )
 from topo_brick.representation.interface_fields import (
     SparseTiledTargetField,
     TargetShapeBoxes,
-)
-from topo_brick.training.stage55_and_stage6_audit_and_external_eval import (
-    LOCKED_STABLETEXT2BRICK_MANIFEST,
 )
 
 DEFAULT_COHORT_GZ_PATH: Path = Path(__file__).with_name("untouched_s2b_600_cohort.json.gz")
@@ -741,6 +739,10 @@ def evaluate_m2_on_tier_a_catalog(
     `num_eval_courses` (`50`) strictly `object_id`-disjoint held-out courses over `120` parts of
     `TIER_A_CATALOG`.
     """
+    import torch
+    from torch import nn
+    from topo_brick.kernel.construction_kernel import LearnedCatalogAndPortFilter
+
     torch.manual_seed(seed)
     np.random.seed(seed)
 

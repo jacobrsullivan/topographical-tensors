@@ -3,10 +3,10 @@
 **Date:** 2026-11-06  
 **Work Package:** WP5 (Reproducibility Audit & Editorial Review)  
 **Verified Implementation Modules:**
-* [`src/topo_chess/encoding/topographical_encoder.py`](../src/topo_chess/encoding/topographical_encoder.py)
-* [`src/topo_chess/models/ipa_encoder.py`](../src/topo_chess/models/ipa_encoder.py)
-* [`src/topo_chess/diffusion/d3pm_planner.py`](../src/topo_chess/diffusion/d3pm_planner.py)
-* [`src/topo_chess/evaluation/gauntlet_and_bayeselo.py`](../src/topo_chess/evaluation/gauntlet_and_bayeselo.py)
+* [`src/topo_chess/encoding/topographical_encoder.py`](../../src/topo_chess/encoding/topographical_encoder.py)
+* [`src/topo_chess/models/ipa_encoder.py`](../../src/topo_chess/models/ipa_encoder.py)
+* [`src/topo_chess/diffusion/d3pm_planner.py`](../../src/topo_chess/diffusion/d3pm_planner.py)
+* [`src/topo_chess/evaluation/gauntlet_and_bayeselo.py`](../../src/topo_chess/evaluation/gauntlet_and_bayeselo.py)
 
 ---
 
@@ -20,7 +20,7 @@ Let $\mathcal{S}_{H \times W}$ denote the discrete state space of legal chess co
 4. En-passant target square $e_{\text{ep}} \in \{0, \dots, HW-1\} \cup \{\varnothing\}$ (for $8 \times 8$), and
 5. Normalized halfmove clock $h_{50} \in [0, 1]$.
 
-Let $\Phi: \mathcal{S}_{H \times W} \to \mathbb{R}^{C \times H \times W}$ ($C = 44$ for $8 \times 8$; $C = 40$ for $5 \times 5$) be the **3-Bundle Topographical Move-Potential Encoder** defined in [`TopographicalEncoder.encode`](../src/topo_chess/encoding/topographical_encoder.py#L64-L214), and let $\Psi: \mathbb{R}^{C \times H \times W} \to \mathcal{S}_{H \times W}$ be the deterministic algebraic decoder defined in [`TopographicalDecoder.decode`](../src/topo_chess/encoding/topographical_encoder.py#L244-L315).
+Let $\Phi: \mathcal{S}_{H \times W} \to \mathbb{R}^{C \times H \times W}$ ($C = 44$ for $8 \times 8$; $C = 40$ for $5 \times 5$) be the **3-Bundle Topographical Move-Potential Encoder** defined in [`TopographicalEncoder.encode`](../../src/topo_chess/encoding/topographical_encoder.py#L64-L214), and let $\Psi: \mathbb{R}^{C \times H \times W} \to \mathcal{S}_{H \times W}$ be the deterministic algebraic decoder defined in [`TopographicalDecoder.decode`](../../src/topo_chess/encoding/topographical_encoder.py#L244-L315).
 
 **Theorem 1.** *The encoding map $\Phi$ is strictly injective on $\mathcal{S}_{H \times W}$, and $\Psi$ is a left-inverse of $\Phi$: for every $s \in \mathcal{S}_{H \times W}$,*
 $$\Psi(\Phi(s)) = s \quad \text{and} \quad \mathcal{L}(\Psi(\Phi(s))) = \mathcal{L}(s),$$
@@ -54,21 +54,21 @@ Define the **board-mirror and color-inversion involution** $\mathcal{M}: \mathca
 In the canonical side-to-move move graph $G(V, E)$, every physical move $m = ((x_1, y_1) \to (x_2, y_2), p_{\text{promo}})$ played by color $c_{\text{stm}}$ is mapped to its canonical edge index $e = \gamma(m, c_{\text{stm}}) \in \{0, \dots, |E|-1\}$ by orienting ranks relative to the active player's forward axis:
 $$y_{\text{can}}(y, c_{\text{stm}}) = \begin{cases} y & \text{if } c_{\text{stm}} = 0 \text{ (White)}, \\ H - 1 - y & \text{if } c_{\text{stm}} = 1 \text{ (Black)}. \end{cases}$$
 
-**Theorem 2.** *Let $f_\theta: \mathcal{S}_{H \times W} \to [0, 1]^{|E|}$ be the [`TopographicalIPAEncoder`](../src/topo_chess/models/ipa_encoder.py#L215-L375) action-value network composed with canonical encoding $\Phi_{\text{can}}(s) = \Phi(s_{\text{can}})$. For every state $s \in \mathcal{S}_{H \times W}$ and every canonical edge $e \in \{0, \dots, |E|-1\}$,*
+**Theorem 2.** *Let $f_\theta: \mathcal{S}_{H \times W} \to [0, 1]^{|E|}$ be the [`TopographicalIPAEncoder`](../../src/topo_chess/models/ipa_encoder.py#L215-L375) action-value network composed with canonical encoding $\Phi_{\text{can}}(s) = \Phi(s_{\text{can}})$. For every state $s \in \mathcal{S}_{H \times W}$ and every canonical edge $e \in \{0, \dots, |E|-1\}$,*
 $$f_\theta(\mathcal{M}(s))_e = f_\theta(s)_e.$$
 
 ### 2.2 Proof
 1. **Invariance of the Canonical State Transformation:**
-   Let $\mathcal{C}(s)$ denote the canonicalization operator implemented in [`TopographicalEncoder.encode_canonical`](../src/topo_chess/encoding/topographical_encoder.py#L216-L241):
+   Let $\mathcal{C}(s)$ denote the canonicalization operator implemented in [`TopographicalEncoder.encode_canonical`](../../src/topo_chess/encoding/topographical_encoder.py#L216-L241):
    $$\mathcal{C}(s) = \begin{cases} s & \text{if } c_{\text{stm}}(s) = 0, \\ \mathcal{M}(s) & \text{if } c_{\text{stm}}(s) = 1. \end{cases}$$
    Because $\mathcal{M}$ is an involution ($\mathcal{M}(\mathcal{M}(s)) = s$) that flips $c_{\text{stm}} \mapsto 1 - c_{\text{stm}}$:
    * If $c_{\text{stm}}(s) = 0$, then $c_{\text{stm}}(\mathcal{M}(s)) = 1$, so $\mathcal{C}(\mathcal{M}(s)) = \mathcal{M}(\mathcal{M}(s)) = s = \mathcal{C}(s)$.
    * If $c_{\text{stm}}(s) = 1$, then $c_{\text{stm}}(\mathcal{M}(s)) = 0$, so $\mathcal{C}(\mathcal{M}(s)) = \mathcal{M}(s) = \mathcal{C}(s)$.
    Thus $\mathcal{C}(\mathcal{M}(s)) = \mathcal{C}(s)$ holds identically for all $s \in \mathcal{S}_{H \times W}$.
 2. **Well-Posedness of Local $\mathrm{SE}(2)$/Dihedral Reference Frames on Canonical Tokens:**
-   For each canonical square $i \in \{0, \dots, HW-1\}$ with normalized canonical coordinates $\vec{x}_i^0 = (x_i / (W-1), y_i / (H-1)) \in [0, 1]^2$, [`TopographicalIPAEncoder`](../src/topo_chess/models/ipa_encoder.py#L338-L339) predicts a local affine frame origin:
+   For each canonical square $i \in \{0, \dots, HW-1\}$ with normalized canonical coordinates $\vec{x}_i^0 = (x_i / (W-1), y_i / (H-1)) \in [0, 1]^2$, [`TopographicalIPAEncoder`](../../src/topo_chess/models/ipa_encoder.py#L338-L339) predicts a local affine frame origin:
    $$\vec{o}_i(s) = \vec{x}_i^0 + 0.1 \tanh(W_{\text{shift}} \Phi(\mathcal{C}(s))_i), \quad R_i = I_2 \text{ (aligned with } \hat{e}_{\text{fwd}} = +y_{\text{can}}\text{)}.$$
-   In each [`SparseLocalFrameIPA`](../src/topo_chess/models/ipa_encoder.py#L39-L185) layer, query and key points $\vec{q}_{i,h,p}, \vec{k}_{j,h,p} \in \mathbb{R}^2$ are transformed into global canonical coordinates via $T_i \circ \vec{q}_{i,h,p} = \vec{o}_i + \vec{q}_{i,h,p}$ in `torch.float32`, and the attention logit between squares $(i, j)$ is:
+   In each [`SparseLocalFrameIPA`](../../src/topo_chess/models/ipa_encoder.py#L39-L185) layer, query and key points $\vec{q}_{i,h,p}, \vec{k}_{j,h,p} \in \mathbb{R}^2$ are transformed into global canonical coordinates via $T_i \circ \vec{q}_{i,h,p} = \vec{o}_i + \vec{q}_{i,h,p}$ in `torch.float32`, and the attention logit between squares $(i, j)$ is:
    $$A_{i,j}^{(h)} = \frac{\langle \mathbf{q}_{i,h}, \mathbf{k}_{j,h} \rangle}{\sqrt{d_k}} - \frac{w_h}{2} \sum_{p=1}^{P} \|(\vec{o}_i + \vec{q}_{i,h,p}) - (\vec{o}_j + \vec{k}_{j,h,p})\|_2^2 + \phi_h(\mathbf{g}_{i,j}) + 0.05 \psi_h(\mathbf{r}_{\text{rule}}),$$
    masked to the sparse topological adjacency graph $\mathcal{E}_{\text{sparse}}$ (orthogonal rays, diagonal rays, knight jumps, and 1-hop King neighborhood).
 3. **Exact Equivariance of Physical Moves:**
@@ -83,7 +83,7 @@ $$f_\theta(\mathcal{M}(s))_e = f_\theta(s)_e.$$
 ### 3.1 Formal Statement
 Let $V = E \cup \{\texttt{[MASK]}\}$ be the augmented discrete action vocabulary of cardinality $|V| = |E| + 1$ ($456$ for $5 \times 5$; $1{,}859$ for $8 \times 8$), where index $m_{\text{id}} = |E|$ denotes the absorbing state $\texttt{[MASK]}$. For a horizon of $H_{\text{ply}} = 6$ plies, let $\mathbf{x}_0 = (e_0, \dots, e_5) \in E^6$ be a clean trajectory.
 
-At each discrete diffusion step $t \in \{1, \dots, T\}$, the forward Markov transition matrix $Q_t \in [0, 1]^{|V| \times |V|}$ implemented in [`AbsorbingMaskSchedule`](../src/topo_chess/diffusion/d3pm_planner.py#L55-L100) is defined by:
+At each discrete diffusion step $t \in \{1, \dots, T\}$, the forward Markov transition matrix $Q_t \in [0, 1]^{|V| \times |V|}$ implemented in [`AbsorbingMaskSchedule`](../../src/topo_chess/diffusion/d3pm_planner.py#L55-L100) is defined by:
 $$Q_t = (1 - \beta_t) I_{|V|} + \beta_t \mathbf{1}_{|V|} \vec{u}_{m_{\text{id}}}^\top, \quad \beta_t \in (0, 1),$$
 where $\vec{u}_{m_{\text{id}}}$ is the unit basis vector at index $m_{\text{id}}$.
 
@@ -91,7 +91,7 @@ where $\vec{u}_{m_{\text{id}}}$ is the unit basis vector at index $m_{\text{id}}
 1. *(Closed-Form Marginal & Stationary Convergence):* The $t$-step cumulative transition matrix $\bar{Q}_t = Q_1 Q_2 \cdots Q_t$ satisfies
    $$\bar{Q}_t = \bar{\alpha}_t I_{|V|} + (1 - \bar{\alpha}_t) \mathbf{1}_{|V|} \vec{u}_{m_{\text{id}}}^\top, \quad \text{where } \bar{\alpha}_t = \prod_{s=1}^{t} (1 - \beta_s).$$
    Every $Q_t$ and $\bar{Q}_t$ is strictly row-stochastic, $m_{\text{id}}$ is a recurrent absorbing state ($[Q_t]_{m_{\text{id}}, m_{\text{id}}} = 1$), and as $\bar{\alpha}_T \to 0$, $q(\mathbf{x}_T \mid \mathbf{x}_0) \to \delta_{(\texttt{[MASK]}, \dots, \texttt{[MASK]})}$ in total variation distance at rate $\mathcal{O}(\bar{\alpha}_T)$.
-2. *(Exact Support on the Legal Trajectory Manifold):* Let $\mathcal{T}_{\text{legal}}(s_0) = \{(e_0, \dots, e_5) \in E^6 : \forall k \in \{0..5\},\, e_k \in \mathcal{L}(s_k) \text{ where } s_{k+1} = \mathrm{Step}(s_k, e_k)\}$ be the set of strictly legal 6-ply trajectories from $s_0$ (with post-terminal plies padded by the terminal mating/stalemating edge $e_{\text{last}}$ when $\mathcal{L}(s_k) = \varnothing$). Under the Two-Tier Legality Projection (`ALT-002`) in [`D3PMHorizonPlanner.sample_trajectories_batch`](../src/topo_chess/diffusion/d3pm_planner.py#L268-L403), the reverse sampling distribution $p_\theta^{\text{proj}}(\hat{\mathbf{x}}_0 \mid s_0)$ satisfies:
+2. *(Exact Support on the Legal Trajectory Manifold):* Let $\mathcal{T}_{\text{legal}}(s_0) = \{(e_0, \dots, e_5) \in E^6 : \forall k \in \{0..5\},\, e_k \in \mathcal{L}(s_k) \text{ where } s_{k+1} = \mathrm{Step}(s_k, e_k)\}$ be the set of strictly legal 6-ply trajectories from $s_0$ (with post-terminal plies padded by the terminal mating/stalemating edge $e_{\text{last}}$ when $\mathcal{L}(s_k) = \varnothing$). Under the Two-Tier Legality Projection (`ALT-002`) in [`D3PMHorizonPlanner.sample_trajectories_batch`](../../src/topo_chess/diffusion/d3pm_planner.py#L268-L403), the reverse sampling distribution $p_\theta^{\text{proj}}(\hat{\mathbf{x}}_0 \mid s_0)$ satisfies:
    $$\mathrm{supp}\big(p_\theta^{\text{proj}}(\cdot \mid s_0)\big) \subseteq \mathcal{T}_{\text{legal}}(s_0), \quad \text{and thus} \quad \mathbb{P}\big(\hat{\mathbf{x}}_0 \in \mathcal{T}_{\text{legal}}(s_0)\big) = 1.0000.$$
 
 ### 3.2 Proof
@@ -100,7 +100,7 @@ where $\vec{u}_{m_{\text{id}}}$ is the unit basis vector at index $m_{\text{id}}
    $$\bar{Q}_t = \big(\bar{\alpha}_{t-1} I + (1 - \bar{\alpha}_{t-1}) \mathbf{1}\vec{u}_{m_{\text{id}}}^\top\big)\big((1 - \beta_t)I + \beta_t \mathbf{1}\vec{u}_{m_{\text{id}}}^\top\big) = \bar{\alpha}_{t-1}(1 - \beta_t) I + \big(1 - \bar{\alpha}_{t-1}(1 - \beta_t)\big)\mathbf{1}\vec{u}_{m_{\text{id}}}^\top.$$
    Setting $\bar{\alpha}_t = \bar{\alpha}_{t-1}(1 - \beta_t)$ completes the induction. For each token $k \in \{0..5\}$, the total variation distance between $q(x_{T,k} \mid x_{0,k})$ and $\delta_{m_{\text{id}}}$ is $\bar{\alpha}_T$.
 2. **Two-Tier Legality Projection Support:**
-   * **Tier 1 (Steps $t > 1$):** [`predict_x0_logits`](../src/topo_chess/diffusion/d3pm_planner.py#L226-L227) sets $\ell_{b, k, m_{\text{id}}} = -10^9$, restricting intermediate token predictions strictly to $E$.
+   * **Tier 1 (Steps $t > 1$):** [`predict_x0_logits`](../../src/topo_chess/diffusion/d3pm_planner.py#L226-L227) sets $\ell_{b, k, m_{\text{id}}} = -10^9$, restricting intermediate token predictions strictly to $E$.
    * **Tier 2 (Final Projection Step $t = 0$):** Given initial board state $s_0$ with $\mathcal{L}(s_0) \ne \varnothing$, for $k = 0, \dots, 5$:
      * If $\mathcal{L}(s_k) \ne \varnothing$, logits for all $e \notin \mathcal{L}(s_k)$ are masked to $-\infty$, and $\hat{e}_k = \arg\max_{e \in \mathcal{L}(s_k)} \ell_{b, k, e} \in \mathcal{L}(s_k)$ is selected, advancing $s_{k+1} = \mathrm{Step}(s_k, \hat{e}_k)$.
      * If $\mathcal{L}(s_k) = \varnothing$ (game already terminated in checkmate or stalemate at ply $k' \le k$), $\hat{e}_k = \hat{e}_{k'-1}$ pads the sequence to fixed length $6$.

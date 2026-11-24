@@ -126,6 +126,19 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "TargetPrepStage": ("topo_brick.kernel.open_catalog_stages", "TargetPrepStage"),
     "ChromaticAllocationStage": ("topo_brick.kernel.open_catalog_stages", "ChromaticAllocationStage"),
     "TraceCertifyStage": ("topo_brick.kernel.open_catalog_stages", "TraceCertifyStage"),
+    "RealizeRequestSpec": ("topo_brick.kernel.realize_policy", "RealizeRequestSpec"),
+    "ResolvedRealizePolicy": ("topo_brick.kernel.realize_policy", "ResolvedRealizePolicy"),
+    "resolve_realize_policy": ("topo_brick.kernel.realize_policy", "resolve_realize_policy"),
+    "RealizeRouteProvenance": ("topo_brick.kernel.kernel_contracts", "RealizeRouteProvenance"),
+    "SingleCoreAuditReport": ("topo_brick.kernel.kernel_contracts", "SingleCoreAuditReport"),
+    "enforce_and_audit_single_core": ("topo_brick.kernel.kernel_contracts", "enforce_and_audit_single_core"),
+    "CatalogFunnelAndShortlistReport": ("topo_brick.kernel.design_diagnostics", "CatalogFunnelAndShortlistReport"),
+    "RegionalAppearanceReport": ("topo_brick.kernel.design_diagnostics", "RegionalAppearanceReport"),
+    "BilateralSymmetryReport": ("topo_brick.kernel.design_diagnostics", "BilateralSymmetryReport"),
+    "KNOWN_HANDED_COUNTERPART_PAIRS": ("topo_brick.kernel.design_diagnostics", "KNOWN_HANDED_COUNTERPART_PAIRS"),
+    "build_catalog_funnel_and_shortlist_report": ("topo_brick.kernel.design_diagnostics", "build_catalog_funnel_and_shortlist_report"),
+    "evaluate_regional_appearance_diagnostics": ("topo_brick.kernel.design_diagnostics", "evaluate_regional_appearance_diagnostics"),
+    "evaluate_bilateral_construction_symmetry": ("topo_brick.kernel.design_diagnostics", "evaluate_bilateral_construction_symmetry"),
 }
 
 __all__: List[str] = [
@@ -249,6 +262,19 @@ __all__: List[str] = [
     "TargetPrepStage",
     "ChromaticAllocationStage",
     "TraceCertifyStage",
+    "RealizeRequestSpec",
+    "ResolvedRealizePolicy",
+    "resolve_realize_policy",
+    "RealizeRouteProvenance",
+    "SingleCoreAuditReport",
+    "enforce_and_audit_single_core",
+    "CatalogFunnelAndShortlistReport",
+    "RegionalAppearanceReport",
+    "BilateralSymmetryReport",
+    "KNOWN_HANDED_COUNTERPART_PAIRS",
+    "build_catalog_funnel_and_shortlist_report",
+    "evaluate_regional_appearance_diagnostics",
+    "evaluate_bilateral_construction_symmetry",
 ]
 
 

@@ -36,12 +36,14 @@ jobs:
           pip install --no-deps --no-build-isolation -e .
           python -m pip freeze --all
 
-      - name: Run complete topo_chess + topo_brick 124-test verification suite
+      - name: Run complete topo_chess + topo_brick 140-test verification suite
         env:
           STOCKFISH_PATH: /usr/games/stockfish
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
         run: |
-          python -O -m pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py
+          python -O -m pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py tests/test_topo_brick/test_p15_architecture_and_policy_audit.py tests/test_topo_brick/test_p16_v2_assessment_remediation_audit.py tests/test_topo_brick/test_p16_1_closure_audit.py
           pytest -v tests/

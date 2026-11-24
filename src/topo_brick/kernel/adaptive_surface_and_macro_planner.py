@@ -283,6 +283,7 @@ def evaluate_exterior_crust_fidelity(
     first_arg: Any,
     second_arg: Any,
     crust_depth_ldu: int = 20,
+    origin_ldu: Tuple[int, int, int] = (0, 0, 0),
 ) -> Tuple[float, float]:
     """
     Evaluate `exterior_crust_iou_5x5x6` on the outer `crust_depth_ldu` (`default 20 LDU = 1 stud`)
@@ -318,26 +319,34 @@ def evaluate_exterior_crust_fidelity(
 
     crust_target = sol & (~deep_void)
 
+    ox, oy, oz = int(origin_ldu[0]), int(origin_ldu[1]), int(origin_ldu[2])
     built = np.zeros((gx, gy, gz), dtype=bool)
+    outside_vox = 0
     for pl in assembly.placed_parts.values():
         for b in pl.world_boxes:
-            x0 = max(0, int(math.floor(b.xmin / 5.0)))
-            x1 = min(gx, int(math.ceil(b.xmax / 5.0)))
-            y0 = max(0, int(math.floor(b.ymin / 5.0)))
-            y1 = min(gy, int(math.ceil(b.ymax / 5.0)))
-            z0 = max(0, int(math.floor(b.zmin / 6.0)))
-            z1 = min(gz, int(math.ceil(b.zmax / 6.0)))
+            rx0 = int(math.floor((b.xmin - ox) / 5.0))
+            rx1 = int(math.ceil((b.xmax - ox) / 5.0))
+            ry0 = int(math.floor((b.ymin - oy) / 5.0))
+            ry1 = int(math.ceil((b.ymax - oy) / 5.0))
+            rz0 = int(math.floor((b.zmin - oz) / 6.0))
+            rz1 = int(math.ceil((b.zmax - oz) / 6.0))
+            tot_b = max(0, rx1 - rx0) * max(0, ry1 - ry0) * max(0, rz1 - rz0)
+            x0, x1 = max(0, rx0), min(gx, rx1)
+            y0, y1 = max(0, ry0), min(gy, ry1)
+            z0, z1 = max(0, rz0), min(gz, rz1)
+            in_b = max(0, x1 - x0) * max(0, y1 - y0) * max(0, z1 - z0)
+            outside_vox += max(0, tot_b - in_b)
             if x1 > x0 and y1 > y0 and z1 > z0:
                 built[x0:x1, y0:y1, z0:z1] = True
 
     # Evaluate IoU strictly on `~deep_void` (i.e. outer crust + ALL exterior air outside `sol`!)
     eval_mask = ~deep_void
     inter = int(np.count_nonzero(crust_target & built & eval_mask))
-    union = int(np.count_nonzero((crust_target | built) & eval_mask))
+    union = int(np.count_nonzero((crust_target | built) & eval_mask)) + outside_vox
     crust_iou = float(inter) / float(max(1, union))
 
     sol_vox = int(np.count_nonzero(sol))
-    blt_vox = int(np.count_nonzero(built))
+    blt_vox = int(np.count_nonzero(built)) + outside_vox
     vol_savings = float(max(0.0, 1.0 - (float(blt_vox) / float(max(1, sol_vox)))))
     return round(crust_iou, 6), round(vol_savings, 6)
 
@@ -358,6 +367,98 @@ class AdaptiveSurfaceTarget:
     rasterize_ms: float
     solid_occ_5x5x6: Optional[np.ndarray] = None  # Pre-hollowed solid reference mask when HollowShellPolicy active
     hollow_shell_policy: Optional[HollowShellPolicy] = None
+    origin_ldu: Tuple[int, int, int] = (0, 0, 0)  # World LDU origin `(ox, oy, oz)` of local sub-voxel `(0, 0, 0)`
+
+    @classmethod
+    def from_target_boxes(
+        cls,
+        boxes: Sequence[LDUBox],
+        *,
+        ground_plane_z_ldu: float = 0.0,
+        hollow_shell_policy: Optional[HollowShellPolicy] = None,
+        forbidden_support_boxes: Sequence[LDUBox] = (),
+    ) -> "AdaptiveSurfaceTarget":
+        """
+        Synthesize a world-frame-preserving `AdaptiveSurfaceTarget` from `LDUBox` cuboids without
+        clipping negative world coordinates or bloating empty positive prefixes (`Phase 16 Decision 1`).
+        """
+        from topo_brick.kernel.workbench_frame import (
+            shift_boxes_ldu,
+            validate_workbench_origin_and_datum,
+        )
+
+        t0 = time.perf_counter()
+        raw_boxes = getattr(boxes, "boxes", boxes)
+        valid_boxes = [
+            b for b in raw_boxes if b.xmax > b.xmin and b.ymax > b.ymin and b.zmax > b.zmin
+        ]
+        gz_int = int(round(float(ground_plane_z_ldu)))
+        if not valid_boxes:
+            validate_workbench_origin_and_datum((0, 0, gz_int), ground_plane_z_ldu)
+            return cls(
+                nx_studs=1,
+                ny_studs=1,
+                nz_courses=1,
+                occ_5x5x2=np.zeros((4, 4, 12), dtype=bool),
+                occ_5x5x6=np.zeros((4, 4, 4), dtype=bool),
+                mesh_surf_pts=np.zeros((0, 3), dtype=np.float64),
+                rasterize_ms=(time.perf_counter() - t0) * 1000.0,
+                origin_ldu=(0, 0, gz_int),
+            )
+
+        xmin = min(b.xmin for b in valid_boxes)
+        ymin = min(b.ymin for b in valid_boxes)
+        zmin = min(b.zmin for b in valid_boxes)
+        xmax = max(b.xmax for b in valid_boxes)
+        ymax = max(b.ymax for b in valid_boxes)
+        zmax = max(b.zmax for b in valid_boxes)
+
+        ox = int(math.floor(float(xmin) / 20.0)) * 20
+        oy = int(math.floor(float(ymin) / 20.0)) * 20
+        oz = gz_int
+        origin = validate_workbench_origin_and_datum(
+            (ox, oy, oz), ground_plane_z_ldu, target_zmin_ldu=int(zmin)
+        )
+
+        nx_b = max(2, int(math.ceil(float(xmax - ox) / 20.0)))
+        ny_b = max(2, int(math.ceil(float(ymax - oy) / 20.0)))
+        nz_b = max(2, int(math.ceil(float(zmax - oz) / 24.0)))
+        o2 = np.zeros((4 * nx_b, 4 * ny_b, 12 * nz_b), dtype=bool)
+        o6 = np.zeros((4 * nx_b, 4 * ny_b, 4 * nz_b), dtype=bool)
+        for tb in valid_boxes:
+            x0_s = max(0, (tb.xmin - ox) // 5)
+            x1_s = min(4 * nx_b, (tb.xmax - ox + 4) // 5)
+            y0_s = max(0, (tb.ymin - oy) // 5)
+            y1_s = min(4 * ny_b, (tb.ymax - oy + 4) // 5)
+            z2_0 = max(0, (tb.zmin - oz) // 2)
+            z2_1 = min(12 * nz_b, (tb.zmax - oz + 1) // 2)
+            z6_0 = max(0, (tb.zmin - oz) // 6)
+            z6_1 = min(4 * nz_b, (tb.zmax - oz + 5) // 6)
+            if x1_s > x0_s and y1_s > y0_s:
+                if z2_1 > z2_0:
+                    o2[x0_s:x1_s, y0_s:y1_s, z2_0:z2_1] = True
+                if z6_1 > z6_0:
+                    o6[x0_s:x1_s, y0_s:y1_s, z6_0:z6_1] = True
+
+        solid_ref: Optional[np.ndarray] = None
+        if hollow_shell_policy is not None and hollow_shell_policy.enabled:
+            solid_ref = o6.copy()
+            loc_forb = shift_boxes_ldu(forbidden_support_boxes, (-ox, -oy, -oz))
+            o2, o6 = apply_hollow_shell_policy(
+                o2, o6, hollow_shell_policy, forbidden_support_boxes=loc_forb
+            )
+        return cls(
+            nx_studs=nx_b,
+            ny_studs=ny_b,
+            nz_courses=nz_b,
+            occ_5x5x2=o2,
+            occ_5x5x6=o6,
+            mesh_surf_pts=np.zeros((0, 3), dtype=np.float64),
+            rasterize_ms=(time.perf_counter() - t0) * 1000.0,
+            solid_occ_5x5x6=solid_ref,
+            hollow_shell_policy=hollow_shell_policy,
+            origin_ldu=origin,
+        )
 
     @classmethod
     def from_triangle_mesh(
@@ -368,11 +469,22 @@ class AdaptiveSurfaceTarget:
         max_z_courses: int = 8,
         hollow_shell_policy: Optional[HollowShellPolicy] = None,
         forbidden_support_boxes: Sequence[LDUBox] = (),
+        *,
+        preserve_world_origin: bool = False,
+        ground_plane_z_ldu: float = 0.0,
     ) -> "AdaptiveSurfaceTarget":
         """
         Rasterize continuous triangle mesh `(verts, faces)` onto aligned `5x5x2 LDU` (`192`
         sub-voxels per `1x1` brick) and `5x5x6 LDU` (`64` sub-voxels per `1x1` brick) grids.
+
+        When `preserve_world_origin=True`, `verts` are treated directly as world LDU coordinates
+        without aspect-rescaling, preserving `origin_ldu = (ox, oy, oz)` (`oz = round(ground_plane_z_ldu)`).
         """
+        from topo_brick.kernel.workbench_frame import (
+            shift_boxes_ldu,
+            validate_workbench_origin_and_datum,
+        )
+
         t0 = time.perf_counter()
         v = np.asarray(verts, dtype=np.float64)
         f = np.asarray(faces, dtype=np.int32)
@@ -389,9 +501,21 @@ class AdaptiveSurfaceTarget:
 
         vmin = np.min(v, axis=0)
         vmax = np.max(v, axis=0)
-        spans = np.maximum(vmax - vmin, 1e-6)
-        scale = min((max_xy_studs * 20.0) / max(spans[0], spans[1]), (max_z_courses * 24.0) / spans[2])
-        v_ldu = (v - vmin) * scale
+        if preserve_world_origin:
+            ox = int(math.floor(float(vmin[0]) / 20.0)) * 20
+            oy = int(math.floor(float(vmin[1]) / 20.0)) * 20
+            oz = int(round(float(ground_plane_z_ldu)))
+            origin = validate_workbench_origin_and_datum(
+                (ox, oy, oz),
+                ground_plane_z_ldu,
+                target_zmin_ldu=int(math.floor(float(vmin[2]))),
+            )
+            v_ldu = v - np.array([[float(ox), float(oy), float(oz)]], dtype=np.float64)
+        else:
+            origin = (0, 0, 0)
+            spans = np.maximum(vmax - vmin, 1e-6)
+            scale = min((max_xy_studs * 20.0) / max(spans[0], spans[1]), (max_z_courses * 24.0) / spans[2])
+            v_ldu = (v - vmin) * scale
 
         nx_s = max(2, int(math.ceil(float(np.max(v_ldu[:, 0])) / 20.0)))
         ny_s = max(2, int(math.ceil(float(np.max(v_ldu[:, 1])) / 20.0)))
@@ -505,11 +629,18 @@ class AdaptiveSurfaceTarget:
 
         if pts_surf.shape[0] > 600:
             pts_surf = pts_surf[:: max(1, pts_surf.shape[0] // 600)]
+        if origin != (0, 0, 0) and pts_surf.shape[0] > 0:
+            pts_surf = pts_surf + np.array(
+                [[float(origin[0]), float(origin[1]), float(origin[2])]], dtype=np.float64
+            )
         solid_ref: Optional[np.ndarray] = None
         if hollow_shell_policy is not None and hollow_shell_policy.enabled:
             solid_ref = occ6.copy()
+            loc_forb = shift_boxes_ldu(
+                forbidden_support_boxes, (-origin[0], -origin[1], -origin[2])
+            )
             occ2, occ6 = apply_hollow_shell_policy(
-                occ2, occ6, hollow_shell_policy, forbidden_support_boxes=forbidden_support_boxes
+                occ2, occ6, hollow_shell_policy, forbidden_support_boxes=loc_forb
             )
         elapsed = (time.perf_counter() - t0) * 1000.0
         return cls(
@@ -522,13 +653,15 @@ class AdaptiveSurfaceTarget:
             rasterize_ms=elapsed,
             solid_occ_5x5x6=solid_ref,
             hollow_shell_policy=hollow_shell_policy,
+            origin_ldu=origin,
         )
 
     def to_fine_target_field(self) -> SparseTiledTargetField:
         """
         Convert `occ_5x5x2` (`8 LDU` plate & `10 LDU` half-stud resolution) into an exact
-        `50%`-majority (`16 / 32` sub-voxel) `SparseTiledTargetField` for geometry fidelity accounting.
+        `50%`-majority (`16 / 32` sub-voxel) `SparseTiledTargetField` in world LDU coordinates.
         """
+        ox, oy, oz = int(self.origin_ldu[0]), int(self.origin_ldu[1]), int(self.origin_ldu[2])
         boxes: List[LDUBox] = []
         for thresh in (16, 8, 1):
             for ix in range(self.nx_studs):
@@ -539,16 +672,16 @@ class AdaptiveSurfaceTarget:
                         ]
                         left_cnt = int(np.count_nonzero(sub[:2, :, :]))
                         right_cnt = int(np.count_nonzero(sub[2:, :, :]))
-                        z0 = iz_p * 8
+                        z0 = oz + iz_p * 8
                         z1 = z0 + 8
-                        y0 = iy * 20
+                        y0 = oy + iy * 20
                         y1 = y0 + 20
                         if left_cnt >= thresh and right_cnt >= thresh:
-                            boxes.append(LDUBox(ix * 20, y0, z0, (ix + 1) * 20, y1, z1))
+                            boxes.append(LDUBox(ox + ix * 20, y0, z0, ox + (ix + 1) * 20, y1, z1))
                         elif left_cnt >= thresh:
-                            boxes.append(LDUBox(ix * 20, y0, z0, ix * 20 + 10, y1, z1))
+                            boxes.append(LDUBox(ox + ix * 20, y0, z0, ox + ix * 20 + 10, y1, z1))
                         elif right_cnt >= thresh:
-                            boxes.append(LDUBox(ix * 20 + 10, y0, z0, (ix + 1) * 20, y1, z1))
+                            boxes.append(LDUBox(ox + ix * 20 + 10, y0, z0, ox + (ix + 1) * 20, y1, z1))
             if boxes:
                 break
         return SparseTiledTargetField(boxes=tuple(boxes))
@@ -560,23 +693,34 @@ def evaluate_exact_5x5x2_mesh_iou(
 ) -> float:
     """
     Evaluate `assembly` against `adaptive_target.occ_5x5x2` at exact `5x5x2 LDU` sub-voxel
-    resolution (`2 LDU` Z step divides `8 LDU` plates, `12 LDU` slope aprons, `16 LDU` cheese
-    ridges, and `24 LDU` bricks with zero rounding error!).
+    resolution in world coordinates (`origin_ldu`-aware and penalizing out-of-bounds spill).
     """
+    ox, oy, oz = (
+        int(adaptive_target.origin_ldu[0]),
+        int(adaptive_target.origin_ldu[1]),
+        int(adaptive_target.origin_ldu[2]),
+    )
     gx, gy, gz2 = adaptive_target.occ_5x5x2.shape
     asm_occ = np.zeros((gx, gy, gz2), dtype=bool)
+    outside_subvox = 0
     for p in assembly.placed_parts.values():
         for b in p.world_boxes:
-            x0 = max(0, b.xmin // 5)
-            x1 = min(gx, (b.xmax + 4) // 5)
-            y0 = max(0, b.ymin // 5)
-            y1 = min(gy, (b.ymax + 4) // 5)
-            z0 = max(0, b.zmin // 2)
-            z1 = min(gz2, (b.zmax + 1) // 2)
+            rx0 = (b.xmin - ox) // 5
+            rx1 = (b.xmax - ox + 4) // 5
+            ry0 = (b.ymin - oy) // 5
+            ry1 = (b.ymax - oy + 4) // 5
+            rz0 = (b.zmin - oz) // 2
+            rz1 = (b.zmax - oz + 1) // 2
+            tot_b = max(0, rx1 - rx0) * max(0, ry1 - ry0) * max(0, rz1 - rz0)
+            x0, x1 = max(0, rx0), min(gx, rx1)
+            y0, y1 = max(0, ry0), min(gy, ry1)
+            z0, z1 = max(0, rz0), min(gz2, rz1)
+            in_b = max(0, x1 - x0) * max(0, y1 - y0) * max(0, z1 - z0)
+            outside_subvox += max(0, tot_b - in_b)
             if x1 > x0 and y1 > y0 and z1 > z0:
                 asm_occ[x0:x1, y0:y1, z0:z1] = True
     inter = int(np.count_nonzero(asm_occ & adaptive_target.occ_5x5x2))
-    union = int(np.count_nonzero(asm_occ | adaptive_target.occ_5x5x2))
+    union = int(np.count_nonzero(asm_occ | adaptive_target.occ_5x5x2)) + outside_subvox
     return float(inter / max(union, 1))
 
 
@@ -793,6 +937,8 @@ def realize_adaptive_plate_slope_surface(
     support_policy: str = "none",
     foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
     forbidden_support_boxes: Tuple[LDUBox, ...] = (),
+    deadline_monotonic_s: Optional[float] = None,
+    ground_plane_z_ldu: float = 0.0,
 ) -> Tuple[AssemblyState, int]:
     """
     `P9-WS2A`: Adaptive Brick (`24 LDU`) + Plate (`8 LDU`) + Slope (`54200`, `85984`, `3040b`,
@@ -808,6 +954,37 @@ def realize_adaptive_plate_slope_surface(
        insertion corridor, and 6-DoF prefix stability.
     """
     from topo_brick.kernel.construction_kernel import check_monotone_insertion_corridor
+
+    if adaptive_target.origin_ldu != (0, 0, 0) or abs(float(ground_plane_z_ldu)) > 1e-6:
+        from topo_brick.kernel.workbench_frame import WorkbenchFrameTransform
+
+        wb_in = WorkbenchFrameTransform.to_local_workbench(
+            coarse_target_field=coarse_target_field,
+            adaptive_target=adaptive_target,
+            world_ground_plane_z_ldu=ground_plane_z_ldu,
+            forbidden_support_boxes=forbidden_support_boxes,
+        )
+        if wb_in.origin_ldu != (0, 0, 0):
+            loc_st, loc_cands = realize_adaptive_plate_slope_surface(
+                kernel=kernel,
+                coarse_target_field=wb_in.local_coarse_target_field,
+                adaptive_target=wb_in.local_adaptive_target,
+                allowed_part_ids=allowed_part_ids,
+                inventory_counts=inventory_counts,
+                support_policy=support_policy,
+                foundation_policy=foundation_policy,
+                forbidden_support_boxes=wb_in.local_forbidden_support_boxes,
+                deadline_monotonic_s=deadline_monotonic_s,
+                ground_plane_z_ldu=wb_in.local_ground_plane_z_ldu,
+            )
+            world_st, _, _ = WorkbenchFrameTransform.to_world_frame(
+                local_state=loc_st,
+                local_fine_target_field=None,
+                local_diagnostics=None,
+                origin_ldu=wb_in.origin_ldu,
+                world_ground_plane_z_ldu=ground_plane_z_ldu,
+            )
+            return world_st, loc_cands
 
     nx, ny, nz = adaptive_target.nx_studs, adaptive_target.ny_studs, adaptive_target.nz_courses
     occ6 = adaptive_target.occ_5x5x6  # (4*nx, 4*ny, 4*nz), each cell has 64 sub-voxels per course
@@ -1168,6 +1345,8 @@ def realize_adaptive_plate_slope_surface(
             forbidden_support_boxes=forbidden_support_boxes,
             surface_refinement="none",
             macro_block_mode="auto",
+            deadline_monotonic_s=deadline_monotonic_s,
+            ground_plane_z_ldu=ground_plane_z_ldu,
         )
         state = core_res.assembly
         # Deduct core usage from `rem_inv` if inventory-bounded
@@ -1213,7 +1392,12 @@ def realize_adaptive_plate_slope_surface(
                 if can_ext and max(base_lp_eta, peak_d) <= 1.0 - 1e-5:
                     is_ok = True
             if not is_ok:
-                eq_s = kernel.validator.evaluate(state, foundation_policy=foundation_policy)  # type: ignore[attr-defined]
+                eq_s = kernel.validator.evaluate(  # type: ignore[attr-defined]
+                    state,
+                    foundation_policy=foundation_policy,
+                    ground_plane_z_ldu=ground_plane_z_ldu,
+                    deadline_monotonic_s=deadline_monotonic_s,
+                )
                 if not eq_s.is_stable:
                     state.pop_trial_part(tok)
                     return False
@@ -1241,6 +1425,8 @@ def realize_adaptive_plate_slope_surface(
         rem_inv = dict(inventory_counts)
 
     for c in range(nz):
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            break
         z_c = c * 24
         # 2a. Place core bricks in course `c` (`zmin` in `[z_c, z_c + 24)`)
         c_cores = [sp for sp in existing_core_specs if z_c <= sp[0] < z_c + 24]
@@ -1254,7 +1440,12 @@ def realize_adaptive_plate_slope_surface(
                         state, iid_c, plumb_deltas, base_witness=base_witness
                     )
                     if not (can_ext_c and max(base_lp_eta, peak_dc) <= 1.0 - 1e-5):
-                        eq_c = kernel.validator.evaluate(state, foundation_policy=foundation_policy)  # type: ignore[attr-defined]
+                        eq_c = kernel.validator.evaluate(  # type: ignore[attr-defined]
+                            state,
+                            foundation_policy=foundation_policy,
+                            ground_plane_z_ldu=ground_plane_z_ldu,
+                            deadline_monotonic_s=deadline_monotonic_s,
+                        )
                         base_witness = eq_c.primal_witness
                         base_lp_eta = float(eq_c.peak_utilization) if eq_c.is_stable else float("inf")
                         plumb_deltas.clear()

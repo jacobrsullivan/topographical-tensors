@@ -4,7 +4,7 @@
 [![Data License: CC BY 4.0 / CC BY-SA 4.0](https://img.shields.io/badge/Catalog_Data-CC_BY_4.0_%2F_CC_BY--SA_4.0-teal.svg)](DATA_LICENSE.md)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-Official PyTorch and optimization companion repository for **`topographical-tensors`** (`v5.2.1`), uniting two geometric discrete-planning domains under explicit local-frame invariants, sparse interaction graphs, discrete diffusion, and exact physical/algebraic certification:
+Official PyTorch and optimization companion repository for **`topographical-tensors`** (`v5.4.1`), uniting two geometric discrete-planning domains under explicit local-frame invariants, sparse interaction graphs, discrete diffusion, and exact physical/algebraic certification:
 
 1. **`topo_chess` (`src/topo_chess/`):** *Geometric Move-Potential Representations, $\mathbb{Z}_2$-Canonical Local-Frame Invariant Point Attention, and Single-Root Action-Only Discrete Diffusion (`D3PM`) for Searchless Chess* (`v5.0.0`).
 2. **`topo_brick` (`src/topo_brick/`):** *Certified 3D Digital Brick Assembly via Exact Lattice/SE(3) Port Manifolds, Open-Catalog Sculptural Retrieval (`16,085` Parts), Finite Colored Inventories, Ribbed Hollow Shells, Compositional `.mpd` Subassemblies, and Contact-Wrench Equilibrium Certification* (`Gates 1–9D`).
@@ -15,7 +15,7 @@ Official PyTorch and optimization companion repository for **`topographical-tens
 
 ### Domain I — `topo_brick`: Certified 3D Digital Brick Assembly (`src/topo_brick/`)
 
-`topo_brick` separates deterministic geometric and mechanical invariants from learned spatial/combinatorial search via a four-operation **`TopoBrickKernel`** (`realize()`, `repair()`, `constrain()`, `certify()`):
+`topo_brick` separates deterministic geometric and mechanical invariants from learned spatial/combinatorial search via a four-operation **`TopoBrickKernel`** (`realize()`, `repair()`, `constrain()`, `certify()`), exposed to downstream consumers through a curated, lightweight `torch`-free **`topo_brick.api`** surface (`49` `SUPPORTED_CONSUMER_EXPORTS`, `RealizeRequestSpec`, `RealizeRouteProvenance`, `build_relying_party_obligations`, `verify_exported_mpd_roundtrip`, and `compare_realize_routes_on_target`):
 
 * **Compiled `16,085`-Part Open Catalog, Calibrated `.dat` `SE(3)` Frames & `6` Connector Families:** Combines `213` curated `TIER_A` parts (all `213 / 213` calibrated with exact per-part official LDraw `.dat` `(R_0_ld, t_0_ld)` export/import frames; `0` frame errors across all `16,085` catalog IDs audited in [`docs/ldraw-dat-frame-audit-v5.2.1.json`](docs/ldraw-dat-frame-audit-v5.2.1.json) via `scripts/audit_ldraw_dat_frames.py`) with `16,072` compiled LDraw `2610` + LDCad Shadow parts (`99.52%` instance coverage and `99.99%` compatible port extraction across `26` human OMR `.mpd` sets; `0 / 16,072` compiled parts with dropped solid voxels via flush `(5, 5, 2) LDU` System grids), bore-carved compound `LDUBox` colliders (`0.0 LDU` wall-overlap tolerance), `6,831` `CoACD` convex polytope decompositions (`320` unique non-convex shells), and `6` connector families (`STUD_TUBE`, `TECHNIC_PIN_HOLE`, `TECHNIC_AXLE_HOLE`, `BAR_CLIP`, `BALL_SOCKET`, `HINGE_DETENT`). Supports strict `license_filter="cc_by_4_0_only"` (`0` `CC-BY-SA-4.0` parts emitted) for commercial-safe workflows.
 * **Online Sculptural Mold Retrieval & Sub-Second Megastructures (`Gates 2, 7A, 7B, 8A, 8B`):**
@@ -51,7 +51,7 @@ topographical-tensors/
 ├── Dockerfile                                          # Digest-pinned, non-root clean-room reproduction container
 ├── .github/workflows/
 │   ├── ci.yml                                          # SHA-pinned PR/push CI (ruff + wheel + security & gate suites)
-│   └── full-repro.yml                                  # Full 124-test Gate 1–9D, Phase 12–14 reproduction workflow
+│   └── full-repro.yml                                  # Full 140-test Gate 1–9D, Phase 12–16.1 reproduction workflow
 ├── src/
 │   ├── topo_brick/                                     # Certified 3D Digital Brick Assembly domain package
 │   │   ├── interface/                                  # LDU/SE(3) frames, 16,085-part catalog, 322-color LDConfig, bins & 29-D retrieval
@@ -67,7 +67,10 @@ topographical-tensors/
 │       ├── diffusion/                                  # Absorbing-state D3PM 6-ply horizon planner
 │       ├── data/                                       # Zobrist-deduplicated Lichess & Stockfish PV pipelines
 │       └── evaluation/                                 # 10k Lichess puzzles, 400-ply UCI gauntlets & joint-cov BayesElo
-├── docs/                                               # Technical architecture specs, proofs, and verification ledgers
+├── docs/                                               # Architecture specs, verification ledgers, assessments/, plans/, research/
+│   ├── assessments/                                    # Capability & benchmark audits
+│   ├── plans/                                          # Overall project roadmap & gate scorecards
+│   └── research/                                       # Literature reviews, mathematical proofs, datasheets & synopses
 ├── paper/                                              # Searchless Chess manuscript (Markdown & LaTeX)
 ├── configs/                                            # YAML configurations for topo_chess factorial studies
 ├── evaluations/ & logs/                                # Exported tables and JSON audit ledgers
@@ -92,6 +95,7 @@ cd topographical-tensors
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
+# Full dev + neural + chess suite (use `pip install -e .` for lightweight torch-free topo_brick core)
 pip install -e ".[dev]"
 
 # Verify hardware backend, HiGHS/Transformers, compiled 16,085-part brick catalog, and Stockfish
@@ -100,14 +104,14 @@ python scripts/check_env.py
 # Run the <1s topo_brick sculpted mesh realization + independent certificate replay smoke test
 python scripts/run_topo_brick_quickstart.py
 
-# Run fast unit, contract, security hardening, and upstream TB-FIX kernel verification tests
-pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_revised_construction_kernel.py tests/test_topo_brick/test_p12_contract_and_falsification_audit.py
+# Run fast unit, contract, security hardening, and upstream TB-FIX / Phase 15–16.1 audit tests
+pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py tests/test_topo_brick/test_p15_architecture_and_policy_audit.py tests/test_topo_brick/test_p16_v2_assessment_remediation_audit.py tests/test_topo_brick/test_p16_1_closure_audit.py tests/test_topo_brick/test_wp_l1_interface.py tests/test_topo_brick/test_revised_construction_kernel.py tests/test_topo_brick/test_p12_contract_and_falsification_audit.py
 
-# Run the complete 124-test topo_brick Gate 1–9D + Phase 12/13/14 suite and topo_chess suite
+# Run the complete 140-test topo_brick Gate 1–9D + Phase 12–16.1 suite and topo_chess suite
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 pytest -v tests/
 ```
 
-*(Optional offline catalog re-compilation from raw LDraw `2610` + LDCad Shadow sources uses `pip install -e ".[compiler]"` for `coacd` and `pyarrow`.)*
+*(Optional extras: `pip install -e .` installs the lightweight `numpy`/`scipy`/`highspy` `topo_brick` core without `torch`; `pip install -e ".[neural]"` adds `torch` + `transformers`; `pip install -e ".[chess]"` adds `torch` + `chess`; `pip install -e ".[compiler]"` adds `coacd` + `pyarrow`.)*
 
 ---
 
@@ -186,20 +190,20 @@ logits = model(torch.from_numpy(tensor_44).unsqueeze(0)).q_logits  # (1, 1858)
 ## 5. Documentation Index
 
 ### `topo_brick` Architecture, Data & Verification (`Gates 1–9D`)
-* **Overall Project Plan & Gate Scorecard (`Gates 1–9D`):** [`docs/lego-project-overall-plan.md`](docs/lego-project-overall-plan.md)
+* **Overall Project Plan & Gate Scorecard (`Gates 1–9D`):** [`docs/plans/lego-project-overall-plan.md`](docs/plans/lego-project-overall-plan.md)
 * **Phase 11 Five Extensions Specification (`v5.2.0`):** [`docs/five-extensions.md`](docs/five-extensions.md)
-* **Capability Assessment & Benchmark Review (`113` Tests, `14` Gates):** [`docs/capability-assessment-review.md`](docs/capability-assessment-review.md)
+* **Capability Assessment & Benchmark Review (`130` Tests, `14` Gates):** [`docs/assessments/capability-assessment-review.md`](docs/assessments/capability-assessment-review.md)
 * **System Architecture & Kernel Interfaces:** [`docs/system-architecture-and-interfaces.md`](docs/system-architecture-and-interfaces.md)
 * **Model Architecture, Sculptural Retrieval & Solvers:** [`docs/model-architecture-and-component-design.md`](docs/model-architecture-and-component-design.md)
 * **Data Architecture, Provenance Tiers & Collider Contracts:** [`docs/data-architecture-and-pipeline.md`](docs/data-architecture-and-pipeline.md)
 * **Foundational Lattice & Port-Manifold Guide:** [`docs/topo-brick-expert-guide.md`](docs/topo-brick-expert-guide.md)
-* **Literature Review (`2015–2026`):** [`docs/lego-literature-review.md`](docs/lego-literature-review.md)
+* **Literature Review (`2015–2026`):** [`docs/research/lego-literature-review.md`](docs/research/lego-literature-review.md)
 * **Dual-Host Gate & Frame-Audit Ledgers:** [`docs/phase9-gate-verification-ledger.json`](docs/phase9-gate-verification-ledger.json) · [`docs/phase10-gate-verification-ledger.json`](docs/phase10-gate-verification-ledger.json) · [`docs/phase11-gate-verification-ledger.json`](docs/phase11-gate-verification-ledger.json) · [`docs/ldraw-dat-frame-audit-v5.2.1.json`](docs/ldraw-dat-frame-audit-v5.2.1.json)
 
 ### `topo_chess` Manuscript & Proofs (`v5.0.0`)
 * **Main-Conference Manuscript:** [`paper/manuscript_iclr_neurips_icml.md`](paper/manuscript_iclr_neurips_icml.md) ([LaTeX](paper/manuscript_iclr_neurips_icml.tex))
-* **Executive Research Synopsis (`v5.0.0`):** [`docs/12-expert-review-synopsis.md`](docs/12-expert-review-synopsis.md)
-* **Formal Mathematical Proofs (Theorems 1–3 & Proposition 4):** [`docs/06-mathematical-proofs-and-theoretical-guarantees.md`](docs/06-mathematical-proofs-and-theoretical-guarantees.md)
+* **Executive Research Synopsis (`v5.0.0`):** [`docs/research/12-expert-review-synopsis.md`](docs/research/12-expert-review-synopsis.md)
+* **Formal Mathematical Proofs (Theorems 1–3 & Proposition 4):** [`docs/research/06-mathematical-proofs-and-theoretical-guarantees.md`](docs/research/06-mathematical-proofs-and-theoretical-guarantees.md)
 
 ---
 
@@ -217,7 +221,7 @@ logits = model(torch.from_numpy(tensor_44).unsqueeze(0)).q_logits  # (1, 1858)
 @software{sullivan2026topographical,
   title   = {Topographical Tensors: Geometric Move-Potential Chess and Certified 3D Digital Brick Assembly},
   author  = {Sullivan, Jacob},
-  version = {5.2.1},
+  version = {5.4.1},
   year    = {2026},
   url     = {https://github.com/jacobrsullivan/topographical-tensors}
 }

@@ -157,7 +157,11 @@ class TargetPrepStage:
         if view_priority is not None:
             from topo_brick.kernel.view_priority import compute_subvoxel_view_weights
 
-            view_weight_grid_6 = compute_subvoxel_view_weights(occ6, view_priority)
+            view_weight_grid_6 = compute_subvoxel_view_weights(
+                occ6,
+                view_priority,
+                origin_ldu=getattr(adaptive_target, "origin_ldu", (0, 0, 0)),
+            )
 
         target_prep_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -279,7 +283,8 @@ class ChromaticAllocationStage:
         foundation_policy: FoundationPolicy,
         view_weight_grid_6: Optional[np.ndarray],
         view_priority: Optional[Any],
-        perceptual_color_fn: Callable[[AssemblyState, np.ndarray, np.ndarray], float],
+        perceptual_color_fn: Callable[..., float],
+        open_color_palette_mode: str = "solid_54_default",
     ) -> Tuple[float, Optional[Any], float]:
         t0 = time.perf_counter()
         mean_de00 = 0.0
@@ -312,7 +317,18 @@ class ChromaticAllocationStage:
             )
             mean_de00 = float(chrom_res.skin_mean_delta_e00)
         elif vertex_colors_rgb is not None:
-            mean_de00 = float(perceptual_color_fn(state, v_pts_color, vertex_colors_rgb))
+            if open_color_palette_mode != "solid_54_default" or view_priority is not None:
+                mean_de00 = float(
+                    perceptual_color_fn(
+                        state,
+                        v_pts_color,
+                        vertex_colors_rgb,
+                        open_color_palette_mode=open_color_palette_mode,
+                        view_priority=view_priority,
+                    )
+                )
+            else:
+                mean_de00 = float(perceptual_color_fn(state, v_pts_color, vertex_colors_rgb))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         return mean_de00, chrom_res, elapsed_ms
 
@@ -341,6 +357,16 @@ class TraceCertifyStage:
         retrieval_ms: float,
         sculpt_synthesis_ms: float,
         color_allocation_ms: float,
+        *,
+        license_filter: str = "all",
+        allowed_part_ids: Optional[Sequence[str]] = None,
+        colored_inventory: Optional[Any] = None,
+        vertex_region_labels: Optional[Sequence[Any]] = None,
+        open_color_palette_mode: str = "solid_54_default",
+        symmetry_plane_axis: Optional[str] = None,
+        symmetry_plane_coord_ldu: Optional[float] = None,
+        actual_candidate_poses_scored: int = 0,
+        extra_stage_timings_ms: Optional[Dict[str, float]] = None,
     ) -> Tuple[AssemblyState, SparseTiledTargetField, Any]:
         t0 = time.perf_counter()
         v_pts_color = verts_ldu if verts_ldu is not None else adaptive_target.mesh_surf_pts
@@ -359,6 +385,7 @@ class TraceCertifyStage:
                 spec=view_priority,
                 verts_ldu=v_pts_color,
                 vertex_colors_rgb=vertex_colors_rgb,
+                origin_ldu=getattr(adaptive_target, "origin_ldu", (0, 0, 0)),
             )
 
         fine_tf = build_fine_tf_fn(occ6)
@@ -380,14 +407,65 @@ class TraceCertifyStage:
             if cls_p == "SMOOTH_TILE" or p.part_id in plate_to_tile_values:
                 tile_cnt += 1
 
+        from topo_brick.kernel.design_diagnostics import (
+            build_catalog_funnel_and_shortlist_report,
+            evaluate_bilateral_construction_symmetry,
+            evaluate_regional_appearance_diagnostics,
+        )
+
+        funnel_rep = build_catalog_funnel_and_shortlist_report(
+            state=state,
+            retrieval_result=ret_res,
+            license_filter=license_filter,
+            allowed_part_ids=allowed_part_ids,
+            plate_to_tile_values=tuple(plate_to_tile_values),
+            actual_candidate_poses_scored=actual_candidate_poses_scored,
+        )
+        reg_app_rep = evaluate_regional_appearance_diagnostics(
+            state=state,
+            verts_ldu=v_pts_color,
+            vertex_colors_rgb=vertex_colors_rgb,
+            vertex_region_labels=vertex_region_labels,
+            view_priority=view_priority,
+            colored_inventory=colored_inventory,
+            open_color_palette_mode=open_color_palette_mode,
+        )
+        sym_rep = (
+            evaluate_bilateral_construction_symmetry(
+                state,
+                axis=symmetry_plane_axis,
+                plane_coord_ldu=symmetry_plane_coord_ldu,
+                verts_ldu=v_pts_color,
+                vertex_region_labels=vertex_region_labels,
+            )
+            if symmetry_plane_axis is not None
+            else None
+        )
+
         finalize_ms = (time.perf_counter() - t0) * 1000.0
-        stage_timings = {
+        stage_timings: Dict[str, float] = {
             "target_prep_ms": round(target_prep_ms, 4),
             "retrieval_ms": round(retrieval_ms, 4),
             "sculpt_synthesis_ms": round(sculpt_synthesis_ms, 4),
             "color_allocation_ms": round(color_allocation_ms, 4),
             "diagnostics_finalize_ms": round(finalize_ms, 4),
         }
+        substage_timings: Dict[str, float] = (
+            {str(k_st): round(float(v_st), 4) for k_st, v_st in extra_stage_timings_ms.items()}
+            if extra_stage_timings_ms
+            else {}
+        )
+        has_col_samples = bool(reg_app_rep.color_samples_available)
+        n_col_samples = (
+            int(len(vertex_colors_rgb))
+            if (has_col_samples and vertex_colors_rgb is not None)
+            else 0
+        )
+        vis_skin_de00 = (
+            round(float(reg_app_rep.visible_skin_mean_delta_e00), 4)
+            if (has_col_samples and reg_app_rep.visible_skin_mean_delta_e00 is not None)
+            else None
+        )
         diag = diagnostics_cls(
             retrieval_result=ret_res,
             distinct_parts_placed=distinct_placed,
@@ -396,12 +474,19 @@ class TraceCertifyStage:
             snot_parts_placed_count=snot_cnt,
             smooth_tiles_placed_count=tile_cnt,
             exposed_upward_studs_count=count_exposed_studs_fn(state),
-            mean_color_delta_e00=round(mean_de00, 4),
+            mean_color_delta_e00=round(float(mean_de00), 4) if has_col_samples else None,
+            visible_skin_mean_delta_e00=vis_skin_de00,
+            color_samples_available=has_col_samples,
+            color_sample_count=n_col_samples,
             chromatic_allocation=chrom_res,
             exterior_crust_iou_5x5x6=crust_iou_val,
             volume_savings_ratio=vol_sav_val,
             camera_reprojection=cam_reproj,
             landmarks_attached_count=landmarks_attached_count,
             stage_timings_ms=stage_timings,
+            sculpt_substage_timings_ms=substage_timings,
+            catalog_funnel_report=funnel_rep,
+            regional_appearance_report=reg_app_rep,
+            bilateral_symmetry_report=sym_rep,
         )
         return state, fine_tf, diag

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import time
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
@@ -1057,3 +1058,155 @@ def build_frontier_and_candidate_tensors(
         candidate_features=cand_feats,
         candidate_port_indices=tuple(cand_port_idx_tuples),
     )
+
+
+def voxelize_triangle_mesh_to_target_field(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    max_xy_studs: int = 10,
+    max_z_courses: int = 8,
+    *,
+    preserve_world_origin: bool = False,
+    ground_plane_z_ldu: float = 0.0,
+) -> Tuple[SparseTiledTargetField, float]:
+    """
+    Convert a raw continuous 3D triangle mesh `(V, 3)`, `(F, 3)` directly into a brick-grid
+    `SparseTiledTargetField` via vectorized +X ray-parity interior fill + surface-triangle
+    conservative shell rasterization, returning `(target_field, t_target_ms)`.
+
+    When `preserve_world_origin=True`, `verts` are interpreted directly in world LDU coordinates
+    without rescaling, shifting by a stud-aligned `(ox, oy, oz)` local origin during rasterization
+    and restoring `(ox, oy, oz)` on the emitted `LDUBox`es.
+    """
+    t0 = time.perf_counter()
+    v = np.asarray(verts, dtype=np.float64)
+    f = np.asarray(faces, dtype=np.int32)
+    if v.shape[0] == 0 or f.shape[0] == 0:
+        return SparseTiledTargetField(boxes=()), (time.perf_counter() - t0) * 1000.0
+
+    vmin = np.min(v, axis=0)
+    vmax = np.max(v, axis=0)
+    if preserve_world_origin:
+        ox = int(math.floor(float(vmin[0]) / 20.0)) * 20
+        oy = int(math.floor(float(vmin[1]) / 20.0)) * 20
+        oz = int(round(float(ground_plane_z_ldu)))
+        if float(vmin[2]) < float(oz) - 1e-6:
+            raise ValueError(
+                f"Mesh zmin={float(vmin[2]):.3f} lies below ground_plane_z_ldu={float(oz):.3f}"
+            )
+        v_ldu = v - np.array([[float(ox), float(oy), float(oz)]], dtype=np.float64)
+    else:
+        ox, oy, oz = 0, 0, 0
+        spans = np.maximum(vmax - vmin, 1e-6)
+        # Normalize preserving aspect ratio onto `[0, nx*20] x [0, ny*20] x [0, nz*24]` LDU
+        max_xy_ldu = float(max_xy_studs * 20)
+        max_z_ldu = float(max_z_courses * 24)
+        scale = min(max_xy_ldu / max(spans[0], spans[1]), max_z_ldu / spans[2])
+        v_ldu = (v - vmin) * scale
+
+    nx = max(2, int(math.ceil(float(np.max(v_ldu[:, 0])) / 20.0)))
+    ny = max(2, int(math.ceil(float(np.max(v_ldu[:, 1])) / 20.0)))
+    nz = max(2, int(math.ceil(float(np.max(v_ldu[:, 2])) / 24.0)))
+
+    occ = np.zeros((nx, ny, nz), dtype=bool)
+    tri = v_ldu[f]  # (F, 3, 3)
+    t_min = np.min(tri, axis=1)
+    t_max = np.max(tri, axis=1)
+
+    # 1. Surface shell cells touched by strictly interior barycentric triangle samples
+    raw_n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    n_len = np.maximum(np.linalg.norm(raw_n, axis=1, keepdims=True), 1e-9)
+    inward_shift = -1e-3 * (raw_n / n_len)
+    pts_sample = np.vstack(
+        [
+            0.998 * tri[:, 0] + 0.001 * tri[:, 1] + 0.001 * tri[:, 2] + inward_shift,
+            0.001 * tri[:, 0] + 0.998 * tri[:, 1] + 0.001 * tri[:, 2] + inward_shift,
+            0.001 * tri[:, 0] + 0.001 * tri[:, 1] + 0.998 * tri[:, 2] + inward_shift,
+            np.mean(tri, axis=1) + inward_shift,
+            0.4995 * tri[:, 0] + 0.4995 * tri[:, 1] + 0.001 * tri[:, 2] + inward_shift,
+            0.001 * tri[:, 0] + 0.4995 * tri[:, 1] + 0.4995 * tri[:, 2] + inward_shift,
+            0.4995 * tri[:, 0] + 0.001 * tri[:, 1] + 0.4995 * tri[:, 2] + inward_shift,
+        ]
+    )
+    ix_s = np.clip((pts_sample[:, 0] // 20.0).astype(np.int32), 0, nx - 1)
+    iy_s = np.clip((pts_sample[:, 1] // 20.0).astype(np.int32), 0, ny - 1)
+    iz_s = np.clip((pts_sample[:, 2] // 24.0).astype(np.int32), 0, nz - 1)
+    occ[ix_s, iy_s, iz_s] = True
+
+    # 2. Exact +X ray-parity interior fill across `(yc, zc)` cell centers
+    p0 = tri[:, 0]
+    e1 = tri[:, 1] - p0
+    e2 = tri[:, 2] - p0
+    det_yz = e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1]
+    non_deg = np.abs(det_yz) > 1e-8
+    p0_nd = p0[non_deg]
+    e1_nd = e1[non_deg]
+    e2_nd = e2[non_deg]
+    inv_det = 1.0 / det_yz[non_deg]
+    ymin_nd = t_min[non_deg, 1]
+    ymax_nd = t_max[non_deg, 1]
+    zmin_nd = t_min[non_deg, 2]
+    zmax_nd = t_max[non_deg, 2]
+
+    for iy in range(ny):
+        yc = iy * 20.0 + 10.137
+        mask_y = (ymin_nd <= yc) & (yc <= ymax_nd)
+        if not np.any(mask_y):
+            continue
+        for iz in range(nz):
+            zc = iz * 24.0 + 12.173
+            cand = np.nonzero(mask_y & (zmin_nd <= zc) & (zc <= zmax_nd))[0]
+            if cand.size == 0:
+                continue
+            dy = yc - p0_nd[cand, 1]
+            dz = zc - p0_nd[cand, 2]
+            id_c = inv_det[cand]
+            u = (dy * e2_nd[cand, 2] - dz * e2_nd[cand, 1]) * id_c
+            v_b = (e1_nd[cand, 1] * dz - e1_nd[cand, 2] * dy) * id_c
+            hit = (u >= 0.0) & (v_b >= 0.0) & (u + v_b <= 1.0)
+            if not np.any(hit):
+                continue
+            h_idx = cand[hit]
+            x_hits = np.sort(
+                p0_nd[h_idx, 0] + u[hit] * e1_nd[h_idx, 0] + v_b[hit] * e2_nd[h_idx, 0]
+            )
+            dedup_x: List[float] = []
+            for xh in x_hits:
+                if not dedup_x or abs(float(xh) - dedup_x[-1]) > 1e-3:
+                    dedup_x.append(float(xh))
+            if len(dedup_x) >= 2 and len(dedup_x) % 2 == 0:
+                xs_grid = np.arange(nx, dtype=np.float64) * 20.0 + 10.0
+                parity = np.zeros(nx, dtype=np.int32)
+                for xh in dedup_x:
+                    parity += (xs_grid >= xh).astype(np.int32)
+                occ[parity % 2 == 1, iy, iz] = True
+
+    if not preserve_world_origin:
+        z_any = np.any(occ, axis=(0, 1))
+        if np.any(z_any):
+            z_first = int(np.argmax(z_any))
+            if z_first > 0:
+                occ = occ[:, :, z_first:]
+                nz = occ.shape[2]
+
+    boxes: List[LDUBox] = []
+    for iz in range(nz):
+        z0 = oz + iz * 24
+        for iy in range(ny):
+            y0 = oy + iy * 20
+            ix = 0
+            while ix < nx:
+                if not occ[ix, iy, iz]:
+                    ix += 1
+                    continue
+                ix_end = ix + 1
+                while ix_end < nx and occ[ix_end, iy, iz]:
+                    ix_end += 1
+                boxes.append(
+                    LDUBox(ox + ix * 20, y0, z0, ox + ix_end * 20, y0 + 20, z0 + 24)
+                )
+                ix = ix_end
+
+    tf = SparseTiledTargetField(boxes=tuple(boxes))
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    return tf, elapsed_ms

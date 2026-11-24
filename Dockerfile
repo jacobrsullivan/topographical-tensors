@@ -2,8 +2,8 @@
 FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
 
 LABEL maintainer="Jacob Sullivan <jacobrsullivan@gmail.com>"
-LABEL version="5.2.1"
-LABEL description="Deterministic clean-room reproduction container for topo_chess (v5.0.0) and topo_brick (Gates 1-9D + Phase 13 security hardening)"
+LABEL version="5.4.1"
+LABEL description="Deterministic clean-room reproduction container for topo_chess (v5.0.0) and topo_brick (Gates 1-9D + Phase 13-16.1 hardening)"
 
 # Deterministic seed & single-core numerical stability environment variables
 ENV PYTHONHASHSEED=42 \
@@ -12,6 +12,8 @@ ENV PYTHONHASHSEED=42 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
     CUBLAS_WORKSPACE_CONFIG=:4096:8 \
     PYTORCH_ENABLE_MPS_FALLBACK=1 \
     STOCKFISH_PATH=/usr/games/stockfish \
@@ -54,5 +56,5 @@ RUN pip install --no-cache-dir --no-deps --no-build-isolation . \
 # trivy:ignore:DS-0026 — finite batch verification job; container exit status is the authoritative health signal
 USER 10001:10001
 
-# Default entrypoint runs lint + fast verification gates + Phase 13 security hardening audit
-CMD ["pytest", "-v", "tests/test_p13_security_hardening_audit.py", "tests/test_gate1_encoding_and_hygiene.py", "tests/test_gate2_ipa_equivariance.py", "tests/test_gate3_d3pm_legality.py", "tests/test_phase_d_audit_compliance.py", "tests/test_phase_e_round2_compliance.py", "tests/test_topo_brick/test_wp_l1_interface.py", "tests/test_topo_brick/test_wp_l2_fields.py", "tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py", "tests/test_topo_brick/test_revised_construction_kernel.py", "tests/test_topo_brick/test_p12_contract_and_falsification_audit.py", "tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py"]
+# Default entrypoint runs fast verification gates + Phase 13–16.1 security & architecture hardening audits
+CMD ["pytest", "-v", "tests/test_p13_security_hardening_audit.py", "tests/test_gate1_encoding_and_hygiene.py", "tests/test_gate2_ipa_equivariance.py", "tests/test_gate3_d3pm_legality.py", "tests/test_phase_d_audit_compliance.py", "tests/test_phase_e_round2_compliance.py", "tests/test_topo_brick/test_wp_l1_interface.py", "tests/test_topo_brick/test_wp_l2_fields.py", "tests/test_topo_brick/test_wp_l3_planner_and_equilibrium.py", "tests/test_topo_brick/test_revised_construction_kernel.py", "tests/test_topo_brick/test_p12_contract_and_falsification_audit.py", "tests/test_topo_brick/test_p14_tb_fix_22nov_audit.py", "tests/test_topo_brick/test_p15_architecture_and_policy_audit.py", "tests/test_topo_brick/test_p16_v2_assessment_remediation_audit.py", "tests/test_topo_brick/test_p16_1_closure_audit.py"]

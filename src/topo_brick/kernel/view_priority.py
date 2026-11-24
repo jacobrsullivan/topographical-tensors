@@ -90,6 +90,8 @@ def compute_subvoxel_view_weights(
     occ_5x5x6: np.ndarray,
     spec: ViewPrioritySpec,
     pixel_pitch_ldu: float = 2.5,
+    *,
+    origin_ldu: Tuple[int, int, int] = (0, 0, 0),
 ) -> np.ndarray:
     """
     Compute a `(gx, gy, gz)` `float32` view-priority weight grid over `occ_5x5x6` in `< 2.5 ms`:
@@ -105,11 +107,12 @@ def compute_subvoxel_view_weights(
         return np.ones((gx, gy, gz), dtype=np.float32)
 
     u_ax, v_ax, d_ax = _camera_orthonormal_basis(spec.view_dir_ldu)
+    ox, oy, oz = float(origin_ldu[0]), float(origin_ldu[1]), float(origin_ldu[2])
 
-    # Full grid center coordinates
-    xs = (np.arange(gx, dtype=np.float64) + 0.5) * 5.0
-    ys = (np.arange(gy, dtype=np.float64) + 0.5) * 5.0
-    zs = (np.arange(gz, dtype=np.float64) + 0.5) * 6.0
+    # Full grid center coordinates in world LDU
+    xs = ox + (np.arange(gx, dtype=np.float64) + 0.5) * 5.0
+    ys = oy + (np.arange(gy, dtype=np.float64) + 0.5) * 5.0
+    zs = oz + (np.arange(gz, dtype=np.float64) + 0.5) * 6.0
 
     occ_idx = np.argwhere(occ_5x5x6)
     occ_pts = np.column_stack([xs[occ_idx[:, 0]], ys[occ_idx[:, 1]], zs[occ_idx[:, 2]]])
@@ -305,10 +308,13 @@ def evaluate_camera_reprojection_fidelity(
     verts_ldu: Optional[np.ndarray] = None,
     vertex_colors_rgb: Optional[np.ndarray] = None,
     pixel_pitch_ldu: float = 2.5,
+    *,
+    origin_ldu: Tuple[int, int, int] = (0, 0, 0),
 ) -> CameraReprojectionMetrics:
     """
     Evaluate 2D camera-plane `silhouette_iou_2d` and visible-pixel perceptual `CIEDE2000` (`ΔE_00`)
-    of `state` against target `occ_5x5x6` and `(verts_ldu, vertex_colors_rgb)` in `< 4 ms`.
+    of `state` against target `occ_5x5x6` (anchored at `origin_ldu`) and `(verts_ldu, vertex_colors_rgb)`
+    in `< 4 ms` (`Phase 16.1 Finding 2` world-frame invariant).
     """
     from topo_brick.kernel.open_catalog_realizer import (
         LDRAW_SOLID_PALETTE_LAB,
@@ -321,33 +327,54 @@ def evaluate_camera_reprojection_fidelity(
     if not np.any(occ_5x5x6):
         return CameraReprojectionMetrics(1.0, 0.0, 0.0, 0)
 
-    # Rasterize built `world_boxes` onto `(gx, gy, gz)` `5x5x6 LDU` grid with `instance_id` tracking
-    built_occ = np.zeros((gx, gy, gz), dtype=bool)
-    built_inst = np.full((gx, gy, gz), -1, dtype=np.int32)
+    ox, oy, oz = int(origin_ldu[0]), int(origin_ldu[1]), int(origin_ldu[2])
+    all_built_boxes = [b for pl in state.placed_parts.values() for b in pl.world_boxes]
+    if all_built_boxes:
+        bx_min = ox + min(0, int(math.floor((min(b.xmin for b in all_built_boxes) - ox) / 5.0))) * 5
+        by_min = oy + min(0, int(math.floor((min(b.ymin for b in all_built_boxes) - oy) / 5.0))) * 5
+        bz_min = oz + min(0, int(math.floor((min(b.zmin for b in all_built_boxes) - oz) / 6.0))) * 6
+        bx_max = ox + max(gx, int(math.ceil((max(b.xmax for b in all_built_boxes) - ox) / 5.0))) * 5
+        by_max = oy + max(gy, int(math.ceil((max(b.ymax for b in all_built_boxes) - oy) / 5.0))) * 5
+        bz_max = oz + max(gz, int(math.ceil((max(b.zmax for b in all_built_boxes) - oz) / 6.0))) * 6
+    else:
+        bx_min, by_min, bz_min = ox, oy, oz
+        bx_max, by_max, bz_max = ox + gx * 5, oy + gy * 5, oz + gz * 6
+
+    bgx = max(1, int(math.ceil((bx_max - bx_min) / 5.0)))
+    bgy = max(1, int(math.ceil((by_max - by_min) / 5.0)))
+    bgz = max(1, int(math.ceil((bz_max - bz_min) / 6.0)))
+
+    # Rasterize built `world_boxes` onto unbounded world `5x5x6 LDU` envelope so out-of-bounds overfill
+    # (or misplaced bricks!) is never clipped before 2D silhouette IoU (`Phase 16.1 Finding 2`)!
+    built_occ = np.zeros((bgx, bgy, bgz), dtype=bool)
+    built_inst = np.full((bgx, bgy, bgz), -1, dtype=np.int32)
     for iid, pl in sorted(state.placed_parts.items()):
         for b in pl.world_boxes:
-            x0 = max(0, int(math.floor(b.xmin / 5.0)))
-            x1 = min(gx, int(math.ceil(b.xmax / 5.0)))
-            y0 = max(0, int(math.floor(b.ymin / 5.0)))
-            y1 = min(gy, int(math.ceil(b.ymax / 5.0)))
-            z0 = max(0, int(math.floor(b.zmin / 6.0)))
-            z1 = min(gz, int(math.ceil(b.zmax / 6.0)))
+            x0 = max(0, int(math.floor((b.xmin - bx_min) / 5.0)))
+            x1 = min(bgx, int(math.ceil((b.xmax - bx_min) / 5.0)))
+            y0 = max(0, int(math.floor((b.ymin - by_min) / 5.0)))
+            y1 = min(bgy, int(math.ceil((b.ymax - by_min) / 5.0)))
+            z0 = max(0, int(math.floor((b.zmin - bz_min) / 6.0)))
+            z1 = min(bgz, int(math.ceil((b.zmax - bz_min) / 6.0)))
             if x1 > x0 and y1 > y0 and z1 > z0:
                 built_occ[x0:x1, y0:y1, z0:z1] = True
                 built_inst[x0:x1, y0:y1, z0:z1] = int(iid)
 
     u_ax, v_ax, d_ax = _camera_orthonormal_basis(spec.view_dir_ldu)
-    xs = (np.arange(gx, dtype=np.float64) + 0.5) * 5.0
-    ys = (np.arange(gy, dtype=np.float64) + 0.5) * 5.0
-    zs = (np.arange(gz, dtype=np.float64) + 0.5) * 6.0
+    xs_t = float(ox) + (np.arange(gx, dtype=np.float64) + 0.5) * 5.0
+    ys_t = float(oy) + (np.arange(gy, dtype=np.float64) + 0.5) * 5.0
+    zs_t = float(oz) + (np.arange(gz, dtype=np.float64) + 0.5) * 6.0
 
     t_idx = np.argwhere(occ_5x5x6)
-    t_pts = np.column_stack([xs[t_idx[:, 0]], ys[t_idx[:, 1]], zs[t_idx[:, 2]]])
+    t_pts = np.column_stack([xs_t[t_idx[:, 0]], ys_t[t_idx[:, 1]], zs_t[t_idx[:, 2]]])
     ref_center = np.mean(t_pts, axis=0)
 
+    xs_b = float(bx_min) + (np.arange(bgx, dtype=np.float64) + 0.5) * 5.0
+    ys_b = float(by_min) + (np.arange(bgy, dtype=np.float64) + 0.5) * 5.0
+    zs_b = float(bz_min) + (np.arange(bgz, dtype=np.float64) + 0.5) * 6.0
     b_idx = np.argwhere(built_occ)
     b_pts = (
-        np.column_stack([xs[b_idx[:, 0]], ys[b_idx[:, 1]], zs[b_idx[:, 2]]])
+        np.column_stack([xs_b[b_idx[:, 0]], ys_b[b_idx[:, 1]], zs_b[b_idx[:, 2]]])
         if b_idx.shape[0] > 0
         else np.zeros((0, 3), dtype=np.float64)
     )
@@ -435,8 +462,17 @@ def evaluate_camera_reprojection_fidelity(
         tree_rear = cKDTree(np.column_stack([uv_m[rear_m], vv_m[rear_m]])) if np.any(rear_m) else cKDTree(np.column_stack([uv_m, vv_m]))
         labs_rear_src = v_lab[rear_m] if np.any(rear_m) else v_lab
 
+        from topo_brick.interface.ldraw_palette import LDRAW_FULL_PALETTE_RECORDS
+
+        full_rgb = np.array([r.rgb_u8 for r in LDRAW_FULL_PALETTE_RECORDS], dtype=np.float64)
+        full_labs = srgb_to_cielab(full_rgb)
+        id_to_lab = {
+            int(LDRAW_FULL_PALETTE_RECORDS[i].code): full_labs[i]
+            for i in range(len(LDRAW_FULL_PALETTE_RECORDS))
+        }
         codes = [c[0] for c in LDRAW_SOLID_PALETTE_SRGB]
-        id_to_lab = {int(codes[i]): LDRAW_SOLID_PALETTE_LAB[i] for i in range(len(codes))}
+        for i in range(len(codes)):
+            id_to_lab[int(codes[i])] = LDRAW_SOLID_PALETTE_LAB[i]
         default_lab = id_to_lab.get(71, np.array([67.5, -0.8, -2.5], dtype=np.float64))
 
         fg_pix = np.argwhere(blt_front_iid >= 0)

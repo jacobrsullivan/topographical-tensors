@@ -16,6 +16,7 @@ from collections import deque
 import copy
 from functools import lru_cache
 import math
+import time
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
@@ -2140,12 +2141,19 @@ def try_upfront_blind_sculpted_fastpath(
     forbidden_support_boxes: Sequence[LDUBox],
     foundation_policy: FoundationPolicy,
     max_inventory_counts: Optional[Dict[str, int]] = None,
+    *,
+    deadline_monotonic_s: Optional[float] = None,
+    ground_plane_z_ldu: float = 0.0,
 ) -> Optional[AssemblyState]:
     """
     Fast `< 8 ms` upfront blind portal-bridge & stepped-frustum synthesis on unpadded `occ6`.
     Returns a prefix- and insertion-certified `AssemblyState` whenever exact `occ6` IoU `>= 0.885`
-    and optional `max_inventory_counts` bounds are strictly respected.
+    and optional `max_inventory_counts` / `deadline_monotonic_s` bounds are strictly respected.
     """
+    if abs(float(ground_plane_z_ldu)) > 0.25:
+        return None
+    if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+        return None
     msub = int(np.count_nonzero(occ6))
     if msub == 0:
         return None
@@ -2154,6 +2162,8 @@ def try_upfront_blind_sculpted_fastpath(
     best_iou = 0.885
 
     for cand_up in _try_blind_portal_bridge_candidates(occ6, kit_set, forbidden_support_boxes):
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return None
         if not _respects_max_inventory(cand_up, max_inventory_counts):
             continue
         iou_c, st_c = _verify_and_score_strict(
@@ -2166,6 +2176,8 @@ def try_upfront_blind_sculpted_fastpath(
 
     if best_cand is None:
         for cand_fr in _try_blind_stepped_frustum_candidates(occ6, kit_set, forbidden_support_boxes):
+            if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+                return None
             if not _respects_max_inventory(cand_fr, max_inventory_counts):
                 continue
             iou_f, st_f = _verify_and_score_strict(
@@ -2177,6 +2189,8 @@ def try_upfront_blind_sculpted_fastpath(
                     break
 
     if best_cand is not None:
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            return None
         iou_ok, st_ok = _verify_and_score_strict(
             kernel, best_cand, occ6, msub, forbidden_support_boxes, foundation_policy, require_full_prefix=True
         )

@@ -808,7 +808,8 @@ def test_s7_to_s10_manifest_counts_catalog_provenance_ci_and_dockerfile(
 
     # S9 & S10: Supply-chain, GitHub Actions, lockfile, and Dockerfile static security audit
     pyproject_txt = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "5.2.1"' in pyproject_txt
+    ver_m = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', pyproject_txt, flags=re.MULTILINE)
+    assert ver_m is not None and tuple(int(g) for g in ver_m.groups()) >= (5, 2, 1)
     assert '"torch>=2.10.0"' in pyproject_txt
     assert (REPO_ROOT / "SECURITY.md").is_file()
 

@@ -28,7 +28,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, Dict, List, Tuple
 
-__version__: str = "5.2.1"
+__version__: str = "5.4.1"
 
 _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "STUD_PITCH_LDU": ("topo_brick.interface.ldu_frames", "STUD_PITCH_LDU"),
@@ -157,8 +157,8 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "to_canonical_voxel_target_shape": ("topo_brick.training", "to_canonical_voxel_target_shape"),
     "to_merged_maximal_target_shape": ("topo_brick.training", "to_merged_maximal_target_shape"),
     "to_random_split_shuffled_target_shape": ("topo_brick.training", "to_random_split_shuffled_target_shape"),
-    "LockedStableText2BrickRecord": ("topo_brick.training", "LockedStableText2BrickRecord"),
-    "LOCKED_STABLETEXT2BRICK_MANIFEST": ("topo_brick.training", "LOCKED_STABLETEXT2BRICK_MANIFEST"),
+    "LockedStableText2BrickRecord": ("topo_brick.kernel.untouched_external_corpus", "LockedStableText2BrickRecord"),
+    "LOCKED_STABLETEXT2BRICK_MANIFEST": ("topo_brick.kernel.untouched_external_corpus", "LOCKED_STABLETEXT2BRICK_MANIFEST"),
     "compute_clopper_pearson_ci": ("topo_brick.training", "compute_clopper_pearson_ci"),
     "WPL13AuditableRunBundleSummary": ("topo_brick.training", "WPL13AuditableRunBundleSummary"),
     "run_wp_l13_auditable_run_bundle": ("topo_brick.training", "run_wp_l13_auditable_run_bundle"),
@@ -305,7 +305,7 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "PairwiseSynergyValueModel": ("topo_brick.evaluation.phase7_sota_benchmarks", "PairwiseSynergyValueModel"),
     "EvalCAgentABSummary": ("topo_brick.evaluation.phase7_sota_benchmarks", "EvalCAgentABSummary"),
     "SelectiveLearningAndEvalCReport": ("topo_brick.evaluation.phase7_sota_benchmarks", "SelectiveLearningAndEvalCReport"),
-    "voxelize_triangle_mesh_to_target_field": ("topo_brick.evaluation.phase7_sota_benchmarks", "voxelize_triangle_mesh_to_target_field"),
+    "voxelize_triangle_mesh_to_target_field": ("topo_brick.representation.interface_fields", "voxelize_triangle_mesh_to_target_field"),
     "load_raw_mesh_benchmark_corpus": ("topo_brick.evaluation.phase7_sota_benchmarks", "load_raw_mesh_benchmark_corpus"),
     "run_eval_b_adversarial_kernel_suite": ("topo_brick.evaluation.phase7_sota_benchmarks", "run_eval_b_adversarial_kernel_suite"),
     "run_raw_mesh_blind_benchmark": ("topo_brick.evaluation.phase7_sota_benchmarks", "run_raw_mesh_blind_benchmark"),
@@ -320,7 +320,7 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "verify_certificate_independently": ("topo_brick.evaluation.independent_verifier", "verify_certificate_independently"),
     "check_fine_csg_voxel_collision_2ldu": ("topo_brick.evaluation.independent_verifier", "check_fine_csg_voxel_collision_2ldu"),
     "audit_geometry_collider_vs_csg": ("topo_brick.evaluation.independent_verifier", "audit_geometry_collider_vs_csg"),
-    "SingleCoreAuditReport": ("topo_brick.evaluation.phase8_round9_gates", "SingleCoreAuditReport"),
+    "SingleCoreAuditReport": ("topo_brick.kernel.kernel_contracts", "SingleCoreAuditReport"),
     "ConfusionMatrix2x2": ("topo_brick.evaluation.phase8_round9_gates", "ConfusionMatrix2x2"),
     "Gate1EvidenceAuditReport": ("topo_brick.evaluation.phase8_round9_gates", "Gate1EvidenceAuditReport"),
     "OriginalMeshFidelityMetrics": ("topo_brick.evaluation.phase8_round9_gates", "OriginalMeshFidelityMetrics"),
@@ -334,7 +334,7 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "BrickLayerAgentArmSummary": ("topo_brick.evaluation.phase8_round9_gates", "BrickLayerAgentArmSummary"),
     "M3UnseenControlSummary": ("topo_brick.evaluation.phase8_round9_gates", "M3UnseenControlSummary"),
     "Gate5AgentAndControlsReport": ("topo_brick.evaluation.phase8_round9_gates", "Gate5AgentAndControlsReport"),
-    "enforce_and_audit_single_core": ("topo_brick.evaluation.phase8_round9_gates", "enforce_and_audit_single_core"),
+    "enforce_and_audit_single_core": ("topo_brick.kernel.kernel_contracts", "enforce_and_audit_single_core"),
     "evaluate_assembly_against_original_mesh": ("topo_brick.evaluation.phase8_round9_gates", "evaluate_assembly_against_original_mesh"),
     "load_frozen_80_unseen_mesh_corpus": ("topo_brick.evaluation.phase8_round9_gates", "load_frozen_80_unseen_mesh_corpus"),
     "run_gate1_evidence_and_confusion_audit": ("topo_brick.evaluation.phase8_round9_gates", "run_gate1_evidence_and_confusion_audit"),
@@ -451,6 +451,25 @@ _LAZY_EXPORTS: Dict[str, Tuple[str, str]] = {
     "LDrawColorRecord": ("topo_brick.interface.ldraw_palette", "LDrawColorRecord"),
     "resolve_ldraw_color_record": ("topo_brick.interface.ldraw_palette", "resolve_ldraw_color_record"),
     "get_ldraw_color_finish": ("topo_brick.interface.ldraw_palette", "get_ldraw_color_finish"),
+    "RealizeRequestSpec": ("topo_brick.kernel.realize_policy", "RealizeRequestSpec"),
+    "ResolvedRealizePolicy": ("topo_brick.kernel.realize_policy", "ResolvedRealizePolicy"),
+    "resolve_realize_policy": ("topo_brick.kernel.realize_policy", "resolve_realize_policy"),
+    "RealizeRouteProvenance": ("topo_brick.kernel.kernel_contracts", "RealizeRouteProvenance"),
+    "build_relying_party_obligations": ("topo_brick.evaluation.independent_verifier", "build_relying_party_obligations"),
+    "verify_certificate_json_file": ("topo_brick.evaluation.independent_verifier", "verify_certificate_json_file"),
+    "compare_realize_routes_on_target": ("topo_brick.evaluation.route_comparison", "compare_realize_routes_on_target"),
+    "CrossRouteComparisonReport": ("topo_brick.evaluation.route_comparison", "CrossRouteComparisonReport"),
+    "SingleRouteEvaluationEntry": ("topo_brick.evaluation.route_comparison", "SingleRouteEvaluationEntry"),
+    "MPDRoundTripVerificationReport": ("topo_brick.evaluation.route_comparison", "MPDRoundTripVerificationReport"),
+    "verify_exported_mpd_roundtrip": ("topo_brick.evaluation.route_comparison", "verify_exported_mpd_roundtrip"),
+    "CatalogFunnelAndShortlistReport": ("topo_brick.kernel.design_diagnostics", "CatalogFunnelAndShortlistReport"),
+    "RegionalAppearanceReport": ("topo_brick.kernel.design_diagnostics", "RegionalAppearanceReport"),
+    "BilateralSymmetryReport": ("topo_brick.kernel.design_diagnostics", "BilateralSymmetryReport"),
+    "KNOWN_HANDED_COUNTERPART_PAIRS": ("topo_brick.kernel.design_diagnostics", "KNOWN_HANDED_COUNTERPART_PAIRS"),
+    "build_catalog_funnel_and_shortlist_report": ("topo_brick.kernel.design_diagnostics", "build_catalog_funnel_and_shortlist_report"),
+    "evaluate_regional_appearance_diagnostics": ("topo_brick.kernel.design_diagnostics", "evaluate_regional_appearance_diagnostics"),
+    "evaluate_bilateral_construction_symmetry": ("topo_brick.kernel.design_diagnostics", "evaluate_bilateral_construction_symmetry"),
+    "SUPPORTED_CONSUMER_EXPORTS": ("topo_brick.api", "SUPPORTED_CONSUMER_EXPORTS"),
 }
 
 __all__: List[str] = [
@@ -875,6 +894,25 @@ __all__: List[str] = [
     "LDrawColorRecord",
     "resolve_ldraw_color_record",
     "get_ldraw_color_finish",
+    "RealizeRequestSpec",
+    "ResolvedRealizePolicy",
+    "resolve_realize_policy",
+    "RealizeRouteProvenance",
+    "build_relying_party_obligations",
+    "verify_certificate_json_file",
+    "compare_realize_routes_on_target",
+    "CrossRouteComparisonReport",
+    "SingleRouteEvaluationEntry",
+    "MPDRoundTripVerificationReport",
+    "verify_exported_mpd_roundtrip",
+    "CatalogFunnelAndShortlistReport",
+    "RegionalAppearanceReport",
+    "BilateralSymmetryReport",
+    "KNOWN_HANDED_COUNTERPART_PAIRS",
+    "build_catalog_funnel_and_shortlist_report",
+    "evaluate_regional_appearance_diagnostics",
+    "evaluate_bilateral_construction_symmetry",
+    "SUPPORTED_CONSUMER_EXPORTS",
 ]
 
 

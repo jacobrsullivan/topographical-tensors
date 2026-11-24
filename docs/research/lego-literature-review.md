@@ -1,6 +1,6 @@
 # Deep Literature Review: Relational Interface Manifolds and Discrete Diffusion for Combinatorial 3D Brick Assembly
 
-**Companion to:** [`lego-project-overall-plan.md`](lego-project-overall-plan.md) & [`capability-assessment-review.md`](capability-assessment-review.md)  
+**Companion to:** [`lego-project-overall-plan.md`](../plans/lego-project-overall-plan.md) & [`capability-assessment-review.md`](../assessments/capability-assessment-review.md)  
 **Scope:** Multi-disciplinary synthesis (2015–2026) across (1) Generative LEGO & Brick Construction, (2) Protein-Folding Relative-Frame Attention & Molecular Surface Manifolds, (3) B-Rep CAD Connector Mating, and (4) Equivariant / Constrained Discrete Diffusion.
 
 ---

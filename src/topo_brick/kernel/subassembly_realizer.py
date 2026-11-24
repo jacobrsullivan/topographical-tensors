@@ -7,6 +7,7 @@ Landmark Port Attacher (`LandmarkAttachmentRequest`, `attach_semantic_landmarks`
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
@@ -84,6 +85,48 @@ class CompositionalMPDResult:
     submodel_records: Tuple[SubmodelRealizationRecord, ...]
     mpd_text: str
     landmarks_attached: int
+    open_catalog_diagnostics: Optional[Any] = None
+    had_nonempty_input_submodels: bool = True
+
+
+def _subtract_forbidden_boxes(
+    boxes: Sequence[LDUBox],
+    forbidden: Sequence[LDUBox],
+) -> List[LDUBox]:
+    """Carve `forbidden` axis-aligned cuboids out of `boxes` via exact 6-slab difference (`Phase 16.1`)."""
+    cur: List[LDUBox] = [b for b in boxes if b.volume_ldu3 > 0]
+    if not cur or not forbidden:
+        return cur
+    for fb in forbidden:
+        if fb.volume_ldu3 <= 0:
+            continue
+        nxt: List[LDUBox] = []
+        for cb in cur:
+            if not cb.intersects(fb):
+                nxt.append(cb)
+                continue
+            ix0 = max(cb.xmin, fb.xmin)
+            ix1 = min(cb.xmax, fb.xmax)
+            iy0 = max(cb.ymin, fb.ymin)
+            iy1 = min(cb.ymax, fb.ymax)
+            iz0 = max(cb.zmin, fb.zmin)
+            iz1 = min(cb.zmax, fb.zmax)
+            if ix0 > cb.xmin:
+                nxt.append(LDUBox(cb.xmin, cb.ymin, cb.zmin, ix0, cb.ymax, cb.zmax))
+            if cb.xmax > ix1:
+                nxt.append(LDUBox(ix1, cb.ymin, cb.zmin, cb.xmax, cb.ymax, cb.zmax))
+            if iy0 > cb.ymin:
+                nxt.append(LDUBox(ix0, cb.ymin, cb.zmin, ix1, iy0, cb.zmax))
+            if cb.ymax > iy1:
+                nxt.append(LDUBox(ix0, iy1, cb.zmin, ix1, cb.ymax, cb.zmax))
+            if iz0 > cb.zmin:
+                nxt.append(LDUBox(ix0, iy0, cb.zmin, ix1, iy1, iz0))
+            if cb.zmax > iz1:
+                nxt.append(LDUBox(ix0, iy0, iz1, ix1, iy1, cb.zmax))
+        cur = nxt
+        if not cur:
+            break
+    return cur
 
 
 def _toposort_submodels(nodes: Sequence[SubmodelNodeSpec]) -> List[SubmodelNodeSpec]:
@@ -133,6 +176,8 @@ def attach_semantic_landmarks(
     rem_inv: Optional[Dict[str, int]] = None,
     foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
     ground_plane_z_ldu: float = 0.0,
+    deadline_monotonic_s: Optional[float] = None,
+    forbidden_support_boxes: Sequence[LDUBox] = (),
 ) -> List[Tuple[int, str, LDUFrame, bool]]:
     """
     Attach non-flush architectural & functional landmarks (`Phase 11 Extension 4B`) onto exposed
@@ -152,6 +197,8 @@ def attach_semantic_landmarks(
         return committed
 
     for req in requests:
+        if deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s:
+            break
         if req.count <= 0:
             continue
         eff_lic = req.license_filter if req.license_filter is not None else default_license_filter
@@ -257,6 +304,10 @@ def attach_semantic_landmarks(
                         min_wb_z = float(min(b.zmin for b in wbs_c))
                         if min_wb_z < float(ground_plane_z_ldu) - 0.25:
                             continue
+                        if forbidden_support_boxes and any(
+                            wb.intersects(fb) for wb in wbs_c for fb in forbidden_support_boxes
+                        ):
+                            continue
                         if state.check_boxes_collision(wbs_c):
                             continue
                         if not check_monotone_insertion_corridor(state, pid, pose_c):
@@ -295,9 +346,16 @@ def attach_semantic_landmarks(
                             if not csg_ok:
                                 state.pop_trial_part(tok)
                                 continue
-                            eq_ok = kernel.validator.evaluate(state, foundation_policy=foundation_policy).is_stable
+                            eq_res_lm = kernel.validator.evaluate(
+                                state,
+                                foundation_policy=foundation_policy,
+                                ground_plane_z_ldu=ground_plane_z_ldu,
+                                deadline_monotonic_s=deadline_monotonic_s,
+                            )
                             state.pop_trial_part(tok)
-                            if not eq_ok:
+                            if eq_res_lm.budget_exceeded:
+                                return committed
+                            if not eq_res_lm.is_stable:
                                 continue
                         except ValueError:
                             if tok is not None:
@@ -416,6 +474,15 @@ def realize_compositional_mpd(
     view_priority: Optional[ViewPrioritySpec] = None,
     support_policy: str = "minimal_permanent_pillars",
     foundation_policy: FoundationPolicy = FoundationPolicy.CLUTCHED_BASEPLATE,
+    deadline_monotonic_s: Optional[float] = None,
+    ground_plane_z_ldu: float = 0.0,
+    world_forbidden_support_boxes: Sequence[LDUBox] = (),
+    open_color_palette_mode: str = "solid_54_default",
+    verts_ldu: Optional[np.ndarray] = None,
+    vertex_colors_rgb: Optional[np.ndarray] = None,
+    vertex_region_labels: Optional[np.ndarray] = None,
+    symmetry_plane_axis: Optional[str] = None,
+    symmetry_plane_coord_ldu: Optional[float] = None,
 ) -> CompositionalMPDResult:
     """
     Realize a multi-submodel architectural scene DAG (`Phase 11 Extension 4A & 4B`):
@@ -463,11 +530,21 @@ def realize_compositional_mpd(
     sub_records: List[SubmodelRealizationRecord] = []
     combined_boxes: List[LDUBox] = []
 
+    world_gz = float(ground_plane_z_ldu)
+
+    def _deadline_hit_comp() -> bool:
+        return deadline_monotonic_s is not None and time.monotonic() >= deadline_monotonic_s
+
     for node in ordered_nodes:
+        if _deadline_hit_comp():
+            break
         ox, oy, oz = (int(node.world_offset_ldu[0]), int(node.world_offset_ldu[1]), int(node.world_offset_ldu[2]))
         node_rot_id = int(node.world_rot_id)
         node_world_frame = LDUFrame(node_rot_id, (ox, oy, oz))
         node_inv_frame = node_world_frame.inverse()
+        eff_node_forb: Tuple[LDUBox, ...] = tuple(node.forbidden_support_boxes) + tuple(
+            wfb.transform(node_inv_frame) for wfb in world_forbidden_support_boxes
+        )
 
         # Apply optional HollowShellPolicy on node's AdaptiveSurfaceTarget if not already applied
         ad_node = node.adaptive_target
@@ -480,7 +557,7 @@ def realize_compositional_mpd(
                 ad_node.occ_5x5x2,
                 ad_node.occ_5x5x6,
                 node.hollow_shell_policy,
-                forbidden_support_boxes=node.forbidden_support_boxes,
+                forbidden_support_boxes=eff_node_forb,
             )
             ad_node = AdaptiveSurfaceTarget(
                 nx_studs=ad_node.nx_studs,
@@ -525,10 +602,15 @@ def realize_compositional_mpd(
             inventory_counts=rem_inv,
             support_policy=support_policy,
             foundation_policy=FoundationPolicy.CLUTCHED_BASEPLATE if node.parent_submodel is not None else foundation_policy,
-            forbidden_support_boxes=node.forbidden_support_boxes,
+            forbidden_support_boxes=eff_node_forb,
             suppress_studless_capping_boxes=tuple(suppress_boxes_local),
             view_priority=view_priority,
+            deadline_monotonic_s=deadline_monotonic_s,
+            ground_plane_z_ldu=0.0,
+            open_color_palette_mode=open_color_palette_mode,
         )
+        if _deadline_hit_comp() and sub_state.num_parts == 0:
+            break
 
         # Decrement shared `rem_inv` for parts consumed by `sub_state`
         # Note: `realize_open_catalog_sculpted` copies `inventory_counts`, so update `rem_inv` explicitly here!
@@ -547,15 +629,18 @@ def realize_compositional_mpd(
             else sorted(sub_state.placed_parts.keys())
         )
 
-        if node.parent_submodel is None and oz == 0:
-            # Root grounded submodel on the table (`z == 0`): emit atomic `PLACE_PART` steps on the
-            # baseplate while keeping its own modular `0 FILE <submodel_name>` block in `.mpd`!
+        if node.parent_submodel is None and abs(float(oz) - world_gz) <= 0.25:
+            # Root grounded submodel on the world datum (`oz == ground_plane_z_ldu`): emit atomic `PLACE_PART`
+            # steps on the foundation while keeping its own modular `0 FILE <submodel_name>` block in `.mpd`!
             loc_entries: List[Tuple[int, str, LDUFrame, int]] = []
             for lid in step_order_local:
                 pl_l = sub_state.placed_parts[lid]
                 w_pose = node_world_frame.compose(pl_l.pose)
+                w_boxes_l = [b_l.transform(node_world_frame) for b_l in pl_l.world_boxes]
+                min_wz_l = float(min(b.zmin for b in w_boxes_l)) if w_boxes_l else float(w_pose.pos[2])
+                w_is_gr = bool(pl_l.is_grounded and abs(min_wz_l - world_gz) <= 0.25)
                 w_iid = merged_state.place_root_part(
-                    pl_l.part_id, w_pose, is_grounded=pl_l.is_grounded, color_id=pl_l.color_id
+                    pl_l.part_id, w_pose, is_grounded=w_is_gr, color_id=pl_l.color_id
                 )
                 loc_entries.append((w_iid, pl_l.part_id, pl_l.pose, pl_l.color_id))
                 trace_steps.append(
@@ -564,7 +649,7 @@ def realize_compositional_mpd(
                         instance_ids=(w_iid,),
                         part_id=pl_l.part_id,
                         pose=w_pose,
-                        is_grounded=pl_l.is_grounded,
+                        is_grounded=w_is_gr,
                     )
                 )
             sub_records.append(
@@ -630,7 +715,9 @@ def realize_compositional_mpd(
             for lid in comp_order:
                 pl_l = sub_state.placed_parts[lid]
                 w_pose = node_world_frame.compose(pl_l.pose)
-                w_grounded = bool(oz == 0 and pl_l.is_grounded)
+                w_boxes_m = [b_l.transform(node_world_frame) for b_l in pl_l.world_boxes]
+                min_wz_m = float(min(b.zmin for b in w_boxes_m)) if w_boxes_m else float(w_pose.pos[2])
+                w_grounded = bool(abs(min_wz_m - world_gz) <= 0.25 and pl_l.is_grounded)
                 w_iid = merged_state.place_root_part(
                     pl_l.part_id, w_pose, is_grounded=w_grounded, color_id=pl_l.color_id
                 )
@@ -666,7 +753,7 @@ def realize_compositional_mpd(
                         instance_ids=tuple(comp_world_iids),
                         part_id=sub_tag,
                         pose=node_world_frame,
-                        is_grounded=(oz == 0),
+                        is_grounded=(abs(float(oz) - world_gz) <= 0.25),
                         subtrace=tuple(local_subtrace_steps),
                     )
                 )
@@ -681,14 +768,21 @@ def realize_compositional_mpd(
         )
 
     # 4. Attach post-core semantic landmarks (`Extension 4B`)
-    attached_landmarks = attach_semantic_landmarks(
-        kernel=kernel,
-        state=merged_state,
-        requests=landmark_requests,
-        default_license_filter=license_filter,
-        allowed_part_ids=eff_allowed_ids,
-        rem_inv=rem_inv,
-        foundation_policy=foundation_policy,
+    attached_landmarks = (
+        ()
+        if _deadline_hit_comp()
+        else attach_semantic_landmarks(
+            kernel=kernel,
+            state=merged_state,
+            requests=landmark_requests,
+            default_license_filter=license_filter,
+            allowed_part_ids=eff_allowed_ids,
+            rem_inv=rem_inv,
+            foundation_policy=foundation_policy,
+            ground_plane_z_ldu=ground_plane_z_ldu,
+            deadline_monotonic_s=deadline_monotonic_s,
+            forbidden_support_boxes=world_forbidden_support_boxes,
+        )
     )
     landmark_iids: List[int] = []
     for lm_iid, lm_pid, lm_pose, lm_grounded in attached_landmarks:
@@ -711,9 +805,11 @@ def realize_compositional_mpd(
         for n in ordered_nodes:
             if n.vertex_colors_rgb is not None:
                 vp = n.verts_ldu if n.verts_ldu is not None else n.adaptive_target.mesh_surf_pts
-                if vp.shape[0] > 0 and n.vertex_colors_rgb.shape[0] == vp.shape[0]:
-                    off_arr = np.array([[n.world_offset_ldu[0], n.world_offset_ldu[1], n.world_offset_ldu[2]]], dtype=np.float64)
-                    all_v_pts.append(np.asarray(vp, dtype=np.float64) + off_arr)
+                if vp is not None and vp.shape[0] > 0 and n.vertex_colors_rgb.shape[0] == vp.shape[0]:
+                    nf = LDUFrame(int(n.world_rot_id), tuple(int(c) for c in n.world_offset_ldu))
+                    r_rows = np.array([nf.x_axis, nf.y_axis, nf.z_axis], dtype=np.float64)
+                    off_arr = np.array([[float(nf.pos[0]), float(nf.pos[1]), float(nf.pos[2])]], dtype=np.float64)
+                    all_v_pts.append(np.asarray(vp, dtype=np.float64) @ r_rows + off_arr)
                     all_v_rgb.append(np.asarray(n.vertex_colors_rgb, dtype=np.float64))
         v_pts_cat = np.vstack(all_v_pts) if all_v_pts else None
         v_rgb_cat = np.vstack(all_v_rgb) if all_v_rgb else None
@@ -722,6 +818,114 @@ def realize_compositional_mpd(
         )
         # Note: keep subassembly trace intact by only splitting non-subassemblybuilds or skipping splits here
         _ = (alloc_c, apply_chromatic_same_footprint_splits)
+
+    # 5b. If caller provided scene-level open-palette vertex colours (without per-node colours), apply them
+    comp_diag: Optional[Any] = None
+    if (
+        colored_inventory is None
+        and vertex_colors_rgb is not None
+        and verts_ldu is not None
+        and merged_state.num_parts > 0
+        and all(n.vertex_colors_rgb is None for n in ordered_nodes)
+    ):
+        from topo_brick.kernel.sculpted_primitives import assign_perceptual_ldraw_colors
+
+        assign_perceptual_ldraw_colors(
+            merged_state,
+            verts_ldu,
+            vertex_colors_rgb,
+            open_color_palette_mode=open_color_palette_mode,
+            view_priority=view_priority,
+        )
+
+    from topo_brick.interface.catalog_retrieval_index import CatalogRetrievalResult
+    from topo_brick.kernel.design_diagnostics import (
+        evaluate_bilateral_construction_symmetry,
+        evaluate_regional_appearance_diagnostics,
+    )
+    from topo_brick.kernel.open_catalog_realizer import (
+        OpenCatalogRealizeDiagnostics,
+        count_exposed_upward_studs,
+    )
+
+    diag_verts_ldu = verts_ldu
+    diag_vcols_rgb = vertex_colors_rgb
+    if diag_vcols_rgb is None:
+        pooled_pts: List[np.ndarray] = []
+        pooled_rgb: List[np.ndarray] = []
+        for n in ordered_nodes:
+            if n.vertex_colors_rgb is not None:
+                vp = n.verts_ldu if n.verts_ldu is not None else n.adaptive_target.mesh_surf_pts
+                if vp is not None and len(vp) > 0 and len(n.vertex_colors_rgb) == len(vp):
+                    nf = LDUFrame(int(n.world_rot_id), tuple(int(c) for c in n.world_offset_ldu))
+                    r_cols = np.array([nf.x_axis, nf.y_axis, nf.z_axis], dtype=np.float64)
+                    off_arr = np.array([[float(nf.pos[0]), float(nf.pos[1]), float(nf.pos[2])]], dtype=np.float64)
+                    pooled_pts.append(np.asarray(vp, dtype=np.float64) @ r_cols + off_arr)
+                    pooled_rgb.append(np.asarray(n.vertex_colors_rgb, dtype=np.float64))
+        if pooled_pts:
+            diag_verts_ldu = np.vstack(pooled_pts)
+            diag_vcols_rgb = np.vstack(pooled_rgb)
+
+    reg_rep_c = evaluate_regional_appearance_diagnostics(
+        state=merged_state,
+        verts_ldu=diag_verts_ldu,
+        vertex_colors_rgb=diag_vcols_rgb,
+        vertex_region_labels=vertex_region_labels,
+        view_priority=view_priority,
+        colored_inventory=colored_inventory,
+        open_color_palette_mode=open_color_palette_mode,
+    )
+    sym_rep_c = (
+        evaluate_bilateral_construction_symmetry(
+            merged_state,
+            axis=symmetry_plane_axis,
+            plane_coord_ldu=symmetry_plane_coord_ldu,
+            verts_ldu=verts_ldu,
+            vertex_region_labels=vertex_region_labels,
+        )
+        if (symmetry_plane_axis is not None and merged_state.num_parts > 0)
+        else None
+    )
+    has_comp_col = bool(reg_rep_c.color_samples_available)
+    comp_col_cnt = int(len(diag_vcols_rgb)) if (has_comp_col and diag_vcols_rgb is not None) else 0
+    comp_vis_skin_de00 = (
+        round(float(reg_rep_c.visible_skin_mean_delta_e00), 4)
+        if (has_comp_col and reg_rep_c.visible_skin_mean_delta_e00 is not None)
+        else None
+    )
+    comp_mean_de00 = (
+        comp_vis_skin_de00
+        if comp_vis_skin_de00 is not None
+        else (
+            round(float(reg_rep_c.overall_mean_delta_e00), 4)
+            if (has_comp_col and reg_rep_c.overall_mean_delta_e00 is not None)
+            else None
+        )
+    )
+    comp_diag = OpenCatalogRealizeDiagnostics(
+        retrieval_result=CatalogRetrievalResult(
+            retrieved_part_ids=tuple(sorted({p.part_id for p in merged_state.placed_parts.values()})),
+            sculptural_part_ids=(),
+            backbone_part_ids=(),
+            class_counts={},
+            motif_weights={},
+            license_filter=license_filter,
+            query_wall_ms=0.0,
+        ),
+        distinct_parts_placed=tuple(sorted({p.part_id for p in merged_state.placed_parts.values()})),
+        sculptural_parts_placed_count=0,
+        jumper_parts_placed_count=0,
+        snot_parts_placed_count=0,
+        smooth_tiles_placed_count=0,
+        exposed_upward_studs_count=count_exposed_upward_studs(merged_state),
+        mean_color_delta_e00=comp_mean_de00,
+        visible_skin_mean_delta_e00=comp_vis_skin_de00,
+        color_samples_available=has_comp_col,
+        color_sample_count=comp_col_cnt,
+        landmarks_attached_count=len(landmark_iids),
+        regional_appearance_report=reg_rep_c,
+        bilateral_symmetry_report=sym_rep_c,
+    )
 
     exec_trace = ExecutionTrace(
         steps=tuple(trace_steps),
@@ -738,8 +942,11 @@ def realize_compositional_mpd(
         extra_root_instance_ids=landmark_iids,
         main_model_name="main.ldr",
     )
-    if not combined_boxes:
-        combined_boxes.append(LDUBox(0, 0, 0, 20, 20, 24))
+    had_nonempty_submodels = any(
+        int(np.count_nonzero(n.adaptive_target.occ_5x5x6)) > 0 for n in ordered_nodes
+    )
+    if world_forbidden_support_boxes and combined_boxes:
+        combined_boxes = _subtract_forbidden_boxes(combined_boxes, world_forbidden_support_boxes)
     comb_tf = SparseTiledTargetField(boxes=tuple(combined_boxes))
     return CompositionalMPDResult(
         assembly=merged_state,
@@ -748,4 +955,6 @@ def realize_compositional_mpd(
         submodel_records=tuple(sub_records),
         mpd_text=mpd_str,
         landmarks_attached=len(landmark_iids),
+        open_catalog_diagnostics=comp_diag,
+        had_nonempty_input_submodels=had_nonempty_submodels,
     )

@@ -53,15 +53,17 @@ jobs:
           (cd /tmp && PYTHONPATH="" /tmp/ci_wheel_venv/bin/python -c "import topo_brick; print(topo_brick.SET_10698_COLORED_INVENTORY.total_pieces())")
           rm -rf /tmp/ci_wheel_venv
 
-      - name: Run Phase 13 security hardening audit (standard & python -O)
+      - name: Run Phase 13 security & Phase 15–16.1 architecture hardening audits (standard & python -O)
         env:
           STOCKFISH_PATH: /usr/games/stockfish
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
         run: |
-          pytest -v tests/test_p13_security_hardening_audit.py
-          python -O -m pytest -v tests/test_p13_security_hardening_audit.py
+          pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p15_refactor_equivalence.py tests/test_topo_brick/test_p15_architecture_and_policy_audit.py tests/test_topo_brick/test_p16_v2_assessment_remediation_audit.py tests/test_topo_brick/test_p16_1_closure_audit.py
+          python -O -m pytest -v tests/test_p13_security_hardening_audit.py tests/test_topo_brick/test_p15_architecture_and_policy_audit.py tests/test_topo_brick/test_p16_v2_assessment_remediation_audit.py tests/test_topo_brick/test_p16_1_closure_audit.py
 
       - name: Run topo_chess unit & compliance test suite
         env:

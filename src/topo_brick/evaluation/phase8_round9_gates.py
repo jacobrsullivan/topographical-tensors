@@ -59,18 +59,18 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from scipy.spatial import cKDTree
-import torch
-import torch.nn as nn
+
+try:
+    import torch
+    import torch.nn as nn
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
 
 from topo_brick.evaluation.independent_verifier import (
     audit_geometry_collider_vs_csg,
     export_certificate_artifact,
     verify_certificate_independently,
-)
-from topo_brick.evaluation.phase7_sota_benchmarks import (
-    PairwiseSynergyValueModel,
-    run_eval_b_adversarial_kernel_suite,
-    voxelize_triangle_mesh_to_target_field,
 )
 from topo_brick.evaluation.physical_validation import (
     CalibratedSubStudPolygonValidator,
@@ -120,6 +120,7 @@ from topo_brick.representation.interface_fields import (
     SparseTiledTargetField,
     TargetShapeBoxes,
     build_frontier_and_candidate_tensors,
+    voxelize_triangle_mesh_to_target_field,
 )
 
 
@@ -168,8 +169,11 @@ def enforce_and_audit_single_core() -> SingleCoreAuditReport:
     for k in thread_vars:
         os.environ[k] = "1"
         pinned[k] = os.environ.get(k, "")
-    torch.set_num_threads(1)
-    t_threads = int(torch.get_num_threads())
+    if torch is not None:
+        torch.set_num_threads(1)
+        t_threads = int(torch.get_num_threads())
+    else:
+        t_threads = 1
 
     kernel = TopoBrickKernel()
     tf = SparseTiledTargetField(
@@ -1577,6 +1581,8 @@ class Gate3FalsificationReport:
 
 def run_gate3_certificate_falsification_suite(csg_samples: int = 200) -> Gate3FalsificationReport:
     """Execute all `12` `Eval B-Extended` falsification cases + partial-overlap + witness + CSG audit."""
+    from topo_brick.evaluation.phase7_sota_benchmarks import run_eval_b_adversarial_kernel_suite
+
     kernel = TopoBrickKernel()
     orig6 = run_eval_b_adversarial_kernel_suite()
 
@@ -2828,7 +2834,10 @@ def run_gate5_bricklayer_agent_and_m3_controls(
     # ------------------------------------------------------------------
     # Part B: Frozen `M3_Pairwise_Sparse` on 3 Unseen Topology Families vs. All 6 §7.3 Controls
     # ------------------------------------------------------------------
-    from topo_brick.evaluation.phase7_sota_benchmarks import _build_symmetric_multimodal_bridge_trap
+    from topo_brick.evaluation.phase7_sota_benchmarks import (
+        PairwiseSynergyValueModel,
+        _build_symmetric_multimodal_bridge_trap,
+    )
 
     pw_model = PairwiseSynergyValueModel(in_dim=38, d_hidden=32, rank=8)
     opt_pw = torch.optim.AdamW(pw_model.parameters(), lr=1.5e-2, weight_decay=1e-4)

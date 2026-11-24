@@ -2177,6 +2177,82 @@ class VerificationObligations:
     expected_ground_plane_z_ldu: Optional[float] = 0.0
 
 
+def build_relying_party_obligations(
+    *,
+    expected_target_field: Optional[Any] = None,
+    min_target_iou: Optional[float] = None,
+    forbidden_support_boxes: Sequence[LDUBox] = (),
+    license_filter: Optional[str] = None,
+    foundation_policy: Optional[Any] = None,
+    ground_plane_z_ldu: Optional[float] = 0.0,
+    inventory_counts: Optional[Mapping[str, int]] = None,
+    colored_inventory: Optional[Any] = None,
+    allowed_part_ids: Optional[Sequence[str]] = None,
+    require_static_mechanics: bool = True,
+    require_prefix_mechanics: bool = True,
+    require_monotone_insertion: bool = True,
+    require_inventory: bool = True,
+    mechanics_profile: Optional[MechanicsVerificationProfile] = None,
+    resource_limits: Optional[VerifierResourceLimits] = None,
+    trusted_custom_catalog_sha256: Optional[str] = None,
+) -> VerificationObligations:
+    """
+    Construct explicit `"assembly_and_target"` (or `"assembly_only"`) `VerificationObligations`
+    directly from the relying application's own trusted request parameters (`Phase 15 §5`).
+    """
+    tgt_sha: Optional[str] = None
+    if expected_target_field is not None:
+        tgt_sha = compute_target_sha256(expected_target_field)
+
+    fp_str: Optional[str] = None
+    if foundation_policy is not None:
+        fp_str = str(
+            foundation_policy.value if hasattr(foundation_policy, "value") else foundation_policy
+        )
+
+    col_inv_map: Optional[Dict[str, int]] = None
+    mold_inv_map: Optional[Dict[str, int]] = (
+        {str(k): int(v) for k, v in inventory_counts.items()}
+        if inventory_counts is not None
+        else None
+    )
+    if colored_inventory is not None:
+        if hasattr(colored_inventory, "to_flat_json_dict"):
+            col_inv_map = colored_inventory.to_flat_json_dict()
+        elif isinstance(colored_inventory, Mapping):
+            col_inv_map = {str(k): int(v) for k, v in colored_inventory.items()}
+        if mold_inv_map is None and hasattr(colored_inventory, "marginal_mold_counts"):
+            mold_inv_map = colored_inventory.marginal_mold_counts()
+
+    req_explicit_inv = bool(mold_inv_map is not None or col_inv_map is not None)
+    allowed_fset = (
+        frozenset(str(pid) for pid in allowed_part_ids) if allowed_part_ids is not None else None
+    )
+
+    return VerificationObligations(
+        require_static_mechanics=bool(require_static_mechanics),
+        require_prefix_mechanics=bool(require_prefix_mechanics),
+        require_monotone_insertion=bool(require_monotone_insertion),
+        require_inventory=bool(require_inventory),
+        expected_target_field=expected_target_field,
+        expected_target_sha256=tgt_sha,
+        expected_forbidden_boxes=tuple(forbidden_support_boxes),
+        expected_license_filter=str(license_filter) if license_filter is not None else None,
+        min_target_iou=float(min_target_iou) if min_target_iou is not None else None,
+        require_explicit_inventory_spec=req_explicit_inv,
+        expected_inventory_counts=mold_inv_map,
+        expected_colored_inventory=col_inv_map,
+        expected_allowed_part_ids=allowed_fset,
+        expected_foundation_policy=fp_str,
+        mechanics_profile=mechanics_profile,
+        trusted_custom_catalog_sha256=trusted_custom_catalog_sha256,
+        resource_limits=resource_limits,
+        expected_ground_plane_z_ldu=(
+            float(ground_plane_z_ldu) if ground_plane_z_ldu is not None else None
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class IndependentVerificationReport:
     """Result returned by `verify_certificate_independently(artifact)` (`R9-WS1` §3.1 + `Phase 12/13`)."""

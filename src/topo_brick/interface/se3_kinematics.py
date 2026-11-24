@@ -1668,6 +1668,8 @@ class FlattenedOMRPlacement:
     ldraw_world_t: Tuple[float, float, float]
     continuous_pose: Optional[ContinuousSE3Pose]
     is_cubic_aligned: bool
+    raw_color_code: int = 16
+    is_rigid_so3: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -1809,29 +1811,56 @@ def _topo_brick_se3_to_ldraw_line(
     return f"1 {color_code} {t_ld[0]:.6g} {t_ld[1]:.6g} {t_ld[2]:.6g} {r_str} {part_id}.dat"
 
 
-def flatten_omr_mpd_to_se3(
+def _is_valid_so3_matrix(
+    mat: np.ndarray,
+    *,
+    orth_tol: float = 2.0e-3,
+    det_tol: float = 2.0e-3,
+) -> bool:
+    """Verify `mat` is a proper rigid 3x3 rotation (`R^T R == I` and `det(R) == +1` within exporter rounding)."""
+    arr = np.asarray(mat, dtype=np.float64)
+    if arr.shape != (3, 3) or not np.all(np.isfinite(arr)):
+        return False
+    orth_err = float(np.max(np.abs(arr.T @ arr - np.eye(3, dtype=np.float64))))
+    if orth_err > orth_tol:
+        return False
+    det_val = float(np.linalg.det(arr))
+    return abs(det_val - 1.0) <= det_tol
+
+
+def flatten_omr_mpd_with_diagnostics(
     mpd_text: str,
     catalog: Optional[Dict[str, BrickPrimitive]] = None,
-) -> List[FlattenedOMRPlacement]:
+    *,
+    strict_rigid_transforms: bool = False,
+    so3_tol: float = 2.0e-3,
+) -> Tuple[List[FlattenedOMRPlacement], Tuple[str, ...]]:
     """
     Parse and recursively flatten a multi-submodel LDraw `.mpd` document into world-space
-    `FlattenedOMRPlacement` instances with exact continuous SE(3) transforms.
+    `FlattenedOMRPlacement` instances, propagating enclosing Type-1 colour (`color == 16` inherit),
+    checking `SO(3)` rigid-transform validity at every level before orthonormalisation, and
+    returning structural diagnostics (`Phase 16.1 Finding 1`).
     """
     active_cat = catalog if catalog is not None else TIER_A_CATALOG
     blocks: Dict[str, List[str]] = {}
     order: List[str] = []
+    structural_errors: List[str] = []
     cur_name: Optional[str] = None
     cur_lines: List[str] = []
     for line in mpd_text.splitlines():
         m = re.match(r"^\s*0\s+FILE\s+(.+?)\s*$", line, re.I)
         if m:
             if cur_name is not None:
+                if cur_name in blocks:
+                    structural_errors.append(f"duplicate_mpd_file_block: {cur_name!r}")
                 blocks[cur_name] = cur_lines
             cur_name = m.group(1).strip().lower()
             order.append(cur_name)
             cur_lines = []
         elif re.match(r"^\s*0\s+NOFILE\s*$", line, re.I):
             if cur_name is not None:
+                if cur_name in blocks:
+                    structural_errors.append(f"duplicate_mpd_file_block: {cur_name!r}")
                 blocks[cur_name] = cur_lines
                 cur_name = None
                 cur_lines = []
@@ -1839,6 +1868,8 @@ def flatten_omr_mpd_to_se3(
             if cur_name is not None or not order:
                 cur_lines.append(line)
     if cur_name is not None:
+        if cur_name in blocks:
+            structural_errors.append(f"duplicate_mpd_file_block: {cur_name!r}")
         blocks[cur_name] = cur_lines
     if not order:
         blocks["__root__"] = cur_lines
@@ -1858,9 +1889,22 @@ def flatten_omr_mpd_to_se3(
 
     placements: List[FlattenedOMRPlacement] = []
 
-    def _walk(bname: str, r_parent: np.ndarray, t_parent: np.ndarray, depth: int = 0) -> None:
-        if depth > 14 or bname not in blocks:
+    def _walk(
+        bname: str,
+        r_parent: np.ndarray,
+        t_parent: np.ndarray,
+        parent_color: int = 16,
+        parent_is_rigid: bool = True,
+        ancestors: frozenset[str] = frozenset(),
+        depth: int = 0,
+    ) -> None:
+        if depth > 32:
+            structural_errors.append(f"submodel_max_depth_exceeded: {bname!r}")
             return
+        if bname not in blocks:
+            structural_errors.append(f"missing_submodel_block: {bname!r}")
+            return
+        next_anc = ancestors | {bname}
         for ln in blocks[bname]:
             s = ln.strip()
             if not s.startswith("1 "):
@@ -1869,36 +1913,88 @@ def flatten_omr_mpd_to_se3(
             if len(toks) < 15:
                 continue
             try:
-                color = int(toks[1])
+                raw_color = int(toks[1])
                 t_c = np.array([float(toks[2]), float(toks[3]), float(toks[4])], dtype=np.float64)
                 r_c = np.array([float(x) for x in toks[5:14]], dtype=np.float64).reshape(3, 3)
             except ValueError:
                 continue
+            if not (np.all(np.isfinite(t_c)) and np.all(np.isfinite(r_c))):
+                continue
+            eff_color = int(parent_color) if raw_color == 16 else int(raw_color)
             r_w = r_parent @ r_c
             t_w = r_parent @ t_c + t_parent
+            cur_is_rigid = (
+                bool(parent_is_rigid)
+                and _is_valid_so3_matrix(r_c, orth_tol=so3_tol, det_tol=so3_tol)
+                and _is_valid_so3_matrix(r_w, orth_tol=so3_tol, det_tol=so3_tol)
+            )
             raw_ref = " ".join(toks[14:]).strip()
             ref_low = raw_ref.lower()
             if ref_low in blocks and not is_part_block.get(ref_low, False):
-                _walk(ref_low, r_w, t_w, depth + 1)
+                if not cur_is_rigid:
+                    structural_errors.append(f"non_rigid_submodel_transform: {raw_ref!r}")
+                if ref_low in next_anc:
+                    structural_errors.append(f"submodel_cycle_detected: {bname!r} -> {ref_low!r}")
+                    continue
+                _walk(
+                    ref_low,
+                    r_w,
+                    t_w,
+                    parent_color=eff_color,
+                    parent_is_rigid=cur_is_rigid,
+                    ancestors=next_anc,
+                    depth=depth + 1,
+                )
             else:
+                if ref_low.endswith((".ldr", ".mpd")):
+                    structural_errors.append(f"unresolved_submodel_reference: {raw_ref!r}")
                 cid = normalize_ldraw_part_id(ref_low, active_cat)
                 sup = cid in active_cat
-                c_pose = _ldraw_pose_to_topo_brick_se3(cid, r_w, t_w) if sup else None
-                cubic = bool(np.all(np.abs(r_w - np.round(r_w)) <= 1e-3))
+                if sup and (cur_is_rigid or not strict_rigid_transforms):
+                    c_pose = _ldraw_pose_to_topo_brick_se3(cid, r_w, t_w)
+                else:
+                    c_pose = None
+                cubic = bool(cur_is_rigid and np.all(np.abs(r_w - np.round(r_w)) <= 1e-3))
                 placements.append(
                     FlattenedOMRPlacement(
                         raw_part_ref=raw_ref,
                         canonical_part_id=cid,
                         supported_in_tier_a=sup,
-                        color_code=color,
+                        color_code=eff_color,
                         ldraw_world_R=tuple(tuple(float(v) for v in row) for row in r_w),
                         ldraw_world_t=(float(t_w[0]), float(t_w[1]), float(t_w[2])),
                         continuous_pose=c_pose,
                         is_cubic_aligned=cubic,
+                        raw_color_code=raw_color,
+                        is_rigid_so3=cur_is_rigid,
                     )
                 )
 
-    _walk(root_block, np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64))
+    _walk(
+        root_block,
+        np.eye(3, dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+        parent_color=16,
+        parent_is_rigid=True,
+        ancestors=frozenset(),
+        depth=0,
+    )
+    return placements, tuple(structural_errors)
+
+
+def flatten_omr_mpd_to_se3(
+    mpd_text: str,
+    catalog: Optional[Dict[str, BrickPrimitive]] = None,
+) -> List[FlattenedOMRPlacement]:
+    """
+    Parse and recursively flatten a multi-submodel LDraw `.mpd` document into world-space
+    `FlattenedOMRPlacement` instances with continuous SE(3) transforms and inherited colour `16`.
+    """
+    placements, _ = flatten_omr_mpd_with_diagnostics(
+        mpd_text,
+        catalog=catalog,
+        strict_rigid_transforms=False,
+    )
     return placements
 
 

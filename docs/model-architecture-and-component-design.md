@@ -2,11 +2,11 @@
 
 **Document Role:** Part 2 of the 3-Part Decomposed Technical Architecture Suite (Complete Phase 8–12 / Gates 1–9D Hardened `v5.2.0` Implementation — `21 November 2026`)  
 **Interconnected Architecture Suite:**
-* **Master Hub:** [`lego-project-overall-plan.md`](lego-project-overall-plan.md)
+* **Master Hub:** [`lego-project-overall-plan.md`](plans/lego-project-overall-plan.md)
 * **Data Architecture & Pipeline:** [`data-architecture-and-pipeline.md`](data-architecture-and-pipeline.md)
 * **Model Architecture & Component Design (This Document):** [`model-architecture-and-component-design.md`](model-architecture-and-component-design.md)
 * **System Architecture & Interfaces:** [`system-architecture-and-interfaces.md`](system-architecture-and-interfaces.md)
-* **Governing Audits & Gate Ledgers:** [`capability-assessment-review.md`](capability-assessment-review.md) · [`five-extensions.md`](five-extensions.md) · [`phase9-gate-verification-ledger.json`](phase9-gate-verification-ledger.json) · [`phase10-gate-verification-ledger.json`](phase10-gate-verification-ledger.json) · [`phase11-gate-verification-ledger.json`](phase11-gate-verification-ledger.json)
+* **Governing Audits & Gate Ledgers:** [`capability-assessment-review.md`](assessments/capability-assessment-review.md) · [`five-extensions.md`](five-extensions.md) · [`phase9-gate-verification-ledger.json`](phase9-gate-verification-ledger.json) · [`phase10-gate-verification-ledger.json`](phase10-gate-verification-ledger.json) · [`phase11-gate-verification-ledger.json`](phase11-gate-verification-ledger.json)
 
 ---
 

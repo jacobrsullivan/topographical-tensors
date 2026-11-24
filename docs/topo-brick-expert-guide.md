@@ -9,7 +9,7 @@
 > * [`system-architecture-and-interfaces.md`](system-architecture-and-interfaces.md) — `TopoBrickKernel` APIs (`realize`, `repair`, `constrain`, `certify`) & standalone `verify_certificate_independently()` (`VerificationObligations`, `MechanicsVerificationProfile`, `VerifierResourceLimits`)
 > * [`model-architecture-and-component-design.md`](model-architecture-and-component-design.md) — `S1`/`S2` solvers, sculptural retrieval, `HierarchicalMacroBlockPlanner`, and neural components (`M1`–`M3`)
 > * [`data-architecture-and-pipeline.md`](data-architecture-and-pipeline.md) — `16,085`-part provenance tiers (`CC-BY-4.0` vs. `CC-BY-SA-4.0`), `CoACD` hulls, and benchmark funnels
-> * [`capability-assessment-review.md`](capability-assessment-review.md), [`five-extensions.md`](five-extensions.md) & [`lego-project-overall-plan.md`](lego-project-overall-plan.md) — Complete `Gates 1–9D` metrics, `119`-test suite, scope boundaries, and SOTA comparisons
+> * [`capability-assessment-review.md`](assessments/capability-assessment-review.md), [`five-extensions.md`](five-extensions.md) & [`lego-project-overall-plan.md`](plans/lego-project-overall-plan.md) — Complete `Gates 1–9D` metrics, `119`-test suite, scope boundaries, and SOTA comparisons
 >
 > *Trademark Disclaimer: LEGO® is a trademark of the LEGO Group of companies which does not sponsor, authorize, or endorse this software or research.*
 
@@ -351,7 +351,7 @@ In **Stage 3.5 (Pre-Scaling Objective Tightening)** and **Stage 4 (Integrated Co
 
 ## 8. Stage 5 (`WP-L10`–`WP-L12`): Continuation-Preserving Expansion, Transparent Hybrid Course Routing, & External Shape-to-Brick Corpus Generalization
 
-Informed by the multi-disciplinary literature synthesis ([`lego-literature-review.md`](./lego-literature-review.md)), Stage 5 keeps the `110,672`-parameter `RelativeFrameGNN` backbone, 20-part catalog, and exact HiGHS LP equilibrium gate frozen while resolving three key scaling challenges:
+Informed by the multi-disciplinary literature synthesis ([`lego-literature-review.md`](research/lego-literature-review.md)), Stage 5 keeps the `110,672`-parameter `RelativeFrameGNN` backbone, 20-part catalog, and exact HiGHS LP equilibrium gate frozen while resolving three key scaling challenges:
 
 ### 8.1 `WP-L10` (`Gap 1`): Continuation-Preserving Selective Expansion & Per-Port Incremental Cache
 * **Bipartite Lattice Cover Theorem for Multi-Stud Bricks:** Every connected brick footprint with $\ge 2$ studs on $\mathbb{Z}^2$ covers at least one port in the even checkerboard parity class $\mathcal{F}_{t,\text{even}} = \{u \in \mathcal{F}_t : (\lfloor x_u / 20 \rfloor + \lfloor y_u / 20 \rfloor) \bmod 2 == 0\}$. Prioritizing $\mathcal{F}_{t,\text{even}}$ alongside a reserved lateral SNOT quota (`select_continuation_preserving_ports`) and short-range (`4–8 LDU`) clearance verification for `EXPOSED_BLOCKED` lateral SNOT ports guarantees **`100.0%` (`1.000`) multi-stud and SNOT candidate recall**.

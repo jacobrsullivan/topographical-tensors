@@ -295,9 +295,9 @@ def verify_clean_room_reproduction_from_checkpoints(
 
 def audit_editorial_and_neurips_compliance(repo_root: Path) -> EditorialAuditResult:
     """Programmatically verify WP5 mathematical proofs, datasheets, Risk R4 dual benchmarks, and checklists."""
-    proofs_file = repo_root / "docs" / "06-mathematical-proofs-and-theoretical-guarantees.md"
-    datasheet_file = repo_root / "docs" / "07-hyperparameters-datasheet-and-compute-audit.md"
-    checklist_file = repo_root / "docs" / "08-neurips-checklist-and-ste100-editorial-audit.md"
+    proofs_file = repo_root / "docs" / "research" / "06-mathematical-proofs-and-theoretical-guarantees.md"
+    datasheet_file = repo_root / "docs" / "research" / "07-hyperparameters-datasheet-and-compute-audit.md"
+    checklist_file = repo_root / "docs" / "research" / "08-neurips-checklist-and-ste100-editorial-audit.md"
     docker_file = repo_root / "Dockerfile"
     flight_file = repo_root / "flight-recorder.md"
 

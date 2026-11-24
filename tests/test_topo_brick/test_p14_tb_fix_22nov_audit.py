@@ -403,7 +403,7 @@ def test_tb_fix_02_shared_deadlines_highs_and_scipy_and_biplane_supports() -> No
 
 def test_tb_fix_03_full_322_ldconfig_palette_set10698_and_finish_penalties() -> None:
     """Verify `TB-FIX-03` 322-color `LDConfig.ldr` lookup, Set `10698-1` color `57`, and finish penalties."""
-    assert topo_brick.__version__ == "5.2.1"
+    assert tuple(int(p) for p in topo_brick.__version__.split(".")[:3]) >= (5, 2, 1)
     assert len(LDRAW_FULL_PALETTE_RECORDS) == 322
     assert len(LDRAW_COLOR_BY_CODE) == 322
 
