@@ -49,9 +49,9 @@ jobs:
           python -m build --wheel --outdir dist/
           python -c "import zipfile; z = zipfile.ZipFile(next(__import__('pathlib').Path('dist').glob('*.whl'))); assert any('compiled_ldraw_catalog.json.gz' in n for n in z.namelist()); assert any('compiled_mold_retrieval_index.npz' in n for n in z.namelist()); assert any('compiled_landmark_detail_index.json.gz' in n for n in z.namelist()); assert any('set_10698_1_rebrickable_inventory.json' in n for n in z.namelist())"
           python -m venv /tmp/ci_wheel_venv
-          /tmp/ci_wheel_venv/bin/pip install --no-deps dist/*.whl
-          (cd /tmp && PYTHONPATH="" /tmp/ci_wheel_venv/bin/python -c "import topo_brick; print(topo_brick.SET_10698_COLORED_INVENTORY.total_pieces())")
-          rm -rf /tmp/ci_wheel_venv
+          /tmp/ci_wheel_venv/bin/pip install dist/*.whl
+          (cd /tmp && PYTHONPATH="" /tmp/ci_wheel_venv/bin/python -c "import sys, topo_brick; assert 'torch' not in sys.modules; print(topo_brick.SET_10698_COLORED_INVENTORY.total_pieces())")
+          rm -rf /tmp/ci_wheel_venv dist/
 
       - name: Run Phase 13 security & Phase 15–16.1 architecture hardening audits (standard & python -O)
         env:
