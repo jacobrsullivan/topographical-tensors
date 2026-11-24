@@ -13,6 +13,7 @@ from dataclasses import replace
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -170,11 +171,13 @@ def test_f2_continuous_floating_brick_table_policy_and_mode_validation() -> None
     assert any("unsupported_assembly_mode:not_a_mode" in n for n in rep_bad_mode.failure_reasons)
 
 
-def test_f2_verifier_zero_transitive_kernel_or_static_equilibrium_imports() -> None:
+def test_f2_verifier_zero_transitive_kernel_or_static_equilibrium_imports(tmp_path: Path) -> None:
     """Verify in a fresh Python subprocess that continuous + cubic verification loads 0 kernel or static_equilibrium modules."""
     src_dir = str(Path(p8_mod.__file__).resolve().parents[2])
+    art_file = tmp_path / "art_f2_continuous.json"
+    sub_env = {**os.environ, "PYTHONPATH": src_dir}
     code = """
-import json, sys
+import json, pathlib, sys
 from topo_brick import ContinuousAssemblyState, ContinuousSE3Pose, TopoBrickKernel, export_certificate_artifact
 k = TopoBrickKernel()
 cs = ContinuousAssemblyState()
@@ -182,37 +185,38 @@ b0 = cs.place_part("60471", ContinuousSE3Pose.identity((0.0, 0.0, 0.0)), is_grou
 cs.attach_articulated_part(b0, 4, "92582", 6, joint_angle_rad=0.25)
 cert = k.certify(cs, foundation_policy="clutched_baseplate", verify_perturbation=True)
 art = export_certificate_artifact(cs, cert, foundation_policy="clutched_baseplate")
-print(json.dumps(art.to_json_dict()))
+pathlib.Path(sys.argv[1]).write_text(json.dumps(art.to_json_dict()), encoding="utf-8")
 """
     gen_proc = subprocess.run(
-        [sys.executable, "-c", code],
-        env={"PYTHONPATH": src_dir},
+        [sys.executable, "-c", code, str(art_file)],
+        env=sub_env,
         capture_output=True,
         text=True,
-        check=True,
     )
-    art_json = gen_proc.stdout.strip()
+    assert gen_proc.returncode == 0, f"gen_proc failed:\nstderr={gen_proc.stderr}\nstdout={gen_proc.stdout}"
 
     verify_code = """
-import json, sys
+import json, pathlib, sys
 from topo_brick.evaluation.independent_verifier import VersionedCertificateArtifact, verify_certificate_independently
-art = VersionedCertificateArtifact.from_json_dict(json.loads(sys.stdin.read()))
+raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+art = VersionedCertificateArtifact.from_json_dict(json.loads(raw))
 rep = verify_certificate_independently(art)
 forbidden = [
     m for m in sys.modules
     if m.startswith("topo_brick.kernel") or m == "topo_brick.evaluation.static_equilibrium"
 ]
-print(json.dumps({"verified": rep.verified, "forbidden": forbidden, "notes": list(rep.failure_reasons)}))
+print("JSON_RESULT:" + json.dumps({"verified": rep.verified, "forbidden": forbidden, "notes": list(rep.failure_reasons)}))
 """
     ver_proc = subprocess.run(
-        [sys.executable, "-c", verify_code],
-        input=art_json,
-        env={"PYTHONPATH": src_dir},
+        [sys.executable, "-c", verify_code, str(art_file)],
+        env=sub_env,
         capture_output=True,
         text=True,
-        check=True,
     )
-    out = json.loads(ver_proc.stdout.strip())
+    assert ver_proc.returncode == 0, f"ver_proc failed:\nstderr={ver_proc.stderr}\nstdout={ver_proc.stdout}"
+    json_lines = [ln[len("JSON_RESULT:") :] for ln in ver_proc.stdout.splitlines() if ln.startswith("JSON_RESULT:")]
+    assert json_lines, f"Missing JSON_RESULT in stdout:\n{ver_proc.stdout}"
+    out = json.loads(json_lines[-1])
     assert out["verified"] is True, out
     assert out["forbidden"] == [], f"Transitive forbidden modules loaded: {out['forbidden']}"
 
